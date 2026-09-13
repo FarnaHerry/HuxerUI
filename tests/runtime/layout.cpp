@@ -192,6 +192,13 @@ View GrowLayoutApp() {
   };
 }
 
+View WeightedSpacerLayoutApp() {
+  return Row {
+    Spacer(),
+    Spacer(3.0F),
+  };
+}
+
 View ScopeGrowContent() {
   return Text("Grow content").With(Frame{.height = 20.0F}, Grow{});
 }
@@ -826,6 +833,24 @@ TEST_CASE("TestSpacerAndGrowLayout") {
   REQUIRE(root->children[0]->bounds.width == 100.0F);
   REQUIRE(root->children[1]->layout_offset.x == 100.0F);
   REQUIRE(root->children[1]->bounds.width == 200.0F);
+}
+
+TEST_CASE("TestWeightedSpacerFactor") {
+  REQUIRE_THROWS_AS(Spacer(0.0F), std::invalid_argument);
+  REQUIRE_THROWS_AS(Spacer(-1.0F), std::invalid_argument);
+  REQUIRE_THROWS_AS(Spacer(std::numeric_limits<float>::infinity()), std::invalid_argument);
+
+  TestPlatform platform;
+  Runtime runtime{WeightedSpacerLayoutApp, platform};
+  runtime.SetWindowMetrics({.viewport = {320.0F, 40.0F}});
+  runtime.BuildFrame();
+
+  const auto* root = runtime.RootNode();
+  REQUIRE(root != nullptr);
+  REQUIRE(root->children.size() == 2);
+  REQUIRE(root->children[0]->bounds.width == 80.0F);
+  REQUIRE(root->children[1]->layout_offset.x == 80.0F);
+  REQUIRE(root->children[1]->bounds.width == 240.0F);
 }
 
 TEST_CASE("Scope and Environment expose effective parent layout values") {

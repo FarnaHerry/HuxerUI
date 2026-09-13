@@ -146,11 +146,11 @@ Use `DrawBorder()` to stroke rectangle geometry; `DrawRect()` intentionally rema
 
 ## Buttons and selection controls
 
-- `Button` emits `OnClick`.
+- `Button` emits `OnClick` and supports an optional leading icon.
 - `IconButton` requires an icon and semantic label.
 - `Checkbox`, `RadioButton`, and `Switch` receive a controlled Boolean and emit `OnChanged`.
 - `Chip` supports an optional icon and controlled selected state.
-- `SegmentedButton` receives items and a controlled selected index.
+- `SegmentedButton` receives items and a controlled selected index; `SegmentedButtonItem::Enabled` disables individual choices.
 - `Select` receives a finite item range and a controlled selected index.
 - `ComboBox` receives a controlled editing value and an application-provided suggestion range.
 - `DatePicker` receives a controlled `std::chrono::year_month_day`.

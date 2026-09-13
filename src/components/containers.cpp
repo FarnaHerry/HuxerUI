@@ -1073,9 +1073,12 @@ LayoutResult IndexedPages::Measure(LayoutContext& context, ViewNode& node, Const
 
 namespace {
 
-std::shared_ptr<detail::ViewSpec> MakeSpacerSpec() {
+std::shared_ptr<detail::ViewSpec> MakeSpacerSpec(float factor) {
+  if (!std::isfinite(factor) || factor <= 0.0F) {
+    throw std::invalid_argument("HuxerUI spacer factor must be finite and positive");
+  }
   auto spec = std::make_shared<detail::ViewSpec>(detail::NodeKind::Spacer);
-  spec->layout_values.emplace(typeid(detail::GrowFactorBinding), detail::MakeErasedLayoutValue(1.0F));
+  spec->layout_values.emplace(typeid(detail::GrowFactorBinding), detail::MakeErasedLayoutValue(factor));
   return spec;
 }
 
@@ -1100,7 +1103,7 @@ std::vector<View> ValidateIndexedPages(std::vector<View> pages, std::size_t sele
 
 } // namespace
 
-Spacer::Spacer() : View(MakeSpacerSpec()) {}
+Spacer::Spacer(float factor) : View(MakeSpacerSpec(factor)) {}
 
 IndexedPages::IndexedPages(std::vector<View> pages, std::size_t selected_index)
     : Layout<IndexedPages>(ValidateIndexedPages(std::move(pages), selected_index)) {

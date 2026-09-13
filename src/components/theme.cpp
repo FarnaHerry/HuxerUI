@@ -322,6 +322,8 @@ ButtonStyle MaterialButtonStyle(const ThemeSpec& theme) {
       .disabled_background = disabled_background,
       .disabled_label = disabled_label,
       .padding = EdgeInsets::Symmetric(24.0F, 8.0F),
+      .icon_size = 18.0F,
+      .icon_spacing = theme.spacing.small,
       .minimum_width = 58.0F,
       .minimum_height = 40.0F,
       .corner_radii = CornerRadii{20.0F},
@@ -374,11 +376,14 @@ ChipStyle MaterialChipStyle(const ThemeSpec& theme) {
 }
 
 SegmentedButtonStyle MaterialSegmentedButtonStyle(const ThemeSpec& theme) {
+  Color disabled_label = theme.colors.on_surface;
+  disabled_label.alpha *= 0.38F;
   return {
       .background = Color::Transparent(),
       .selected_background = theme.colors.secondary_container,
       .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
       .selected_label = theme.colors.on_secondary_container,
+      .disabled_label = disabled_label,
       .border = Border{theme.colors.outline, 1.0F},
       .selected_border = Border{theme.colors.outline, 1.0F},
       .padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
@@ -1182,6 +1187,8 @@ ButtonStyle DefaultButtonStyle(const ThemeSpec& theme) {
       .disabled_background = disabled_background,
       .disabled_label = disabled_label,
       .padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
+      .icon_size = 16.0F,
+      .icon_spacing = theme.spacing.small,
       .minimum_width = 0.0F,
       .minimum_height = 0.0F,
       .corner_radii = CornerRadii{theme.shapes.extra_small},
@@ -1242,11 +1249,14 @@ ChipStyle DefaultChipStyle(const ThemeSpec& theme) {
 SegmentedButtonStyle DefaultSegmentedButtonStyle(const ThemeSpec& theme) {
   Color border = theme.colors.on_surface;
   border.alpha *= 0.24F;
+  Color disabled_label = theme.colors.on_surface;
+  disabled_label.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = theme.colors.surface,
       .selected_background = theme.colors.primary,
       .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
       .selected_label = theme.colors.on_primary,
+      .disabled_label = disabled_label,
       .border = Border{border, 1.0F},
       .selected_border = Border{theme.colors.primary, 1.0F},
       .padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),

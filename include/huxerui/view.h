@@ -736,6 +736,7 @@ public:
 class Button final : public View {
 public:
   explicit Button(StringVariant label);
+  Button(ImageVariant icon, StringVariant label);
 };
 
 /// Presents an image-only action with a required accessible label.
@@ -776,10 +777,14 @@ public:
   /// Creates an icon-only item while retaining a required accessible label.
   static SegmentedButtonItem IconOnly(ImageVariant icon, StringVariant semantic_label);
 
+  /// Controls whether this choice can be selected.
+  SegmentedButtonItem Enabled(bool enabled) &&;
+
 private:
   std::optional<ImageVariant> icon_;
   StringVariant label_;
   bool show_label_ = true;
+  bool enabled_ = true;
 
   friend struct detail::InternalAccess;
 };
@@ -1439,10 +1444,11 @@ public:
   SelectionArea Source(std::shared_ptr<const TextSelectionSource> source) &&;
 };
 
-/// Consumes remaining main-axis space inside compatible Row and Column layouts.
+/// Consumes a share of the remaining main-axis space inside compatible Row and Column layouts.
 class Spacer final : public View {
 public:
-  Spacer();
+  /// @param factor Positive share weight relative to other growing children.
+  explicit Spacer(float factor = 1.0F);
 };
 
 /// Measures and places children vertically in declaration order.

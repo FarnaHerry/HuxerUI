@@ -28,10 +28,21 @@ void ApplyButtonDefaults(detail::ViewSpec& spec, const std::shared_ptr<const Env
   spec.properties.background = style.background;
   spec.properties.disabled_background = style.disabled_background;
   spec.properties.text_style = style.label_style;
-  spec.properties.text_layout_options.align = TextAlign::Center;
+  spec.properties.text_layout_options.align =
+      spec.image_properties.HasValue() ? TextAlign::Leading : TextAlign::Center;
   spec.properties.text_layout_options.vertical_align = TextVerticalAlign::Center;
   spec.properties.text_layout_options.wrap = TextWrap::NoWrap;
   spec.properties.disabled_foreground = style.disabled_label;
+  if (spec.image_properties.HasValue()) {
+    spec.layout_values.insert_or_assign(
+        typeid(detail::LabelContentMetrics),
+        detail::MakeErasedLayoutValue(detail::LabelContentMetrics{
+            {std::max(0.0F, style.icon_size), std::max(0.0F, style.icon_size)},
+            std::max(0.0F, style.icon_spacing),
+            true,
+        })
+    );
+  }
   spec.properties.corner_radii = style.corner_radii;
   spec.properties.frame.min_width = std::max(0.0F, style.minimum_width);
   spec.properties.frame.min_height = std::max(0.0F, style.minimum_height);
@@ -126,10 +137,13 @@ void ActivateClick(const detail::EventBindings& bindings) {
   detail::EmitEvent<ViewEvents::Click>(bindings);
 }
 
-std::shared_ptr<detail::ViewSpec> MakeButtonSpec(StringVariant label) {
+std::shared_ptr<detail::ViewSpec> MakeButtonSpec(StringVariant label, std::optional<ImageVariant> icon = std::nullopt) {
   auto spec = std::make_shared<detail::ViewSpec>(detail::NodeKind::Button);
   spec->defaults = ApplyButtonDefaults;
   spec->text = std::move(label);
+  if (icon.has_value()) {
+    spec->image_properties.SetImage(std::move(*icon));
+  }
   spec->focusable = true;
   spec->activation = ActivateClick;
   spec->component_semantics.role = SemanticRole::Button;
@@ -212,6 +226,14 @@ std::shared_ptr<detail::ViewSpec> MakeExternalTextureSpec(std::shared_ptr<Extern
 }
 
 Button::Button(StringVariant label) : View(MakeButtonSpec(std::move(label))) {}
+
+Button::Button(ImageVariant icon, StringVariant label) : View([&] {
+  detail::ValidateImageVariant(icon);
+  if (detail::IsBlankStringVariantLiteral(label)) {
+    throw std::invalid_argument("HuxerUI Button with an icon requires a non-empty label");
+  }
+  return MakeButtonSpec(std::move(label), std::move(icon));
+}()) {}
 
 IconButton::IconButton(ImageVariant icon, StringVariant semantic_label)
     : detail::TypedView<IconButton>([&] {

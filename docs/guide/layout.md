@@ -11,7 +11,7 @@ Application code normally expresses intent with built-in containers and modifier
 - `Row` and `Column` arrange children along one axis.
 - `Stack` overlays children.
 - `Flow` wraps children across lines.
-- `Spacer` consumes remaining main-axis space in a `Row` or `Column`.
+- `Spacer` consumes remaining main-axis space in a `Row` or `Column`; `Spacer(factor)` takes a weighted share relative to other growing children.
 - `IndexedPages` retains pages while measuring and placing the selected page.
 - `Pager` retains pages while adding controlled animated and direct paging.
 - `RefreshBox` coordinates controlled leading-edge refresh around one content subtree.

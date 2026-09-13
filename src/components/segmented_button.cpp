@@ -33,6 +33,10 @@ bool InternalAccess::ShowsLabel(const SegmentedButtonItem& item) noexcept {
   return item.show_label_;
 }
 
+bool InternalAccess::IsEnabled(const SegmentedButtonItem& item) noexcept {
+  return item.enabled_;
+}
+
 bool InternalAccess::HasIcon(const SegmentedButtonItem& item) noexcept {
   return item.icon_.has_value();
 }
@@ -61,6 +65,7 @@ struct SegmentedButtonBehavior {
   static const detail::ModifierDescriptor& Descriptor();
 
   std::size_t selected_index;
+  std::vector<bool> enabled_items;
   EventEmitter events;
 };
 
@@ -72,24 +77,24 @@ public:
 
   void Update(ViewNode&, const SegmentedButtonBehavior& modifier) {
     selected_index_ = modifier.selected_index;
+    enabled_items_ = modifier.enabled_items;
     events_ = modifier.events;
   }
 
   bool OnKey(ViewNode& node, const KeyEvent& event) override {
-    const std::size_t segment_count = node.ChildCount();
-    if (!node.IsEnabled() || segment_count == 0 || event.type != KeyEventType::Down || event.modifiers.alt ||
+    if (!node.IsEnabled() || enabled_items_.empty() || event.type != KeyEventType::Down || event.modifiers.alt ||
         event.modifiers.control || event.modifiers.meta) {
       return false;
     }
     std::optional<std::size_t> requested;
     if (event.key == Key::ArrowLeft) {
-      requested = selected_index_ == 0 ? segment_count - 1 : selected_index_ - 1;
+      requested = FindEnabled(selected_index_, -1);
     } else if (event.key == Key::ArrowRight) {
-      requested = selected_index_ + 1 == segment_count ? 0 : selected_index_ + 1;
+      requested = FindEnabled(selected_index_, 1);
     } else if (event.key == Key::Home) {
-      requested = 0;
+      requested = FindEdgeEnabled(false);
     } else if (event.key == Key::End) {
-      requested = segment_count - 1;
+      requested = FindEdgeEnabled(true);
     }
     if (requested.has_value() && *requested != selected_index_) {
       events_.Emit<SegmentedButtonEvents::Changed>(*requested);
@@ -98,7 +103,29 @@ public:
   }
 
 private:
+  [[nodiscard]] std::optional<std::size_t> FindEnabled(std::size_t start, int direction) const {
+    const std::size_t count = enabled_items_.size();
+    for (std::size_t distance = 1; distance <= count; ++distance) {
+      const std::size_t index = direction < 0 ? (start + count - distance % count) % count : (start + distance) % count;
+      if (enabled_items_[index]) {
+        return index;
+      }
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<std::size_t> FindEdgeEnabled(bool from_end) const {
+    for (std::size_t offset = 0; offset < enabled_items_.size(); ++offset) {
+      const std::size_t index = from_end ? enabled_items_.size() - 1 - offset : offset;
+      if (enabled_items_[index]) {
+        return index;
+      }
+    }
+    return std::nullopt;
+  }
+
   EventEmitter events_;
+  std::vector<bool> enabled_items_;
   std::size_t selected_index_ = 0;
 };
 
@@ -165,6 +192,7 @@ struct ResolvedSegmentedButtonItem {
   std::string label;
   std::optional<detail::ResolvedImageAsset> icon;
   bool show_label = true;
+  bool enabled = true;
 };
 
 class SegmentedButtonLabel final : public View {
@@ -210,6 +238,8 @@ private:
       );
     }
     spec->properties.padding = style.padding;
+    spec->properties.disabled_foreground = style.disabled_label;
+    spec->properties.disabled_opacity = 1.0F;
     spec->properties.background = selected ? style.selected_background : style.background;
     spec->properties.border = selected ? style.selected_border : style.border;
     spec->properties.corner_radii = SegmentCornerRadii(index, count, style.corner_radii);
@@ -243,15 +273,17 @@ public:
   SegmentedButtonLayoutView(
       std::vector<View> segments,
       std::size_t selected_index,
+      std::vector<bool> enabled_items,
       const SegmentedButtonStyle& style,
       EventEmitter events
   )
-      : View(MakeSpec(std::move(segments), selected_index, style, std::move(events))) {}
+      : View(MakeSpec(std::move(segments), selected_index, std::move(enabled_items), style, std::move(events))) {}
 
 private:
   static std::shared_ptr<detail::ViewSpec> MakeSpec(
       std::vector<View> segments,
       std::size_t selected_index,
+      std::vector<bool> enabled_items,
       const SegmentedButtonStyle& style,
       EventEmitter events
   ) {
@@ -270,6 +302,7 @@ private:
     );
     spec->modifiers.push_back(detail::MakeModifierSpec(SegmentedButtonBehavior{
         selected_index,
+        std::move(enabled_items),
         std::move(events),
     }));
     return spec;
@@ -303,6 +336,7 @@ MakeSegmentedButtonSpec(std::vector<SegmentedButtonItem> items, std::size_t sele
           detail::InternalAccess::ResolveLabel(item),
           detail::InternalAccess::ResolveIcon(item),
           detail::InternalAccess::ShowsLabel(item),
+          detail::InternalAccess::IsEnabled(item),
       };
       if (resolved.label.empty()) {
         throw std::invalid_argument("HuxerUI SegmentedButton item requires a non-empty semantic label");
@@ -318,7 +352,11 @@ MakeSegmentedButtonSpec(std::vector<SegmentedButtonItem> items, std::size_t sele
 
     std::vector<View> segments;
     segments.reserve(resolved_items.size());
+    std::vector<bool> enabled_items;
+    enabled_items.reserve(resolved_items.size());
     for (std::size_t index = 0; index < resolved_items.size(); ++index) {
+      const bool enabled = resolved_items[index].enabled;
+      enabled_items.push_back(enabled);
       segments.push_back(
           std::move(SegmentedButtonLabel(
                         resolved_items[index].label,
@@ -334,11 +372,12 @@ MakeSegmentedButtonSpec(std::vector<SegmentedButtonItem> items, std::size_t sele
                   events.Emit<SegmentedButtonEvents::Changed>(index);
                 }
               })
+              .With(huxerui::Enabled(enabled))
               .Key(index)
       );
     }
 
-    return SegmentedButtonLayoutView(std::move(segments), selected_index, style, events);
+    return SegmentedButtonLayoutView(std::move(segments), selected_index, std::move(enabled_items), style, events);
   });
 }
 
@@ -365,6 +404,11 @@ SegmentedButtonItem SegmentedButtonItem::IconOnly(ImageVariant icon, StringVaria
   SegmentedButtonItem item(std::move(icon), std::move(semantic_label));
   item.show_label_ = false;
   return item;
+}
+
+SegmentedButtonItem SegmentedButtonItem::Enabled(bool enabled) && {
+  enabled_ = enabled;
+  return std::move(*this);
 }
 
 SegmentedButton::SegmentedButton(std::vector<StringVariant> labels, std::size_t selected_index)

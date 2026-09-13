@@ -18,13 +18,13 @@ Use the complete container, scrolling, virtualization, navigation-shell, and res
 
 | Component | Controlled value and events |
 | --- | --- |
-| `Button(label)` | Emits click through `.OnClick(...)`; the constructor has no separate enabled state, so use `Enabled`. |
+| `Button(label)` / `Button(icon, label)` | Emits click through `.OnClick(...)`; the constructor has no separate enabled state, so use `Enabled`. |
 | `IconButton(icon, semantic_label)` | Requires an accessible semantic label and emits click. |
 | `Chip(label[, selected])` | Optional controlled selection; `.OnChanged(bool)` requests a new value. Icon overloads are available. |
 | `Checkbox([label,] checked)` | Controlled `bool`; `.OnChanged(bool)` requests a new value. |
 | `RadioButton([label,] selected)` | Controlled `bool`; group exclusivity remains application-owned. |
 | `Switch([label,] checked)` | Controlled `bool`; `.OnChanged(bool)` requests a new value. |
-| `SegmentedButton(items, selected_index)` | Controlled index; items may have icon/label or icon-only with semantic label. |
+| `SegmentedButton(items, selected_index)` | Controlled index; items may have icon/label or icon-only with semantic label; `SegmentedButtonItem::Enabled` disables individual choices. |
 | `Select(items, selected_index, content)` | Controlled index for a finite non-empty range; `.OnChanged(std::size_t)` requests a different choice. |
 | `ComboBox(value, suggestions[, text, content])` | Controlled `TextEditingValue` with application-owned suggestions; `.OnChanged` requests direct edits and `.OnSelected` proposes accepted text. |
 | `TreeView(roots, factory, item_info)` | Controlled hierarchical expansion and optional single selection; typed events request expansion, selection, and activation. |

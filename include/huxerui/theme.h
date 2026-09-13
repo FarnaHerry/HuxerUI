@@ -127,6 +127,8 @@ struct ButtonStyle {
   VisualFill disabled_background = Color::Rgb(31, 35, 40, 0.1F);
   Color disabled_label = Color::Rgb(31, 35, 40, 0.38F);
   EdgeInsets padding = EdgeInsets::Symmetric(14.0F, 8.0F);
+  float icon_size = 18.0F;
+  float icon_spacing = 8.0F;
   float minimum_width = 0.0F;
   float minimum_height = 0.0F;
   CornerRadii corner_radii{8.0F};
@@ -191,6 +193,7 @@ struct SegmentedButtonStyle {
   VisualFill selected_background = Color::Rgb(31, 111, 235);
   TextStyle label_style{Font::System(14.0F), Color::Rgb(31, 35, 40)};
   Color selected_label = Color::White();
+  Color disabled_label = Color::Rgb(31, 35, 40, 0.38F);
   Border border{Color::Rgb(31, 35, 40, 0.24F), 1.0F};
   Border selected_border{Color::Rgb(31, 111, 235), 1.0F};
   EdgeInsets padding = EdgeInsets::Symmetric(14.0F, 7.0F);

@@ -16,6 +16,7 @@ State<bool> labeled_radio_selected;
 State<bool> labeled_switch_checked;
 State<bool> chip_selected;
 State<std::size_t> segmented_button_selection;
+State<std::size_t> segmented_item_selection;
 State<std::size_t> tabs_selection;
 int checkbox_changes = 0;
 int radio_changes = 0;
@@ -28,6 +29,8 @@ int icon_button_clicks = 0;
 int selectable_chip_changes = 0;
 int disabled_chip_changes = 0;
 int segmented_button_changes = 0;
+int segmented_item_changes = 0;
+int icon_label_button_clicks = 0;
 int disabled_segmented_button_changes = 0;
 int rejected_segmented_button_changes = 0;
 int tabs_changes = 0;
@@ -247,6 +250,30 @@ View SegmentedButtonApp() {
     SegmentedButton({"Keep", "Reject"}, 0).OnChanged([](std::size_t) { ++rejected_segmented_button_changes; }),
     SegmentedButton({"A", "B", "C"}, 0).OnChanged([](std::size_t) {}).With(Frame{.width = 0.5F}),
   }.With(Spacing(8.0F));
+}
+
+View SegmentedButtonItemEnabledApp() {
+  auto selected = UseState<std::size_t>(0);
+  segmented_item_selection = selected;
+  return Column {
+    SegmentedButton(
+        std::vector<SegmentedButtonItem>{
+            SegmentedButtonItem("Overview"),
+            std::move(SegmentedButtonItem("Disabled")).Enabled(false),
+            SegmentedButtonItem("Activity"),
+        },
+        selected
+    ).OnChanged([selected](std::size_t index) {
+      ++segmented_item_changes;
+      selected = index;
+    }),
+  };
+}
+
+View ButtonWithIconApp() {
+  return Row {
+    Button(ControlIcon(), "Save").OnClick([] { ++icon_label_button_clicks; }),
+  };
 }
 
 View TabsApp() {
@@ -1050,6 +1077,88 @@ TEST_CASE("SegmentedButton preserves layout and controlled interaction contracts
     ClickAt(runtime, pointer, 127);
     REQUIRE(rejected_segmented_button_changes == 2);
   }
+}
+
+TEST_CASE("SegmentedButtonItem.Enabled disables selection and keyboard navigation skips disabled segments") {
+  segmented_item_changes = 0;
+
+  TestPlatform platform;
+  Runtime runtime{SegmentedButtonItemEnabledApp, platform};
+  runtime.SetWindowMetrics({.viewport = {360.0F, 120.0F}});
+  const FlattenedScene& scene = runtime.BuildFrame();
+
+  const auto* root = runtime.RootNode();
+  REQUIRE(root != nullptr);
+  REQUIRE(root->children.size() == 1);
+  const auto* group_scope = root->children[0].get();
+  REQUIRE(group_scope->children.size() == 1);
+  const auto* group = group_scope->children[0].get();
+  REQUIRE(group->children.size() == 3);
+  REQUIRE(group->children[0]->interaction.enabled);
+  REQUIRE_FALSE(group->children[1]->interaction.enabled);
+  REQUIRE(group->children[2]->interaction.enabled);
+
+  const DrawTextCommand* disabled = FindText(scene, "Disabled");
+  REQUIRE(disabled != nullptr);
+  REQUIRE(disabled->style.foreground == SegmentedButtonStyle::Default().disabled_label);
+
+  const auto label_center = [&](std::string_view label) {
+    const auto bounds = FindPresentedTextRect(scene, label);
+    REQUIRE(bounds.has_value());
+    return Point{bounds->x + bounds->width * 0.5F, bounds->y + bounds->height * 0.5F};
+  };
+
+  ClickAt(runtime, label_center("Disabled"));
+  REQUIRE(segmented_item_changes == 0);
+  REQUIRE(segmented_item_selection.Get() == 0);
+
+  ClickAt(runtime, label_center("Activity"));
+  REQUIRE(segmented_item_changes == 1);
+  REQUIRE(segmented_item_selection.Get() == 2);
+
+  runtime.BuildFrame();
+  runtime.HandleKeyEvent(KeyEvent{.type = KeyEventType::Down, .key = Key::ArrowLeft});
+  REQUIRE(segmented_item_changes == 2);
+  REQUIRE(segmented_item_selection.Get() == 0);
+
+  runtime.BuildFrame();
+  runtime.HandleKeyEvent(KeyEvent{.type = KeyEventType::Down, .key = Key::ArrowRight});
+  REQUIRE(segmented_item_changes == 3);
+  REQUIRE(segmented_item_selection.Get() == 2);
+
+  runtime.BuildFrame();
+  runtime.HandleKeyEvent(KeyEvent{.type = KeyEventType::Down, .key = Key::Home});
+  REQUIRE(segmented_item_changes == 4);
+  REQUIRE(segmented_item_selection.Get() == 0);
+}
+
+TEST_CASE("ButtonWithIconRendersLeadingIconAndValidatesLabel") {
+  REQUIRE_THROWS_AS(Button(ControlIcon(), ""), std::invalid_argument);
+  REQUIRE_THROWS_AS(Button(ControlIcon(), "  "), std::invalid_argument);
+  icon_label_button_clicks = 0;
+
+  TestPlatform platform;
+  Runtime runtime{ButtonWithIconApp, platform};
+  runtime.SetWindowMetrics({.viewport = {240.0F, 80.0F}});
+  const FlattenedScene& scene = runtime.BuildFrame();
+
+  const auto* button = FindMountedKind(*runtime.RootNode(), detail::NodeKind::Button);
+  REQUIRE(button != nullptr);
+  REQUIRE(button->image_properties.HasValue());
+  const detail::LabelContentMetrics content = button->LayoutValueOr<detail::LabelContentMetrics>({});
+  REQUIRE(content.icon_size == Size{ButtonStyle::Default().icon_size, ButtonStyle::Default().icon_size});
+  REQUIRE(content.icon_spacing == ButtonStyle::Default().icon_spacing);
+  REQUIRE(content.show_label);
+
+  const DrawTextCommand* label = FindText(scene, "Save");
+  REQUIRE(label != nullptr);
+  REQUIRE(label->options.align == TextAlign::Leading);
+  REQUIRE(label->options.vertical_align == TextVerticalAlign::Center);
+  REQUIRE(label->options.wrap == TextWrap::NoWrap);
+
+  const Rect label_bounds = FindPresentedTextRect(scene, "Save").value();
+  ClickAt(runtime, {label_bounds.x + label_bounds.width * 0.5F, label_bounds.y + label_bounds.height * 0.5F});
+  REQUIRE(icon_label_button_clicks == 1);
 }
 
 TEST_CASE("TestSegmentedButtonPreservesOnlyOuterAsymmetricCorners") {

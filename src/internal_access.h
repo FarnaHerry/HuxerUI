@@ -195,6 +195,7 @@ struct InternalAccess {
   static std::optional<std::variant<ImageAsset, VectorAsset>> ResolveIcon(SegmentedButtonItem& item);
   static std::string ResolveLabel(SegmentedButtonItem& item);
   static bool ShowsLabel(const SegmentedButtonItem& item) noexcept;
+  static bool IsEnabled(const SegmentedButtonItem& item) noexcept;
   static bool HasIcon(const SegmentedButtonItem& item) noexcept;
   static bool HasBlankLiteralLabel(const SegmentedButtonItem& item) noexcept;
   static void ValidateIcon(const SegmentedButtonItem& item);
