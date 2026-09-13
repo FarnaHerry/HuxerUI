@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include <huxerui/paint.h>
 #include <huxerui/text.h>
@@ -732,6 +733,89 @@ TEST_CASE("LinuxTextLayoutCaretHitTestingPreservesAlignedBidiGeometry") {
       }
     }
   }
+}
+
+TEST_CASE("LinuxTextMeasurementCacheReturnsIdenticalMetricsAcrossEvictions") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+
+  const TextStyle style{Font::System(14.0F), Color::Black()};
+  std::vector<std::string> texts;
+  texts.reserve(300);
+  for (int index = 0; index < 300; ++index) {
+    texts.push_back("message " + std::to_string(index) +
+                    " with enough text to wrap a few times inside a narrow viewport");
+  }
+
+  // More distinct texts than the cache holds, so later passes measure through
+  // forced evictions; every pass must produce identical metrics either way.
+  const auto measure = [&renderer, &texts, &style](std::size_t index) {
+    const float width = 120.0F + static_cast<float>(index % 7) * 40.0F;
+    return renderer.MeasureText(texts[index], style, width, {.wrap = TextWrap::Word}).size;
+  };
+
+  std::vector<Size> first;
+  first.reserve(texts.size());
+  for (std::size_t index = 0; index < texts.size(); ++index) {
+    first.push_back(measure(index));
+  }
+  for (std::size_t pass = 0; pass < 3; ++pass) {
+    for (std::size_t index = 0; index < texts.size(); ++index) {
+      const Size size = measure(index);
+      REQUIRE(size.width == first[index].width);
+      REQUIRE(size.height == first[index].height);
+    }
+  }
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxOversizedTextSkipsTheLayoutCacheWithoutEvictingCachedEntries") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+
+  const TextStyle style{Font::System(14.0F), Color::Black()};
+  // ParagraphCacheCost() marks paragraphs above paragraph_cache_budget / 64
+  // plain bytes as oversized; these exceed that threshold, so every request is
+  // handed to the caller as an owning handle instead of being retained.
+  const std::string oversized(140'000, 'x');
+  const TextLayoutMetrics first =
+      renderer.MeasureText(oversized, style, std::numeric_limits<float>::infinity(), {.wrap = TextWrap::NoWrap});
+  const TextLayoutMetrics repeated =
+      renderer.MeasureText(oversized, style, std::numeric_limits<float>::infinity(), {.wrap = TextWrap::NoWrap});
+  REQUIRE(first.size.width > 0.0F);
+  REQUIRE(first.size.height > 0.0F);
+  REQUIRE(repeated.size.width == first.size.width);
+  REQUIRE(repeated.size.height == first.size.height);
+
+  const TextLayoutMetrics cached_before =
+      renderer.MeasureText("cached sentence", style, 200.0F, {.wrap = TextWrap::Word});
+  for (int index = 0; index < 4; ++index) {
+    const TextLayoutMetrics churn = renderer.MeasureText(
+        "oversized churn " + std::to_string(index) + " " + oversized,
+        style,
+        std::numeric_limits<float>::infinity(),
+        {.wrap = TextWrap::NoWrap}
+    );
+    REQUIRE(churn.size.width > 0.0F);
+  }
+
+  // The paint path must release the oversized layout with its handle scope too.
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 64.0F, 16.0F});
+  paint.DrawText({0.0F, 0.0F, 64.0F, 16.0F}, oversized, style, {.wrap = TextWrap::NoWrap});
+  paint.Finish();
+  const RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 64, 16);
+  REQUIRE(cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS);
+  RenderSnapshot(renderer, frame, surface);
+  cairo_surface_destroy(surface);
+
+  // Oversized requests must not displace reusable entries or corrupt state.
+  const TextLayoutMetrics cached_after =
+      renderer.MeasureText("cached sentence", style, 200.0F, {.wrap = TextWrap::Word});
+  REQUIRE(cached_after.size.width == cached_before.size.width);
+  REQUIRE(cached_after.size.height == cached_before.size.height);
+  renderer.Discard();
 }
 
 } // namespace huxerui::test
