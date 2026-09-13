@@ -770,10 +770,71 @@ struct LinuxRenderer::State {
     return {entry->gdk_texture != nullptr ? GDK_TEXTURE(g_object_ref(entry->gdk_texture)) : nullptr, false};
   }
 
+  // Shaped layout handed to callers. Cache hits borrow the retained layout;
+  // oversized paragraphs bypass the cache and come back as an owning handle
+  // that releases its Pango resources when the measure or paint scope ends.
+  class ScopedTextLayout {
+  public:
+    ScopedTextLayout() = default;
+    ScopedTextLayout(const ScopedTextLayout&) = delete;
+    ScopedTextLayout& operator=(const ScopedTextLayout&) = delete;
+    ScopedTextLayout(ScopedTextLayout&& other) noexcept
+        : layout_(other.layout_), metrics_(other.metrics_), owned_(other.owned_) {
+      other.layout_ = nullptr;
+      other.owned_ = false;
+    }
+    ScopedTextLayout& operator=(ScopedTextLayout&& other) noexcept {
+      if (this != &other) {
+        Release();
+        layout_ = std::exchange(other.layout_, nullptr);
+        metrics_ = other.metrics_;
+        owned_ = std::exchange(other.owned_, false);
+      }
+      return *this;
+    }
+    ~ScopedTextLayout() {
+      Release();
+    }
+
+    static ScopedTextLayout Cached(const TextLayoutCacheEntry& entry) {
+      ScopedTextLayout handle;
+      handle.layout_ = entry.layout;
+      handle.metrics_ = entry.metrics;
+      return handle;
+    }
+    static ScopedTextLayout Owning(PangoLayout* layout, const TextLayoutMetrics& metrics) {
+      ScopedTextLayout handle;
+      handle.layout_ = layout;
+      handle.metrics_ = metrics;
+      handle.owned_ = true;
+      return handle;
+    }
+
+    [[nodiscard]] PangoLayout* layout() const {
+      return layout_;
+    }
+    [[nodiscard]] const TextLayoutMetrics& metrics() const {
+      return metrics_;
+    }
+
+  private:
+    void Release() {
+      if (owned_ && layout_ != nullptr) {
+        g_object_unref(layout_);
+      }
+      layout_ = nullptr;
+      owned_ = false;
+    }
+
+    PangoLayout* layout_ = nullptr;
+    TextLayoutMetrics metrics_{};
+    bool owned_ = false;
+  };
+
   // Returns the shaped layout for these exact measure inputs, creating it once
   // and reusing it across frames; measurement and painting both go through
   // this cache because virtual lists re-run their item factories every frame.
-  TextLayoutCacheEntry* TextLayoutFor(const AttributedText& text, const TextStyle& style, float max_width,
+  ScopedTextLayout TextLayoutFor(const AttributedText& text, const TextStyle& style, float max_width,
       const TextLayoutOptions& options) {
     const auto matches = [&](const TextLayoutCacheEntry& entry) {
       return entry.key.max_width == max_width && entry.key.style == style && entry.key.options == options &&
@@ -783,7 +844,7 @@ struct LinuxRenderer::State {
       if (matches(text_layouts[position])) {
         std::rotate(text_layouts.begin() + static_cast<std::ptrdiff_t>(position),
             text_layouts.begin() + static_cast<std::ptrdiff_t>(position) + 1, text_layouts.end());
-        return &text_layouts.back();
+        return ScopedTextLayout::Cached(text_layouts.back());
       }
     }
     PangoFontMap* font_map = pango_context_get_font_map(context);
@@ -796,22 +857,24 @@ struct LinuxRenderer::State {
     g_object_unref(layout_context);
     ConfigureLayout(layout, text, style, max_width, options);
 
+    // Cost accounting matches the Windows, UIKit, and AppKit paragraph caches:
+    // ParagraphCacheCost() conservatively charges the text, its style and link
+    // metadata, and the platform's shaped-glyph bookkeeping.
     TextLayoutCacheEntry entry;
     entry.key = {text, style, max_width, options};
     entry.layout = layout;
     entry.metrics = LayoutMetrics(layout);
-    entry.bytes = std::max<std::uint64_t>(1, text.PlainText().size());
-    // Oversized texts skip the cache: a single entry could evict the entire
-    // working set, and callers consume the returned entry immediately.
-    if (entry.bytes > kMaxCachedTextBytes) {
-      if (uncached_text_layout_.layout != nullptr) {
-        g_object_unref(uncached_text_layout_.layout);
-      }
-      uncached_text_layout_ = std::move(entry);
-      return &uncached_text_layout_;
+    entry.bytes = ParagraphCacheCost(text);
+    // ParagraphCacheCost() marks oversized paragraphs with a cost above the
+    // shared budget; hand those to the caller as an owning handle so their
+    // memory is released after this measure or paint instead of pinning the
+    // layout outside the budget, and skip eviction so one oversized entry
+    // cannot displace the entire reusable working set.
+    if (entry.bytes > paragraph_cache_budget) {
+      return ScopedTextLayout::Owning(layout, entry.metrics);
     }
     while (!text_layouts.empty() &&
-           (text_layout_bytes + entry.bytes > kTextLayoutCacheBudget ||
+           (text_layout_bytes + entry.bytes > paragraph_cache_budget ||
                text_layouts.size() >= kMaxTextLayouts)) {
       text_layout_bytes -= text_layouts.front().bytes;
       if (text_layouts.front().layout != nullptr) {
@@ -821,7 +884,7 @@ struct LinuxRenderer::State {
     }
     text_layout_bytes += entry.bytes;
     text_layouts.push_back(std::move(entry));
-    return &text_layouts.back();
+    return ScopedTextLayout::Cached(text_layouts.back());
   }
 
   PangoContext* context = nullptr;
@@ -831,7 +894,6 @@ struct LinuxRenderer::State {
   std::vector<PathShadowMaskEntry> path_shadow_masks;
   std::vector<unsigned char> blur_scratch;
   std::vector<TextLayoutCacheEntry> text_layouts;
-  TextLayoutCacheEntry uncached_text_layout_;
   std::uint64_t shadow_mask_bytes = 0;
   std::uint64_t path_shadow_mask_bytes = 0;
   std::uint64_t image_cache_bytes = 0;
@@ -842,8 +904,6 @@ struct LinuxRenderer::State {
   static constexpr std::uint64_t kPathShadowMaskBudget = 32 * 1024 * 1024;
   static constexpr std::size_t kMaxShadowMasks = 64;
   static constexpr std::size_t kMaxPathShadowMasks = 32;
-  static constexpr std::uint64_t kTextLayoutCacheBudget = 8 * 1024 * 1024;
-  static constexpr std::uint64_t kMaxCachedTextBytes = 256 * 1024;
   static constexpr std::size_t kMaxTextLayouts = 128;
 };
 
@@ -943,8 +1003,8 @@ private:
     if (command.text.PlainText().empty() || command.rect.IsEmpty()) {
       return;
     }
-    PangoLayout* layout =
-        state_.TextLayoutFor(command.text, command.style, command.rect.width, command.options)->layout;
+    auto shaped = state_.TextLayoutFor(command.text, command.style, command.rect.width, command.options);
+    PangoLayout* layout = shaped.layout();
     PangoRectangle logical{};
     pango_layout_get_extents(layout, nullptr, &logical);
     if (command.options.wrap == TextWrap::NoWrap && PangoUnits(logical.width) < command.rect.width) {
@@ -969,7 +1029,8 @@ private:
     );
     pango_cairo_show_layout(context_, layout);
     cairo_restore(context_);
-    // The layout is owned by the text layout cache; it must not be unref'd here.
+    // Cached layouts stay owned by the text layout cache; oversized layouts are
+    // released when the handle above leaves scope, so nothing is unref'd here.
   }
 
   void DrawCommand(const DrawTextRunsCommand& command) {
@@ -1791,7 +1852,7 @@ TextLayoutMetrics LinuxRenderer::MeasureText(const AttributedText& text, const T
   if (std::isfinite(max_width) && max_width <= 0.0F) {
     return {};
   }
-  TextLayoutMetrics metrics = state_->TextLayoutFor(text, style, max_width, options)->metrics;
+  TextLayoutMetrics metrics = state_->TextLayoutFor(text, style, max_width, options).metrics();
   if (std::isfinite(max_width)) {
     metrics.size.width = std::min(metrics.size.width, max_width);
   }
