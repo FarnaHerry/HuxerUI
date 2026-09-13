@@ -249,7 +249,11 @@ class WindowTitleBar final : public Layout<WindowTitleBar> {
 public:
   /// Constructs a title bar from an existing child collection.
   explicit WindowTitleBar(std::vector<View> children) : Layout(std::move(children)) {
-    this->ApplyModifiers(WindowDragRegion{}, CrossAlign(CrossAxisAlignment::Center));
+    // Brace (not parenthesized) initialization: clang in Objective-C++ mode does
+    // not implement P0960 parenthesized aggregate initialization, so the paren
+    // form fails to compile in every appkit *.mm TU that instantiates this
+    // inline constructor.
+    this->ApplyModifiers(WindowDragRegion{}, CrossAlign{CrossAxisAlignment::Center});
   }
 
   /// Constructs a title bar from ordinary View children.
