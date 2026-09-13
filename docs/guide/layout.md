@@ -212,3 +212,8 @@ Derive from `VirtualLayout<Derived>` for a demand-driven logical item source.
 Runtime owns item reconciliation, keys, saved state, clipping, input, semantics, scrolling, and cleanup; the custom layout owns visible-range selection and placement.
 
 See [Extending HuxerUI](extending.md) for the extension contracts.
+
+## Debugging layout
+
+Set `AppOptions::show_layout_guidelines` to paint every mounted node's bounds as a cyan outline and its padding as a dashed amber inset above the application content.
+The option defaults to disabled and only adds diagnostic paint commands; measurement, placement, and hit testing are unchanged.

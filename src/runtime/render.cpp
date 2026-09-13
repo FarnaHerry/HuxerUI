@@ -780,7 +780,8 @@ void RecordNodePaint(MountedNode& node) {
 
 } // namespace
 
-void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, const RenderNode* extra_child) {
+void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, const RenderNode* extra_child,
+                         const RenderNode* diagnostics_child = nullptr) {
   auto& node = static_cast<detail::MountedNode&>(mounted_node);
   RenderNode& render_node = node.render_node;
   const Transform2D& local_transform = node.presentation.local_transform;
@@ -830,6 +831,9 @@ void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, cons
   if (node.presentation.overlay) { children.push_back(node.presentation.overlay); }
   if (extra_child != nullptr) {
     children.push_back(extra_child);
+  }
+  if (diagnostics_child != nullptr) {
+    children.push_back(diagnostics_child);
   }
   const bool visible = !node.presentation.suppress_render &&
       (own_visible || std::any_of(children.begin(), children.end(), [](const RenderNode* child) {
@@ -972,8 +976,8 @@ void ResolvePresentationTree(MountedNode& node) {
   ResolvePresentationTreeImpl(node, Transform2D{}, 1.0F);
 }
 
-void UpdateRenderScene(MountedNode& node, Rect clip, const RenderNode* overlay) {
-  PaintNodeWithinClip(node, clip, overlay);
+void UpdateRenderScene(MountedNode& node, Rect clip, const RenderNode* overlay, const RenderNode* diagnostics) {
+  PaintNodeWithinClip(node, clip, overlay, diagnostics);
 }
 
 DamageRegion ComputeDamageRegion(

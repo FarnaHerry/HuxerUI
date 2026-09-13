@@ -1144,6 +1144,7 @@ Runtime::Runtime(const Application& application, PlatformAdapter& platform, Appl
   state_ = std::make_unique<State>(*this, application, platform);
   state_->gesture_settings_ = gesture_settings;
   state_->default_scroll_physics_ = scroll_physics;
+  state_->show_layout_guidelines_ = application.options.show_layout_guidelines;
   state_->task_delay_scheduler_ = detail::MakeTaskDelayScheduler(platform);
   state_->root_environment_ = std::make_shared<Environment>();
   state_->root_environment_->Set(detail::ViewportEnvironment{state_->viewport_class_});
@@ -1768,11 +1769,17 @@ const FrameCommit& Runtime::BuildFrame(FrameInfo frame) {
   HUXERUI_PROFILE_NEXT(profile_stage, Scene);
   state_->text_->AdvanceTextSelectionOverlay(frame);
   state_->text_->PaintTextSelectionOverlay();
+  if (state_->show_layout_guidelines_) {
+    PaintLayoutGuidelinesOverlay(
+        state_->layout_guidelines_, state_->mounted_root_.get(), state_->window_->metrics.viewport
+    );
+  }
   CommitWindowAppearance();
   UpdateRenderScene(
       *state_->mounted_root_,
       state_->mounted_root_->bounds,
-      &state_->text_->Overlay()
+      &state_->text_->Overlay(),
+      state_->show_layout_guidelines_ ? &state_->layout_guidelines_.render_node : nullptr
   );
   const RenderNode* scene_root = &state_->mounted_root_->render_node;
   const bool scene_transition_was_active = state_->scene_transition_service_->IsActive();

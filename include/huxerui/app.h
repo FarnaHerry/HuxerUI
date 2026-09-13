@@ -186,6 +186,12 @@ struct AppOptions {
   /// Whether Runtime installs the built-in debug overlay above application root hooks.
   bool show_debug_overlay = true;
 #endif
+  /// Draws layout guidelines above application content: an outline for every mounted node plus a dashed guide
+  /// for each declarative padding region.
+  ///
+  /// Diagnostic tooling only; guidelines paint in a Runtime-owned overlay and do not affect layout, input,
+  /// semantics, or damage scheduling of the application tree.
+  bool show_layout_guidelines = false;
   /// Ordered application root extensions installed for every Runtime.
   std::vector<RootHook> root_hooks{};
 };

@@ -574,7 +574,8 @@ MountedNode* FindTextSelectionOwner(MountedNode& root, std::uint64_t identity);
 void ResolvePresentationTree(MountedNode& node);
 MountedNode& ChildInPaintOrder(const MountedNode& node, std::size_t index);
 void ValidateBorder(const Border& border);
-void UpdateRenderScene(MountedNode& node, Rect clip, const RenderNode* overlay = nullptr);
+void UpdateRenderScene(MountedNode& node, Rect clip, const RenderNode* overlay = nullptr,
+                       const RenderNode* diagnostics = nullptr);
 DamageRegion ComputeDamageRegion(
     const RenderNode* root,
     Size viewport,

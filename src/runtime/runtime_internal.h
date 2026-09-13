@@ -131,6 +131,17 @@ private:
 void InstallBuiltinPresentation(RootContext& root);
 void InstallDebugOverlay(RootContext& root, std::shared_ptr<DebugMetricsState> metrics);
 
+// The framework-owned layout-guidelines overlay paints above application layers without joining their tree.
+struct LayoutGuidelinesOverlay {
+  RenderNode render_node;
+};
+
+void PaintLayoutGuidelinesOverlay(
+    LayoutGuidelinesOverlay& overlay,
+    const MountedNode* mounted_root,
+    Size viewport
+);
+
 enum class LayerPlacementKind : std::uint8_t {
   Natural,
   Center,
@@ -497,6 +508,8 @@ struct Runtime::State {
   std::shared_ptr<detail::AppResources> app_resources_;
   std::shared_ptr<detail::ApplicationService> application_service_;
   std::shared_ptr<detail::DebugMetricsState> debug_metrics_;
+  detail::LayoutGuidelinesOverlay layout_guidelines_;
+  bool show_layout_guidelines_ = false;
   std::shared_ptr<detail::WindowService> window_service_;
   std::shared_ptr<detail::SceneTransitionService> scene_transition_service_;
   std::unique_ptr<detail::TextInteraction> text_;

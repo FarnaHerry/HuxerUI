@@ -1877,6 +1877,8 @@ The built-in debug overlay attaches one persistent System entry after root hooks
 
 The sampling modifier is mounted only with the expanded panel. It wakes once per second and updates the panel's local scope. That update is an ordinary painted frame, keeping the metric tied to actual work without coupling Runtime accounting to the overlay's reconciliation timing. Collapsing the panel removes the modifier and its deadline, so a static application does not animate merely because the debug ribbon is enabled.
 
+When `AppOptions::show_layout_guidelines` is enabled, Runtime paints a framework-owned diagnostics node after the application scene rather than composing guideline UI through LayerController. The painter walks the mounted node tree in window coordinates, outlining each node's bounds in cyan and its padding insets as a dashed amber border, mirroring Flutter's debugPaintSizeEnabled treatment. The node carries a reserved identifier outside the mounted-node sequence, repaints from the current frame's geometry, and never affects measurement, placement, or hit testing; the option defaults to disabled.
+
 LayerController entries without a transition are removed immediately. Dialog, BottomSheet, Menu, Toast, and SnackBar entries with configured motion first become non-interactive, retain their presentation state through the exit animation, and are removed after completion. Modal barriers remain until actual removal, so focus cannot be restored and content behind a visually exiting modal cannot be activated early.
 
 ## RootHook
