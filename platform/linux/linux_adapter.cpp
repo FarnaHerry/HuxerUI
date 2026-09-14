@@ -52,8 +52,6 @@ namespace huxerui::detail {
 namespace {
 
 constexpr float kDipsPerScrollStep = 40.0F;
-constexpr float kResizeBorderDips = 6.0F;
-
 const char* LinuxPointerCursorName(PointerCursorKind kind) noexcept {
   switch (kind) {
   case PointerCursorKind::Default:
@@ -288,39 +286,32 @@ std::string KeyText(guint key_value, GdkModifierType state) {
   return std::string(buffer, static_cast<std::size_t>(length));
 }
 
-std::optional<GdkSurfaceEdge> ResizeEdge(Point point, Size viewport, bool maximized) noexcept {
-  if (maximized || viewport.width <= 0.0F || viewport.height <= 0.0F) {
-    return std::nullopt;
+GdkSurfaceEdge GdkResizeEdge(LinuxResizeEdge edge) noexcept {
+  switch (edge) {
+  case LinuxResizeEdge::NorthWest: return GDK_SURFACE_EDGE_NORTH_WEST;
+  case LinuxResizeEdge::North: return GDK_SURFACE_EDGE_NORTH;
+  case LinuxResizeEdge::NorthEast: return GDK_SURFACE_EDGE_NORTH_EAST;
+  case LinuxResizeEdge::East: return GDK_SURFACE_EDGE_EAST;
+  case LinuxResizeEdge::SouthEast: return GDK_SURFACE_EDGE_SOUTH_EAST;
+  case LinuxResizeEdge::South: return GDK_SURFACE_EDGE_SOUTH;
+  case LinuxResizeEdge::SouthWest: return GDK_SURFACE_EDGE_SOUTH_WEST;
+  case LinuxResizeEdge::West: return GDK_SURFACE_EDGE_WEST;
   }
-  const bool left = point.x <= kResizeBorderDips;
-  const bool right = point.x >= viewport.width - kResizeBorderDips;
-  const bool top = point.y <= kResizeBorderDips;
-  const bool bottom = point.y >= viewport.height - kResizeBorderDips;
-  if (top && left) {
-    return GDK_SURFACE_EDGE_NORTH_WEST;
+  return GDK_SURFACE_EDGE_NORTH;
+}
+
+const char* LinuxResizeCursorName(LinuxResizeEdge edge) noexcept {
+  switch (edge) {
+  case LinuxResizeEdge::North:
+  case LinuxResizeEdge::South: return "ns-resize";
+  case LinuxResizeEdge::East:
+  case LinuxResizeEdge::West: return "ew-resize";
+  case LinuxResizeEdge::NorthEast:
+  case LinuxResizeEdge::SouthWest: return "nesw-resize";
+  case LinuxResizeEdge::NorthWest:
+  case LinuxResizeEdge::SouthEast: return "nwse-resize";
   }
-  if (top && right) {
-    return GDK_SURFACE_EDGE_NORTH_EAST;
-  }
-  if (bottom && left) {
-    return GDK_SURFACE_EDGE_SOUTH_WEST;
-  }
-  if (bottom && right) {
-    return GDK_SURFACE_EDGE_SOUTH_EAST;
-  }
-  if (left) {
-    return GDK_SURFACE_EDGE_WEST;
-  }
-  if (right) {
-    return GDK_SURFACE_EDGE_EAST;
-  }
-  if (top) {
-    return GDK_SURFACE_EDGE_NORTH;
-  }
-  if (bottom) {
-    return GDK_SURFACE_EDGE_SOUTH;
-  }
-  return std::nullopt;
+  return "default";
 }
 
 std::shared_ptr<LinuxUIThreadDispatcher> InitializeGtk() {
@@ -417,8 +408,9 @@ public:
   }
 
   void SetPointerCursor(PointerCursorKind kind) override {
+    requested_pointer_cursor_ = kind;
     if (drawing_area_ != nullptr) {
-      gtk_widget_set_cursor_from_name(GTK_WIDGET(drawing_area_), LinuxPointerCursorName(kind));
+      ApplyPointerCursor();
     }
   }
 
@@ -855,9 +847,9 @@ private:
         static_cast<float>(gtk_widget_get_width(GTK_WIDGET(drawing_area_))),
         static_cast<float>(gtk_widget_get_height(GTK_WIDGET(drawing_area_))),
     };
-    if (const std::optional<GdkSurfaceEdge> edge =
-            ResizeEdge(point, viewport, gtk_window_is_maximized(window_) != FALSE)) {
-      gdk_toplevel_begin_resize(GDK_TOPLEVEL(surface), *edge, device, static_cast<int>(button), point.x, point.y, time);
+    if (const std::optional<LinuxResizeEdge> edge = ResolveLinuxResizeEdge(
+            point, viewport, gtk_window_is_maximized(window_) != FALSE)) {
+      gdk_toplevel_begin_resize(GDK_TOPLEVEL(surface), GdkResizeEdge(*edge), device, static_cast<int>(button), point.x, point.y, time);
       return true;
     }
     if (runtime_->IsWindowDragRegion(point)) {
@@ -882,6 +874,32 @@ private:
         pressed_buttons,
         modifiers,
     });
+    UpdateResizeCursor(position);
+  }
+
+  void ApplyPointerCursor() noexcept {
+    if (drawing_area_ == nullptr) return;
+    const char* name = hovered_resize_edge_.has_value()
+                           ? LinuxResizeCursorName(*hovered_resize_edge_)
+                           : LinuxPointerCursorName(requested_pointer_cursor_);
+    gtk_widget_set_cursor_from_name(GTK_WIDGET(drawing_area_), name);
+  }
+
+  void UpdateResizeCursor(Point position) noexcept {
+    std::optional<LinuxResizeEdge> edge;
+    if (custom_chrome_ && drawing_area_ != nullptr && window_ != nullptr &&
+        pressed_buttons_ == PointerButton::None) {
+      edge = ResolveLinuxResizeEdge(
+          position,
+          {static_cast<float>(gtk_widget_get_width(GTK_WIDGET(drawing_area_))),
+           static_cast<float>(gtk_widget_get_height(GTK_WIDGET(drawing_area_)))},
+          gtk_window_is_maximized(window_) != FALSE
+      );
+    }
+    if (edge != hovered_resize_edge_) {
+      hovered_resize_edge_ = edge;
+      ApplyPointerCursor();
+    }
   }
 
   void CancelPointer() {
@@ -1023,7 +1041,9 @@ private:
   }
 
   static void WindowMaximizedChanged(GObject*, GParamSpec*, gpointer data) {
-    static_cast<LinuxPlatformAdapter*>(data)->UpdateRuntimeViewport();
+    auto& self = *static_cast<LinuxPlatformAdapter*>(data);
+    self.UpdateRuntimeViewport();
+    self.UpdateResizeCursor(self.last_pointer_position_);
   }
 
   static void ScaleChanged(GObject*, GParamSpec*, gpointer data) {
@@ -1135,6 +1155,8 @@ private:
     if (self.pressed_buttons_ == PointerButton::None) {
       self.SendPointer(PointerEventType::Cancel, self.last_pointer_position_);
     }
+    self.hovered_resize_edge_.reset();
+    self.ApplyPointerCursor();
   }
 
   static gboolean Scrolled(GtkEventControllerScroll* controller, double dx, double dy, gpointer data) {
@@ -1208,6 +1230,8 @@ private:
   bool suppress_pointer_release_ = false;
   bool clipboard_read_active_ = false;
   Point last_pointer_position_;
+  PointerCursorKind requested_pointer_cursor_ = PointerCursorKind::Default;
+  std::optional<LinuxResizeEdge> hovered_resize_edge_;
   LinuxKeyTracker key_tracker_;
   std::exception_ptr failure_;
 };
