@@ -28,11 +28,13 @@ inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
 
 struct WindowState {
   explicit WindowState(const WindowOptions& options)
-      : content_mode(options.content_mode), chrome_mode(options.chrome_mode), caption_labels(options.caption_labels) {}
+      : content_mode(options.content_mode), chrome_mode(options.chrome_mode), caption_labels(options.caption_labels),
+        caption_controls(options.caption_controls) {}
 
   WindowContentMode content_mode = WindowContentMode::SafeArea;
   WindowChromeMode chrome_mode = WindowChromeMode::System;
   WindowCaptionLabels caption_labels;
+  WindowCaptionControls caption_controls = WindowCaptionControls::Framework;
   WindowMetrics metrics;
   SystemBarsAppearance appearance = SystemBarsAppearance::Default();
   Color caption_foreground = Color::Rgb(32, 32, 32);

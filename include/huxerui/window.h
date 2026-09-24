@@ -33,6 +33,15 @@ enum class WindowChromeMode {
   Custom, ///< Lets application content occupy title-bar space while HuxerUI preserves native window behavior.
 };
 
+/// Selects who draws the minimize, maximize or restore, and close controls in Custom chrome.
+enum class WindowCaptionControls {
+  /// HuxerUI draws them inside the title-bar control area the platform reserves.
+  Framework,
+  /// The application draws its own controls; no control area is reserved, so WindowTitleBar places its children
+  /// across the full width.
+  Application,
+};
+
 /// A top-level window operation understood by PlatformAdapter and WindowHandle.
 enum class WindowCommand {
   Minimize,      ///< Requests the platform's minimized state.
@@ -133,6 +142,9 @@ struct WindowOptions {
 
   /// Accessibility labels for framework-rendered desktop caption controls.
   WindowCaptionLabels caption_labels{};
+
+  /// Who draws the caption controls in Custom chrome. Ignored in System chrome.
+  WindowCaptionControls caption_controls = WindowCaptionControls::Framework;
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;

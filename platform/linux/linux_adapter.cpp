@@ -648,6 +648,7 @@ private:
   void CreateWindow(const WindowOptions& options, Size initial_size) {
     custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
     custom_title_bar_height_ = options.title_bar_height;
+    application_caption_controls_ = options.caption_controls == WindowCaptionControls::Application;
     window_ = GTK_WINDOW(gtk_window_new());
     gtk_window_set_title(window_, options.title.c_str());
     gtk_window_set_default_size(
@@ -774,7 +775,8 @@ private:
     WindowMetrics metrics{.viewport = viewport, .safe_area = {}, .title_bar = std::nullopt};
     if (custom_chrome_) {
       metrics.title_bar = ResolveLinuxTitleBarMetrics(
-          custom_title_bar_height_, viewport, window_ != nullptr && gtk_window_is_maximized(window_)
+          custom_title_bar_height_, viewport, window_ != nullptr && gtk_window_is_maximized(window_),
+          !application_caption_controls_
       );
     }
     runtime_->SetWindowMetrics(metrics);
@@ -1226,6 +1228,7 @@ private:
   bool performing_close_ = false;
   bool custom_chrome_ = false;
   float custom_title_bar_height_ = 0.0F;
+  bool application_caption_controls_ = false;
   PointerButton pressed_buttons_ = PointerButton::None;
   bool suppress_pointer_release_ = false;
   bool clipboard_read_active_ = false;

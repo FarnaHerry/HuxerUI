@@ -57,7 +57,7 @@ ResolveLinuxResizeEdge(Point point, Size viewport, bool disabled) noexcept {
 }
 
 inline WindowTitleBarMetrics ResolveLinuxTitleBarMetrics(
-    float preferred_height, Size viewport, bool maximized
+    float preferred_height, Size viewport, bool maximized, bool reserve_caption_controls = true
 ) noexcept {
   const float width = std::isfinite(viewport.width) ? std::max(0.0F, viewport.width) : 0.0F;
   const float viewport_height = std::isfinite(viewport.height) ? std::max(0.0F, viewport.height) : 0.0F;
@@ -65,7 +65,7 @@ inline WindowTitleBarMetrics ResolveLinuxTitleBarMetrics(
   return {
       .height = std::min(viewport_height, std::max(preferred, kLinuxMinTitleBarHeight)),
       .left_inset = 0.0F,
-      .right_inset = std::min(width, 3.0F * kLinuxCaptionButtonWidth),
+      .right_inset = reserve_caption_controls ? std::min(width, 3.0F * kLinuxCaptionButtonWidth) : 0.0F,
       .maximized = maximized,
   };
 }

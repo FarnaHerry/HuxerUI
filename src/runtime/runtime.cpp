@@ -2564,9 +2564,12 @@ bool Runtime::RecomposeDirtyScopes(detail::MountedNode& mounted) {
 
 void Runtime::EnsureRootStructure() {
   if (state_->mounted_root_) {
+    const bool framework_controls =
+        state_->window_->chrome_mode == WindowChromeMode::Custom &&
+        state_->window_->caption_controls == WindowCaptionControls::Framework;
     if (!FindWindowBackplane(*state_->mounted_root_) || !FindApplicationContent(*state_->mounted_root_) ||
         !FindLayerStack(*state_->mounted_root_) ||
-        (state_->window_->chrome_mode == WindowChromeMode::Custom && !FindWindowControls(*state_->mounted_root_))) {
+        (framework_controls && !FindWindowControls(*state_->mounted_root_))) {
       throw std::logic_error("HuxerUI RuntimeRoot has an invalid child structure");
     }
     return;
@@ -2598,7 +2601,8 @@ void Runtime::EnsureRootStructure() {
   state_->mounted_root_->children.push_back(Mount(backplane.spec_, state_->root_environment_));
   state_->mounted_root_->children.push_back(Mount(application.spec_, state_->root_environment_));
   state_->mounted_root_->children.push_back(Mount(layers.spec_, state_->root_environment_));
-  if (state_->window_->chrome_mode == WindowChromeMode::Custom) {
+  if (state_->window_->chrome_mode == WindowChromeMode::Custom &&
+      state_->window_->caption_controls == WindowCaptionControls::Framework) {
     View controls = MakeWindowControls(
         state_->window_service_,
         state_->window_,
@@ -2610,7 +2614,8 @@ void Runtime::EnsureRootStructure() {
 }
 
 void Runtime::ReconcileWindowControls() {
-  if (!state_->mounted_root_ || state_->window_->chrome_mode != WindowChromeMode::Custom) {
+  if (!state_->mounted_root_ || state_->window_->chrome_mode != WindowChromeMode::Custom ||
+      state_->window_->caption_controls != WindowCaptionControls::Framework) {
     return;
   }
   const auto found = std::ranges::find_if(state_->mounted_root_->children, [](const auto& child) {
