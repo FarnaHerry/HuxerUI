@@ -555,6 +555,10 @@ struct RefreshBoxStyle {
   float trigger_distance = 72.0F;
   /// Content displacement retained while refreshing.
   float refresh_distance = 56.0F;
+  /// Whether the pull displaces the content itself. `true` keeps the classic behavior (the whole page
+  /// slides down under the finger and stays pulled while refreshing); `false` leaves the content exactly
+  /// where it is and only moves the circular indicator — the "content stays put" pull-to-refresh look.
+  bool move_content = true;
   /// Motion used to reveal or settle the retained displacement.
   TweenSpec settle_motion{0.2, Easing::EaseOut};
 
