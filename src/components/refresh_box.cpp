@@ -110,10 +110,13 @@ public:
     if (!drag_active_) {
       motion_result = displacement_.Advance(frame);
       const float displacement = std::max(0.0F, displacement_.Value());
-      mounted.presentation.children_transform = detail::ComposeTransform(
-          detail::TranslationTransform({0.0F, displacement}),
-          mounted.presentation.children_transform
-      );
+      // move_content=false：内容一动不动，只有指示圈（PaintAboveContent 按同一个 displacement 画）。
+      if (behavior_.style.move_content) {
+        mounted.presentation.children_transform = detail::ComposeTransform(
+            detail::TranslationTransform({0.0F, displacement}),
+            mounted.presentation.children_transform
+        );
+      }
       if (motion_result.changed) {
         InvalidatePaint();
       }
