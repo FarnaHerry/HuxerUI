@@ -579,12 +579,20 @@ LayoutResult MeasureAxisLayout(LayoutContext& context, ViewNode& node, Constrain
   const bool tight_cross = stretch && std::isfinite(maximum_cross) && minimum_cross == maximum_cross;
   const Constraints initial = tight_cross ? TightCross(loose, vertical, maximum_cross) : loose;
   float total_grow = 0.0F;
+  const bool main_bounded = std::isfinite(MaximumMain(constraints, vertical));
 
   for (ViewNode& child : node.Children()) {
+    total_grow += child.GrowFactor();
+    // A grow child under a bounded main axis is measured again below with its final main size, and a non-stretching
+    // layout recomputes its cross extent from those results. Measuring it loose here first would measure its whole
+    // subtree — recursively, with this layout's own passes — only to throw the answer away; a deep tree pays for it
+    // once per nesting level (2026-09-27: article detail pages measured 26k nodes per frame this way).
+    if (!stretch && main_bounded && child.GrowFactor() > 0.0F) {
+      continue;
+    }
     // A tight cross axis already determines the stretch result. Measuring loose first would recursively double the
     // work of every nested stretching linear layout without contributing another layout decision.
     static_cast<void>(context.Measure(child, initial));
-    total_grow += child.GrowFactor();
   }
 
   float target_cross = std::clamp(MaxCrossSize(node, vertical), minimum_cross, maximum_cross);
