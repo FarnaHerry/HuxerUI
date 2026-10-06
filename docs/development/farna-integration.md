@@ -74,3 +74,19 @@ On 2026-10-07, the remote branches `codex/mcpp-cli-support` and `feat/linux-resi
 The first tracks upstream PR #120, which is merged; the second's commits are all ancestors of `farna/main`.
 The remote default reference now points to `main`. The open performance branches, the open system-color-scheme
 branch, and the window-caption-controls WIP remain available for their ongoing work.
+
+## llm-switch patch intake
+
+On 2026-10-07, llm-switch's CI-applied checkout patches were folded into the fork:
+
+- `bcead3f` carries `cmake/patches/huxerui-windows-icon.patch`: the Win32 window class and `WM_SETICON` load the
+  icon resource named by `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` (default `0` keeps upstream behavior).
+  Consumers pass the macro at compile time instead of patching the checkout.
+- The Objective-C++ P0960 compatibility fix (`huxerui-macos-p0960.patch`) was already covered by the Clash-Flux
+  WindowTitleBar brace-initialization change and needed no further action.
+- The llm-switch UI performance probe (`huxerui-ui-perf-probe.patch`) lives on the `probe/ui-perf` branch rather
+  than `farna/main`, keeping production builds free of the instrumentation. It applies against the same revision
+  and stays inert unless `LLMSWITCH_PROBE_CLICK` is set.
+
+The Windows icon change is compiled only by the Windows adapter and could not be built or run on this Linux host;
+it is a straight port of the patch llm-switch CI already applies and validates on Windows.
