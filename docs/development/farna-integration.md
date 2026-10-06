@@ -39,6 +39,10 @@ Clash-Flux's five framework patches are integrated after review against the same
 The Linux changes retain the integration's PlatformView commit and exception handling rather than replacing the adapter with the older application snapshot.
 Historical feature branches have not been merged wholesale. Lib-MediaPlayer, Lib-WebView, Lib-Camera, Lib-Charts and Lib-SQLite remain separate repositories with their own revisions and application patches.
 
+apitab's three framework patches were audited against this integration: the WindowTitleBar brace initialization and the Linux resize hit areas were already covered.
+The remaining host-tools patch is carried here as the `HUXERUI_HOST_TOOLS_STATIC_RUNTIME` option in both standalone tool projects; it defaults to ON and preserves upstream's static libstdc++/libgcc linking, and is set to OFF on development hosts without a static libstdc++.
+apitab's SweetEditor and SweetLine patches belong to those separate repositories and are not part of this fork.
+
 ## Validation
 
 The Clash-Flux integration passes the incremental Linux Debug runtime and standalone-header builds, the Linux Release framework build, and all four common CTest suites, including 953 runtime cases.
