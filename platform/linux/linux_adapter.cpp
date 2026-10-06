@@ -780,12 +780,20 @@ public:
       break;
     case WindowCommand::Show:
       gtk_widget_set_visible(GTK_WIDGET(window_), TRUE);
+      RequestFrameAt(Now());
       break;
     case WindowCommand::Hide:
       gtk_widget_set_visible(GTK_WIDGET(window_), FALSE);
+      if (frame_state_.PaintPending()) {
+        if (const auto deadline = frame_state_.EndPaint(drawing_area_ != nullptr && running_)) {
+          ScheduleFrame(*deadline);
+        }
+      }
       break;
     case WindowCommand::Activate:
+      gtk_widget_set_visible(GTK_WIDGET(window_), TRUE);
       gtk_window_present(window_);
+      RequestFrameAt(Now());
       break;
     }
   }
@@ -893,17 +901,24 @@ private:
 
   void CommitFrame() {
     frame_source_ = 0;
-    if (!IsInitialized() || !frame_state_.BeginCommit()) {
+    // A ready GLib frame source can run after a close request destroys the drawing widget.
+    if (!IsInitialized() || drawing_area_ == nullptr || !running_ ||
+        !GTK_IS_WIDGET(drawing_area_) || !frame_state_.BeginCommit()) {
       return;
     }
     try {
       const FrameCommit& commit = UiWindow::BuildFrame();
+      if (drawing_area_ == nullptr || !running_ || !GTK_IS_WIDGET(drawing_area_)) {
+        return;
+      }
       committed_frame_ = &commit.render_frame;
       if (platform_views_) {
         platform_views_->Commit(*committed_frame_);
       }
-      frame_state_.MarkPaintPending();
-      gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
+      if (gtk_widget_is_visible(GTK_WIDGET(drawing_area_))) {
+        frame_state_.MarkPaintPending();
+        gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
+      }
       if (commit.next_frame_deadline.has_value()) {
         RequestFrameAt(*commit.next_frame_deadline);
       }

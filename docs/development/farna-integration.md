@@ -28,11 +28,21 @@ Android's whole-host default focus highlight is disabled in `HuxerUIView` on API
 focus remain enabled. This moves the split-screen brightness correction into the framework for all consumers.
 The application-side workaround can be removed after a consumer adopts and verifies this revision.
 
-Sibling applications' patches and historical feature branches have not been merged wholesale. They require
-semantic review and deduplication before adoption. Lib-MediaPlayer, Lib-WebView, Lib-Camera and other extensions
-remain separate repositories with their own revisions.
+Clash-Flux's five framework patches are integrated after review against the same official baseline:
+
+- Drag previews follow the original grab point without popover flipping or viewport clamping.
+- Pager retargeting preserves the departing peer when a non-adjacent transition returns to its source and clears stale drag targets.
+- Hidden virtual pages retain pending measurement without invalidating visible ancestors on every frame.
+- Linux window Show and Activate request a frame, Hide releases pending paint, and frame callbacks avoid destroyed drawing widgets.
+- WindowTitleBar uses brace initialization for Objective-C++ compiler compatibility.
+
+The Linux changes retain the integration's PlatformView commit and exception handling rather than replacing the adapter with the older application snapshot.
+Historical feature branches have not been merged wholesale. Lib-MediaPlayer, Lib-WebView, Lib-Camera, Lib-Charts and Lib-SQLite remain separate repositories with their own revisions and application patches.
 
 ## Validation
+
+The Clash-Flux integration passes the incremental Linux Debug runtime and standalone-header builds, the Linux Release framework build, and all four common CTest suites, including 953 runtime cases.
+Focused regressions cover non-adjacent Pager reversal without a geometry jump, preview grab offsets beyond viewport edges, and hidden virtual-page measurement resuming on selection.
 
 Linux Debug and Release compilation, standalone public-header checks and focused shared HTTP/lifecycle tests passed.
 The full Debug CTest run passed 30 of 32 suites, with two existing failures reproduced in a clean checkout of the same official
