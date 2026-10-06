@@ -30,6 +30,14 @@ Do not restore an old identity or add legacy aliases without an explicitly appro
 
 ## Collaboration and Git safety
 
+This downstream fork uses `farna/main` as its long-lived integration branch. `main` remains the upstream mirror;
+`upstream` points to `HuxerUI/HuxerUI`, and `origin` points to `FarnaHerry/HuxerUI`.
+Maintain the integration in a dedicated clone, without switching branches in framework checkouts used by applications.
+Merge upstream updates into the published integration branch instead of rewriting or force-pushing its history.
+Applications should consume a tested commit SHA in their own checkouts, including matching Android Java and native sources.
+Prepare upstream contributions in separate worktrees based on `upstream/main`, carrying only the relevant patch.
+See [Downstream integration](docs/development/farna-integration.md) for the initial patch inventory and validation limits.
+
 Discuss intended edits before modifying files. Describe the affected subsystem, files, public behavior, and important tradeoffs, then wait for confirmation. A direct request such as "implement this" or "do it" authorizes only the described scope.
 
 Read-only inspection is allowed before confirmation. Editing, formatting that changes files, regeneration, dependency changes, staging, committing, pushing, and other repository mutations require authorization appropriate to their scope.

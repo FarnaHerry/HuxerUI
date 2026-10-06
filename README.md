@@ -9,6 +9,9 @@
 HuxerUI provides C++20 components, typed state, responsive layout, input, text editing, navigation, animation, accessibility semantics, resources, files, HTTP, and first-class platform integration.
 Application code stays platform-neutral while each backend uses the windowing, text, input, accessibility, and rendering services it supports.
 
+This fork integrates downstream fixes on **`farna/main`**, while `main` tracks the official upstream.
+See [Downstream integration](docs/development/farna-integration.md) for its patch inventory, validation, and application adoption.
+
 ## Install the SDK
 
 Windows PowerShell:
