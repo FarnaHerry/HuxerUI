@@ -81,7 +81,7 @@ When changing that workflow or its support script, run `python -B tests/scripts/
 
 Android Runtime tests run on a device or emulator with `./gradlew :HuxerUI:connectedDebugAndroidTest` from `platform/android` (`gradlew.bat` on Windows).
 The library's `androidTest` source set uses `tests/platform/android/instrumentation/HuxerUIRuntimeTest.java` as its platform Instrumentation runner and needs no AndroidX/JUnit dependency or native HuxerUI library.
-It covers paragraph geometry and local-notification Intent identity and activation normalization, and installs only the separate test package rather than replacing an example application.
+It covers host focus highlighting, paragraph geometry, and local-notification Intent identity and activation normalization, and installs only the separate test package rather than replacing an example application.
 
 The separate windowless UI smoke runs with `./gradlew :ui_testing:connectedDebugAndroidTest` from the same directory.
 It builds source libraries by default; `-PhuxeruiTestingSdk=/absolute/path/to/sdk` selects installed headers, libraries, tools, and resources instead.
