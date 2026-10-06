@@ -23,6 +23,7 @@
 #include <huxerui/semantics.h>
 #include <huxerui/text_input.h>
 #include <huxerui/view.h>
+#include <huxerui/window.h>
 
 namespace huxerui::detail {
 class UiTestSession;

@@ -4,9 +4,9 @@
 #include <memory>
 #include <utility>
 
-#include <gtk/gtk.h>
-
 #include <huxerui/platform_registry.h>
+
+typedef struct _GtkWidget GtkWidget;
 
 namespace huxerui::linux {
 
