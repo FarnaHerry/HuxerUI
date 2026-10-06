@@ -16,15 +16,19 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -54,6 +58,14 @@ namespace {
 
 constexpr float kDipsPerScrollStep = 40.0F;
 const char* LinuxPointerCursorName(PointerCursorKind kind) noexcept {
+inline double LsProbeNow() noexcept {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+inline double LsProbeOrigin() noexcept {
+  static const double origin = LsProbeNow();
+  return origin;
+}
+
   switch (kind) {
   case PointerCursorKind::Default:
     return "default";
@@ -660,6 +672,49 @@ public:
 
   int Run(Runtime& application, const WindowOptions& options) {
     try {
+      // Optional synthetic input for the UI performance probe.
+      // LLMSWITCH_PROBE_CLICK="x,y@delayms;mX,y@delayms" (logical coordinates).
+      if (const char* probe = std::getenv("LLMSWITCH_PROBE_CLICK"); probe && *probe) {
+        std::thread([probe, this] {
+          const std::chrono::milliseconds dwell{60};
+          std::string probe_text(probe);
+          for (const std::string& entry : std::views::split(probe_text, ';')
+                                             | std::views::transform([](auto&& range) {
+                                                 return std::string(range.begin(), range.end());
+                                               })) {
+            const auto at = entry.find('@');
+            const auto comma = entry.find(',');
+            if (at == std::string::npos || comma == std::string::npos) {
+              continue;
+            }
+            const bool move = entry.front() == 'm';
+            const std::size_t head = move ? 1U : 0U;
+            const int delay_ms = std::atoi(entry.substr(at + 1).c_str());
+            const float x = static_cast<float>(std::atof(entry.substr(head, comma - head).c_str()));
+            const float y = static_cast<float>(std::atof(entry.substr(comma + 1, at - comma - 1).c_str()));
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            const auto send = [this](PointerEventType type, float x, float y) {
+              ui_dispatcher_->Bind()([this, type, x, y] {
+                UiWindow::HandlePointerEvent({type, 0, {x, y}, PointerDeviceKind::Mouse,
+                                              PointerButton::Primary, PointerButton::Primary, {}});
+              });
+            };
+            if (move) {
+              std::fprintf(stderr, "[lsprobe %+.3f] synthetic move (%.0f,%.0f)\n",
+                           LsProbeNow() - LsProbeOrigin(), x, y);
+              send(PointerEventType::Move, x, y);
+              continue;
+            }
+            std::fprintf(stderr, "[lsprobe %+.3f] synthetic click (%.0f,%.0f)\n",
+                         LsProbeNow() - LsProbeOrigin(), x, y);
+            send(PointerEventType::Move, x, y);
+            std::this_thread::sleep_for(dwell);
+            send(PointerEventType::Down, x, y);
+            std::this_thread::sleep_for(dwell);
+            send(PointerEventType::Up, x, y);
+          }
+        }).detach();
+      }
       renderer_.Initialize();
       const Size initial_size = ResolveInitialWindowSize(options);
       CreateWindow(options, initial_size);
@@ -677,11 +732,15 @@ public:
         }
       });
       file_drop_ = std::make_unique<LinuxFileDrop>(GTK_WIDGET(drawing_area_), *this, ui_dispatcher_->Bind());
+    const double request_now = Now();
       UiWindow::UpdateResourceConfiguration(Configuration());
       UpdateRuntimeViewport(initial_size);
       running_ = true;
       gtk_window_present(window_);
       gtk_widget_grab_focus(GTK_WIDGET(drawing_area_));
+    } else {
+      std::fprintf(stderr, "[lsprobe %+.3f] RequestFrameAt deadline=%+.3f DEFERRED (paint pending)\n",
+                   request_now - LsProbeOrigin(), deadline - LsProbeOrigin());
       RequestFrameAt(Now());
       while (running_ && !static_cast<LinuxRuntime&>(ApplicationRuntime()).Stopped()) {
         g_main_context_iteration(nullptr, TRUE);
@@ -701,7 +760,9 @@ public:
 
   void RequestFrameAt(double deadline) override {
     if (const std::optional<double> scheduled =
-            frame_state_.Request(deadline, Now(), drawing_area_ != nullptr && running_)) {
+            frame_state_.Request(deadline, request_now, drawing_area_ != nullptr && running_)) {
+      std::fprintf(stderr, "[lsprobe %+.3f] RequestFrameAt deadline=%+.3f -> ScheduleFrame\n",
+                   request_now - LsProbeOrigin(), *scheduled - LsProbeOrigin());
       ScheduleFrame(*scheduled);
     }
   }
@@ -845,6 +906,9 @@ private:
     g_signal_connect(window_, "notify::maximized", G_CALLBACK(WindowMaximizedChanged), this);
     g_signal_connect(window_, "notify::fullscreened", G_CALLBACK(WindowMaximizedChanged), this);
     g_signal_connect(drawing_area_, "notify::scale-factor", G_CALLBACK(ScaleChanged), this);
+    const double schedule_now = Now();
+    std::fprintf(stderr, "[lsprobe %+.3f] ScheduleFrame delay=%.1fms deadline=%+.3f\n",
+                 schedule_now - LsProbeOrigin(), milliseconds, deadline - LsProbeOrigin());
 
     GtkEventController* pointer = gtk_event_controller_legacy_new();
     gtk_event_controller_set_propagation_phase(pointer, GTK_PHASE_CAPTURE);
@@ -855,10 +919,16 @@ private:
     gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(touch), TRUE);
     g_signal_connect(touch, "pressed", G_CALLBACK(TouchPressed), this);
     g_signal_connect(touch, "released", G_CALLBACK(TouchReleased), this);
+    const double commit_start = Now();
     g_signal_connect(touch, "cancel", G_CALLBACK(PointerCanceled), this);
+      std::fprintf(stderr, "[lsprobe %+.3f] CommitFrame skipped (build not pending)\n",
+                   commit_start - LsProbeOrigin());
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), GTK_EVENT_CONTROLLER(touch));
 
+    std::fprintf(stderr, "[lsprobe %+.3f] CommitFrame begin\n", commit_start - LsProbeOrigin());
     GtkEventController* motion = gtk_event_controller_motion_new();
+    std::fprintf(stderr, "[lsprobe %+.3f] CommitFrame built in %.1fms\n",
+                 Now() - LsProbeOrigin(), (Now() - commit_start) * 1000.0);
     gtk_event_controller_set_propagation_phase(motion, GTK_PHASE_CAPTURE);
     g_signal_connect(motion, "enter", G_CALLBACK(PointerEntered), this);
     g_signal_connect(motion, "motion", G_CALLBACK(PointerMoved), this);
@@ -870,6 +940,7 @@ private:
                                                    GTK_EVENT_CONTROLLER_SCROLL_DISCRETE)
     );
     gtk_event_controller_set_propagation_phase(scroll, GTK_PHASE_CAPTURE);
+      std::fprintf(stderr, "[lsprobe %+.3f] FlushDeferredFrame -> ScheduleFrame\n", Now() - LsProbeOrigin());
     g_signal_connect(scroll, "scroll", G_CALLBACK(Scrolled), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), scroll);
 
@@ -878,6 +949,7 @@ private:
     g_signal_connect(key, "key-pressed", G_CALLBACK(KeyPressed), this);
     g_signal_connect(key, "key-released", G_CALLBACK(KeyReleased), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), key);
+    const double paint_start = Now();
 
     GtkEventController* focus = gtk_event_controller_focus_new();
     g_signal_connect(focus, "enter", G_CALLBACK(FocusEntered), this);
@@ -887,6 +959,8 @@ private:
 
   void ScheduleFrame(double deadline) {
     if (frame_source_ != 0) {
+    std::fprintf(stderr, "[lsprobe %+.3f] DrawFrame painted in %.1fms\n",
+                 Now() - LsProbeOrigin(), (Now() - paint_start) * 1000.0);
       g_source_remove(frame_source_);
       frame_source_ = 0;
     }
@@ -1146,6 +1220,8 @@ private:
     if (frame_source_ != 0) {
       g_source_remove(frame_source_);
       frame_source_ = 0;
+    std::fprintf(stderr, "[lsprobe %+.3f] pointer down btn=%u pos=(%.0f,%.0f)\n",
+                 Now() - LsProbeOrigin(), platform_button, position.x, position.y);
     }
 
     text_input_.Reset();
@@ -1161,6 +1237,8 @@ private:
   }
 
   static gboolean FrameReady(gpointer data) {
+    std::fprintf(stderr, "[lsprobe %+.3f] pointer up btn=%u pos=(%.0f,%.0f)\n",
+                 Now() - LsProbeOrigin(), platform_button, position.x, position.y);
     static_cast<LinuxUiWindow*>(data)->CommitFrame();
     return G_SOURCE_REMOVE;
   }
@@ -1228,6 +1306,8 @@ private:
 
   static void ToplevelStateChanged(GObject*, GParamSpec*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    std::fprintf(stderr, "[lsprobe %+.3f] pointer enter (%.0f,%.0f)\n",
+                 LsProbeNow() - LsProbeOrigin(), x, y);
     const bool minimized = self.toplevel_ != nullptr &&
                            (gdk_toplevel_get_state(self.toplevel_) & GDK_TOPLEVEL_STATE_MINIMIZED) != 0;
     if (minimized && !self.minimized_) {
@@ -1235,6 +1315,8 @@ private:
         self.performing_minimize_ = false;
       } else if (self.DispatchWindowRequest(WindowCommand::Minimize)) {
         gtk_window_unminimize(self.window_);
+    std::fprintf(stderr, "[lsprobe %+.3f] pointer move (%.0f,%.0f)\n",
+                 LsProbeNow() - LsProbeOrigin(), x, y);
       }
     }
     self.minimized_ = minimized;

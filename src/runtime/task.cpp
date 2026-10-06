@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <coroutine>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <iterator>
@@ -356,8 +357,10 @@ void TaskExecution::PostNoexcept(std::function<void()> callback) noexcept {
 
 void TaskExecution::Start() {
   std::weak_ptr<TaskExecution> weak = shared_from_this();
+  std::fprintf(stderr, "[lsprobe] task Start: dispatching resume to UI queue\n");
   dispatcher_([weak] {
     if (auto execution = weak.lock()) {
+      std::fprintf(stderr, "[lsprobe] task resume: running coroutine body on UI thread\n");
       execution->ResumeOnUi(execution->coroutine_);
     }
   });
