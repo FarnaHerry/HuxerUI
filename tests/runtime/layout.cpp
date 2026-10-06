@@ -673,6 +673,43 @@ TEST_CASE("Pager validates and retains its controlled page set") {
   REQUIRE(fourth_semantics->selected == std::optional{false});
 }
 
+TEST_CASE("Pager retains the departing page when a non-adjacent jump returns to its anchor") {
+  TestPlatform platform;
+  UiWindow runtime{PagerLayoutApp, platform};
+  runtime.SetWindowMetrics({.viewport = {240.0F, 120.0F}});
+  runtime.BuildFrame();
+
+  pager_selection = 3;
+  runtime.BuildFrame();
+  platform.AdvanceTime(0.05);
+  runtime.BuildFrame();
+  const auto* root = runtime.RootNode();
+  const float source_x = root->children[1]->PresentationBounds().x;
+  const float peer_x = root->children[3]->PresentationBounds().x;
+  REQUIRE(source_x < 0.0F);
+
+  pager_selection = 1;
+  REQUIRE_NOTHROW(runtime.BuildFrame());
+  root = runtime.RootNode();
+  REQUIRE(root->children[3]->participates_in_layout);
+  REQUIRE(root->children[1]->PresentationBounds().x == Catch::Approx(source_x));
+  REQUIRE(root->children[3]->PresentationBounds().x == Catch::Approx(peer_x));
+  for (int frame = 0; frame < 4; ++frame) {
+    platform.AdvanceTime(0.25);
+    runtime.BuildFrame();
+  }
+  REQUIRE(root->children[1]->PresentationBounds().x == Catch::Approx(0.0F));
+  REQUIRE_FALSE(root->children[3]->participates_in_layout);
+
+  pager_selection = 0;
+  REQUIRE_NOTHROW(runtime.BuildFrame());
+  platform.AdvanceTime(0.05);
+  runtime.BuildFrame();
+  pager_selection = 1;
+  REQUIRE_NOTHROW(runtime.BuildFrame());
+  REQUIRE_FALSE(root->children[3]->participates_in_layout);
+}
+
 TEST_CASE("Pager resolves programmatic selection immediately under reduced motion") {
   reduced_motion_pager_settlements.clear();
   TestPlatform platform;
