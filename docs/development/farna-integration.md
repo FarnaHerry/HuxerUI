@@ -67,3 +67,10 @@ Use the same source revision for Android Java and native code, with an explicit 
 
 Upstream `main` and the downstream integration can move independently. A new upstream release does not automatically
 change applications' pins; advance them after building and testing the application against the new integration.
+
+## Branch cleanup
+
+On 2026-10-07, the remote branches `codex/mcpp-cli-support` and `feat/linux-resize-hitarea` were deleted.
+The first tracks upstream PR #120, which is merged; the second's commits are all ancestors of `farna/main`.
+The remote default reference now points to `main`. The open performance branches, the open system-color-scheme
+branch, and the window-caption-controls WIP remain available for their ongoing work.
