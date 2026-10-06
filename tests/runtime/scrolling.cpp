@@ -1007,6 +1007,23 @@ TEST_CASE("Pager uses direct drag without mapping wheel input and honors DragEna
   REQUIRE(pager_proposals == std::vector<std::size_t>{2});
 }
 
+TEST_CASE("Pager changes page after dragging one quarter of its width") {
+  pager_proposals.clear();
+  accept_pager_proposals = true;
+  TestPlatform platform;
+  UiWindow runtime{InteractivePagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+
+  runtime.HandlePointerEvent({PointerEventType::Down, 308, {80.0F, 40.0F}, PointerDeviceKind::Touch});
+  runtime.HandlePointerEvent({PointerEventType::Move, 308, {55.0F, 40.0F}, PointerDeviceKind::Touch});
+  runtime.HandlePointerEvent({PointerEventType::Up, 308, {55.0F, 40.0F}, PointerDeviceKind::Touch});
+  runtime.BuildFrame();
+
+  REQUIRE(pager_proposals == std::vector<std::size_t>{2});
+  REQUIRE(interactive_pager_page.Get() == 2);
+}
+
 TEST_CASE("Pager returns to controlled selection when a proposal is rejected") {
   pager_settlements.clear();
   pager_proposals.clear();

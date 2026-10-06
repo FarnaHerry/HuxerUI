@@ -25,6 +25,9 @@ namespace {
 
 using detail::MakeContainerSpec;
 
+constexpr float kPagerSettleDistanceShare = 0.25F;
+constexpr float kPagerSettleVelocity = 450.0F;
+
 struct PagerPageState {
   static const detail::ModifierDescriptor& Descriptor();
 
@@ -370,10 +373,13 @@ private:
 
   std::size_t ResolveReleaseProposal(const detail::MountedNode& node) const {
     const float displacement = Offset(node) - anchor_offset_;
-    const float decisive_velocity = std::abs(release_velocity_) >= 600.0F ? release_velocity_ : 0.0F;
+    const float decisive_velocity = std::abs(release_velocity_) >= kPagerSettleVelocity
+                                        ? release_velocity_
+                                        : 0.0F;
     const float direction_value = decisive_velocity != 0.0F ? decisive_velocity : displacement;
     if (direction_value == 0.0F ||
-        (decisive_velocity == 0.0F && std::abs(displacement) < extent_ * 0.35F)) {
+        (decisive_velocity == 0.0F &&
+         std::abs(displacement) < extent_ * kPagerSettleDistanceShare)) {
       return displayed_index_;
     }
     const int physical_direction = direction_value > 0.0F ? 1 : -1;

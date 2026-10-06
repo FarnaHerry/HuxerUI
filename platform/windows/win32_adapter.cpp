@@ -933,7 +933,7 @@ private:
   }
 
   std::optional<WindowTitleBarMetrics> QueryTitleBarMetrics(Size viewport) const noexcept {
-    if (!custom_chrome_) {
+    if (!custom_chrome_ || fullscreen_) {
       return std::nullopt;
     }
     const float scale = DpiScale();
@@ -1041,7 +1041,7 @@ private:
   }
 
   LRESULT ResizeHitTest(LPARAM position) const noexcept {
-    if (window_ == nullptr || IsZoomed(window_)) {
+    if (window_ == nullptr || fullscreen_ || IsZoomed(window_)) {
       return HTCLIENT;
     }
     RECT bounds{};
@@ -1266,7 +1266,7 @@ private:
 
   LRESULT HandleOverlayMessage(HWND source, UINT message, WPARAM w_param, LPARAM l_param) {
     if (message == WM_NCHITTEST) {
-      if (!custom_chrome_) {
+      if (!custom_chrome_ || fullscreen_) {
         return HTCLIENT;
       }
       if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
@@ -1300,6 +1300,27 @@ private:
       break;
     case WindowCommand::ToggleMaximize:
       ShowWindow(window_, IsZoomed(window_) ? SW_RESTORE : SW_MAXIMIZE);
+      break;
+    case WindowCommand::EnterFullscreen: {
+      if (fullscreen_) break;
+      MONITORINFO monitor{sizeof(MONITORINFO)};
+      if (!GetMonitorInfoW(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor) ||
+          !GetWindowPlacement(window_, &fullscreen_placement_)) break;
+      fullscreen_style_ = GetWindowLongPtrW(window_, GWL_STYLE);
+      fullscreen_ = true;
+      SetWindowLongPtrW(window_, GWL_STYLE, fullscreen_style_ & ~(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE));
+      SetWindowPos(window_, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+                   monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                   SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+      break;
+    }
+    case WindowCommand::ExitFullscreen:
+      if (!fullscreen_) break;
+      fullscreen_ = false;
+      SetWindowLongPtrW(window_, GWL_STYLE, fullscreen_style_);
+      SetWindowPlacement(window_, &fullscreen_placement_);
+      SetWindowPos(window_, nullptr, 0, 0, 0, 0,
+                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
       break;
     case WindowCommand::Close:
       performing_close_ = true;
@@ -1335,7 +1356,7 @@ private:
         first_nc_calc_ = false;
         return DefWindowProcW(window, message, w_param, l_param);
       }
-      if (IsZoomed(window)) {
+      if (!fullscreen_ && IsZoomed(window)) {
         RECT* client = w_param == FALSE ? reinterpret_cast<RECT*>(l_param)
                                         : &reinterpret_cast<NCCALCSIZE_PARAMS*>(l_param)->rgrc[0];
         *client = InsetWin32MaximizedClientRect(*client, ResizeBorderX(), ResizeBorderY());
@@ -1372,6 +1393,7 @@ private:
       return result;
     }
     case WM_NCHITTEST:
+      if (fullscreen_) return HTCLIENT;
       if (custom_chrome_) {
         if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
           return *caption_control;
@@ -1646,6 +1668,9 @@ private:
   HWND window_ = nullptr;
   float dpi_ = kDipsPerInch;
   bool custom_chrome_ = false;
+  bool fullscreen_ = false;
+  LONG_PTR fullscreen_style_ = 0;
+  WINDOWPLACEMENT fullscreen_placement_{sizeof(WINDOWPLACEMENT)};
   float custom_title_bar_height_ = 0.0F;
   std::optional<Size> minimum_size_;
   bool first_nc_calc_ = true;
