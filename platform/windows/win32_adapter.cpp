@@ -1696,8 +1696,6 @@ private:
       ui_window->accessibility_.SetWindow(window);
       ui_window->text_input_.SetWindow(window);
       SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ui_window));
-  HICON window_icon_ = nullptr;
-  HICON window_small_icon_ = nullptr;
     }
     if (ui_window == nullptr) {
       return DefWindowProcW(window, message, w_param, l_param);
@@ -1721,6 +1719,8 @@ private:
   HINSTANCE instance_ = nullptr;
   ATOM class_atom_ = 0;
   HWND window_ = nullptr;
+  HICON window_icon_ = nullptr;
+  HICON window_small_icon_ = nullptr;
   float dpi_ = kDipsPerInch;
   bool custom_chrome_ = false;
   bool fullscreen_ = false;
