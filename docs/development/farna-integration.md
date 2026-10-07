@@ -57,10 +57,16 @@ upstream baseline on this host:
 - `HuxerUIRuntimeDependencyTests`: the relocated dependency fixture segfaults during dynamic-library initialization.
 
 These assertions are retained. They are not waived or weakened by the integration.
-The Android library and instrumentation APK compile successfully. Gradle's connected test task could not run offline
-because its UTP host plugins were not cached. A direct ADB test install then waited at the locked device's package
-installer; the client was cancelled. The framework instrumentation has not run on the device. The equivalent
-application-side focus fix had already passed four split-screen focus switches on the same OnePlus PJE110 / Android 16.
+On 2026-10-07, direct ADB instrumentation passed **126 assertions** on OnePlus PJE110 / Android 16.
+The actual host focus check requires native HuxerUI because constructing HuxerUIView loads JNI. The test APK used
+matching ARM64 libhuxerui.so and libc++_shared.so from an application built against revision `b12080c`;
+see [Building](building.md) for `huxeruiRuntimeTestJniDirectory`. Main-thread setup errors now report through
+Instrumentation instead of terminating its process. Gradle's connected test task still requires uncached UTP plugins;
+the device package was installed and its Instrumentation runner invoked directly.
+An isolated acgu Android build against this core revision and pinned extension forks also installed successfully.
+Video playback, landscape fullscreen, database/session preservation and camera preview were checked. Four split-screen
+focus switches kept the application background at #F1F1F3 and display brightness at 2454; the independent host assertion
+confirms the framework fix even though the application's previous focus workaround remains for its old dependency pin.
 Native Windows, macOS, iOS and Web execution has not been verified on this Linux host.
 
 ## Application adoption
