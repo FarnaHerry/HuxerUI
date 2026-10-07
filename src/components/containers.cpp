@@ -583,11 +583,11 @@ LayoutResult MeasureAxisLayout(LayoutContext& context, ViewNode& node, Constrain
 
   for (ViewNode& child : node.Children()) {
     total_grow += child.GrowFactor();
-    // A grow child under a bounded main axis is measured again below with its final main size, and a non-stretching
-    // layout recomputes its cross extent from those results. Measuring it loose here first would measure its whole
-    // subtree — recursively, with this layout's own passes — only to throw the answer away; a deep tree pays for it
-    // once per nesting level (2026-09-27: article detail pages measured 26k nodes per frame this way).
-    if (!stretch && main_bounded && child.GrowFactor() > 0.0F) {
+    // A grow child under a bounded main axis is measured below with its final main size. A non-stretching layout
+    // recomputes its cross extent from that result; a tight cross axis already fixes the stretching cross extent.
+    // In either case, a speculative loose measurement contributes no sizing information and recursively doubles
+    // the work of deeply nested layouts.
+    if (main_bounded && child.GrowFactor() > 0.0F && (!stretch || tight_cross)) {
       continue;
     }
     // A tight cross axis already determines the stretch result. Measuring loose first would recursively double the
