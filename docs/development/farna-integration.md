@@ -42,7 +42,7 @@ Historical feature branches have not been merged wholesale. Lib-MediaPlayer, Lib
 apitab's three framework patches were audited against this integration: the WindowTitleBar brace initialization and the Linux resize hit areas were already covered.
 The remaining host-tools patch is carried here as the `HUXERUI_HOST_TOOLS_STATIC_RUNTIME` option in both standalone tool projects; it defaults to ON and preserves upstream's static libstdc++/libgcc linking, and is set to OFF on development hosts without a static libstdc++.
 apitab's SweetEditor and SweetLine patches belong to those separate repositories and are not part of this fork.
-They are integrated in the `FarnaHerry/huxerui-sweetedit` fork instead, whose `farna/main` carries the CodeEditor component changes and the two vendored-core patches under `3dparty/patches/`; the local maintenance clone is `/home/farna/dev/cpp/mcpp/huxerui-sweetedit-fork`.
+They are integrated in the `FarnaHerry/Lib-CodeEditor` fork instead (upstream renamed `huxerui-sweetedit` to `Lib-CodeEditor`), whose `farna/main` carries the CodeEditor component changes and the two vendored-core patches under `3dparty/patches/`; the local maintenance clone is `/home/farna/dev/cpp/mcpp/HuxerUI-libs/Lib-CodeEditor`.
 
 ## Validation
 
