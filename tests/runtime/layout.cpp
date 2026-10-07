@@ -845,6 +845,34 @@ TEST_CASE("TestImageFitAndAlignmentResolveSourceAndDestinationGeometry") {
   REQUIRE(constrained_scale_down.destination == Rect{0.0F, 2.5F, 10.0F, 5.0F});
 }
 
+TEST_CASE("TestImageCoverFractionalFramesKeepSourceInsideIntrinsicBounds") {
+  // Reversing the rounded scale can exceed the intrinsic extent by one ULP.
+  for (const auto frame : {48.023F, 117.809525F, 118.095238F}) {
+    for (const auto horizontal : {HorizontalAlignment::Start, HorizontalAlignment::Center, HorizontalAlignment::End}) {
+      for (const auto vertical : {VerticalAlignment::Start, VerticalAlignment::Center, VerticalAlignment::End}) {
+        layout_test_image = ImageAsset::FromEncoded(MakeTestPng(321, 704));
+        layout_test_image_fit = ImageFit::Cover;
+        layout_test_image_frame = {frame, frame};
+        layout_test_image_horizontal_alignment = horizontal;
+        layout_test_image_vertical_alignment = vertical;
+        TestPlatform platform;
+        UiWindow runtime{ImageLayoutApp, platform};
+        runtime.SetWindowMetrics({.viewport = {200.0F, 200.0F}});
+        const FlattenedScene& scene = runtime.BuildFrame();
+        const auto command = std::ranges::find_if(scene.Commands(), [](const PaintCommand& value) {
+          return std::holds_alternative<DrawImageCommand>(value);
+        });
+        REQUIRE(command != scene.Commands().end());
+        const auto& source = std::get<DrawImageCommand>(*command).source;
+        REQUIRE(source.x >= 0.0F);
+        REQUIRE(source.y >= 0.0F);
+        REQUIRE(source.x + source.width <= 321.0F);
+        REQUIRE(source.y + source.height <= 704.0F);
+      }
+    }
+  }
+}
+
 TEST_CASE("TestImagePaintOnlyChangesReuseMeasuredLayout") {
   layout_test_image = ImageAsset::FromEncoded(MakeTestPng(40, 20), 2.0F);
   layout_test_image_fit = ImageFit::Contain;
