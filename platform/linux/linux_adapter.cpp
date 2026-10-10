@@ -39,6 +39,7 @@
 #include "linux_file_internal.h"
 #include "linux_file_picker_internal.h"
 #include "linux_http_internal.h"
+#include "linux_platform_view.h"
 #include "linux_renderer.h"
 #include "linux_system_tray.h"
 #include "linux_text_input.h"
@@ -327,10 +328,12 @@ std::shared_ptr<LinuxUiThreadDispatcher> InitializeGtk() {
 }
 
 using HuxerUICanvasSnapshot = void (*)(GtkSnapshot* snapshot, int width, int height, gpointer data);
+using HuxerUICanvasAllocate = void (*)(GtkWidget* widget, int width, int height, gpointer data);
 
 struct HuxerUICanvas {
   GtkWidget parent_instance;
   HuxerUICanvasSnapshot snapshot = nullptr;
+  HuxerUICanvasAllocate allocate = nullptr;
   gpointer data = nullptr;
 };
 
@@ -347,15 +350,35 @@ void HuxerUICanvasSnapshotFrame(GtkWidget* widget, GtkSnapshot* snapshot) {
   }
 }
 
-void huxerui_canvas_class_init(HuxerUICanvasClass* canvas_class) {
-  GTK_WIDGET_CLASS(canvas_class)->snapshot = HuxerUICanvasSnapshotFrame;
+void HuxerUICanvasAllocateChildren(GtkWidget* widget, int width, int height, int) {
+  auto* canvas = reinterpret_cast<HuxerUICanvas*>(widget);
+  if (canvas->allocate != nullptr) {
+    canvas->allocate(widget, width, height, canvas->data);
+  }
 }
 
-void huxerui_canvas_init(HuxerUICanvas*) {}
+void HuxerUICanvasDispose(GObject* object) {
+  GtkWidget* widget = GTK_WIDGET(object);
+  while (GtkWidget* child = gtk_widget_get_first_child(widget)) {
+    gtk_widget_unparent(child);
+  }
+  G_OBJECT_CLASS(huxerui_canvas_parent_class)->dispose(object);
+}
 
-GtkWidget* CreateHuxerUICanvas(HuxerUICanvasSnapshot snapshot, gpointer data) {
+void huxerui_canvas_class_init(HuxerUICanvasClass* canvas_class) {
+  GTK_WIDGET_CLASS(canvas_class)->snapshot = HuxerUICanvasSnapshotFrame;
+  GTK_WIDGET_CLASS(canvas_class)->size_allocate = HuxerUICanvasAllocateChildren;
+  G_OBJECT_CLASS(canvas_class)->dispose = HuxerUICanvasDispose;
+}
+
+void huxerui_canvas_init(HuxerUICanvas* canvas) {
+  gtk_widget_set_overflow(GTK_WIDGET(canvas), GTK_OVERFLOW_HIDDEN);
+}
+
+GtkWidget* CreateHuxerUICanvas(HuxerUICanvasSnapshot snapshot, HuxerUICanvasAllocate allocate, gpointer data) {
   auto* canvas = static_cast<HuxerUICanvas*>(g_object_new(huxerui_canvas_get_type(), nullptr));
   canvas->snapshot = snapshot;
+  canvas->allocate = allocate;
   canvas->data = data;
   return GTK_WIDGET(canvas);
 }
@@ -644,6 +667,15 @@ public:
       configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
       InitializeWindow(application, configuration);
       text_input_.SetUiWindow(this);
+      platform_views_ = std::make_unique<LinuxPlatformViews>(drawing_area_, renderer_, PlatformRegistry(), *this);
+      platform_views_->SetFocusChangedHandler([this](bool focused) {
+        if (focused) {
+          text_input_.SetFocus(false);
+          key_tracker_.Reset();
+        } else if (drawing_area_ != nullptr && gtk_widget_has_focus(drawing_area_)) {
+          text_input_.SetFocus(true);
+        }
+      });
       file_drop_ = std::make_unique<LinuxFileDrop>(GTK_WIDGET(drawing_area_), *this, ui_dispatcher_->Bind());
       UiWindow::UpdateResourceConfiguration(Configuration());
       UpdateRuntimeViewport(initial_size);
@@ -734,6 +766,14 @@ public:
     case WindowCommand::ToggleMaximize:
       gtk_window_is_maximized(window_) ? gtk_window_unmaximize(window_) : gtk_window_maximize(window_);
       break;
+    case WindowCommand::EnterFullscreen:
+      // Leave monitor selection to the current toplevel's placement. Forcing a monitor first moves
+      // the restored Xwayland window to that monitor's origin on some window managers.
+      gtk_window_fullscreen(window_);
+      break;
+    case WindowCommand::ExitFullscreen:
+      gtk_window_unfullscreen(window_);
+      break;
     case WindowCommand::Close:
       performing_close_ = true;
       gtk_window_close(window_);
@@ -776,7 +816,7 @@ private:
     );
     gtk_window_set_decorated(window_, !custom_chrome_);
 
-    drawing_area_ = CreateHuxerUICanvas(Snapshot, this);
+    drawing_area_ = CreateHuxerUICanvas(Snapshot, AllocatePlatformViews, this);
     if (options.minimum_size.has_value()) {
       gtk_widget_set_size_request(
           GTK_WIDGET(drawing_area_),
@@ -795,9 +835,11 @@ private:
     g_signal_connect(window_, "unmap", G_CALLBACK(WindowUnmapped), this);
     g_signal_connect(window_, "notify::is-active", G_CALLBACK(WindowActiveChanged), this);
     g_signal_connect(window_, "notify::maximized", G_CALLBACK(WindowMaximizedChanged), this);
+    g_signal_connect(window_, "notify::fullscreened", G_CALLBACK(WindowMaximizedChanged), this);
     g_signal_connect(drawing_area_, "notify::scale-factor", G_CALLBACK(ScaleChanged), this);
 
     GtkEventController* pointer = gtk_event_controller_legacy_new();
+    gtk_event_controller_set_propagation_phase(pointer, GTK_PHASE_CAPTURE);
     g_signal_connect(pointer, "event", G_CALLBACK(PointerEventReceived), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), pointer);
 
@@ -809,6 +851,7 @@ private:
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), GTK_EVENT_CONTROLLER(touch));
 
     GtkEventController* motion = gtk_event_controller_motion_new();
+    gtk_event_controller_set_propagation_phase(motion, GTK_PHASE_CAPTURE);
     g_signal_connect(motion, "enter", G_CALLBACK(PointerEntered), this);
     g_signal_connect(motion, "motion", G_CALLBACK(PointerMoved), this);
     g_signal_connect(motion, "leave", G_CALLBACK(PointerLeft), this);
@@ -818,10 +861,12 @@ private:
         static_cast<GtkEventControllerScrollFlags>(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES |
                                                    GTK_EVENT_CONTROLLER_SCROLL_DISCRETE)
     );
+    gtk_event_controller_set_propagation_phase(scroll, GTK_PHASE_CAPTURE);
     g_signal_connect(scroll, "scroll", G_CALLBACK(Scrolled), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), scroll);
 
     GtkEventController* key = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(key, GTK_PHASE_CAPTURE);
     g_signal_connect(key, "key-pressed", G_CALLBACK(KeyPressed), this);
     g_signal_connect(key, "key-released", G_CALLBACK(KeyReleased), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), key);
@@ -851,12 +896,23 @@ private:
     if (!IsInitialized() || !frame_state_.BeginCommit()) {
       return;
     }
-    const FrameCommit& commit = UiWindow::BuildFrame();
-    committed_frame_ = &commit.render_frame;
-    frame_state_.MarkPaintPending();
-    gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
-    if (commit.next_frame_deadline.has_value()) {
-      RequestFrameAt(*commit.next_frame_deadline);
+    try {
+      const FrameCommit& commit = UiWindow::BuildFrame();
+      committed_frame_ = &commit.render_frame;
+      if (platform_views_) {
+        platform_views_->Commit(*committed_frame_);
+      }
+      frame_state_.MarkPaintPending();
+      gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
+      if (commit.next_frame_deadline.has_value()) {
+        RequestFrameAt(*commit.next_frame_deadline);
+      }
+    } catch (...) {
+      if (!failure_) {
+        failure_ = std::current_exception();
+      }
+      running_ = false;
+      ApplicationRuntime().RequestShutdown();
     }
     FlushDeferredFrame();
   }
@@ -873,7 +929,11 @@ private:
     }
     frame_state_.BeginPaint();
     try {
-      renderer_.Snapshot(snapshot, *committed_frame_);
+      if (platform_views_) {
+        platform_views_->Snapshot(snapshot, *committed_frame_);
+      } else {
+        renderer_.Snapshot(snapshot, *committed_frame_);
+      }
     } catch (...) {
       if (!failure_) {
         failure_ = std::current_exception();
@@ -890,7 +950,7 @@ private:
       return;
     }
     WindowMetrics metrics{.viewport = viewport, .safe_area = {}, .title_bar = std::nullopt};
-    if (custom_chrome_) {
+    if (custom_chrome_ && window_ != nullptr && !gtk_window_is_fullscreen(window_)) {
       metrics.title_bar = ResolveLinuxTitleBarMetrics(
           custom_title_bar_height_, viewport, window_ != nullptr && gtk_window_is_maximized(window_)
       );
@@ -949,7 +1009,7 @@ private:
   }
 
   bool BeginWindowOperation(GdkEvent* event, guint button, Point point) {
-    if (!custom_chrome_ || window_ == nullptr || !IsInitialized() || event == nullptr) {
+    if (!custom_chrome_ || window_ == nullptr || gtk_window_is_fullscreen(window_) || !IsInitialized() || event == nullptr) {
       return false;
     }
     GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
@@ -975,6 +1035,11 @@ private:
       return true;
     }
     return false;
+  }
+
+  bool RoutePointerToHuxerUI(Point position, PointerEventType type) {
+    return !platform_views_ ||
+           platform_views_->RouteToHuxerUI(position, type, pressed_buttons_ != PointerButton::None);
   }
 
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
@@ -1005,7 +1070,7 @@ private:
 
   void UpdateResizeCursor(Point position) noexcept {
     std::optional<LinuxResizeEdge> edge;
-    if (custom_chrome_ && drawing_area_ != nullptr && window_ != nullptr &&
+    if (custom_chrome_ && drawing_area_ != nullptr && window_ != nullptr && !gtk_window_is_fullscreen(window_) &&
         pressed_buttons_ == PointerButton::None) {
       edge = ResolveLinuxResizeEdge(
           position,
@@ -1058,6 +1123,10 @@ private:
 
   void Cleanup() noexcept {
     Retire();
+    if (platform_views_) {
+      platform_views_->Shutdown();
+      platform_views_.reset();
+    }
     file_drop_.reset();
     if (frame_source_ != 0) {
       g_source_remove(frame_source_);
@@ -1085,6 +1154,13 @@ private:
     auto& self = *static_cast<LinuxUiWindow*>(data);
     self.UpdateRuntimeViewport({static_cast<float>(width), static_cast<float>(height)});
     self.DrawFrame(snapshot);
+  }
+
+  static void AllocatePlatformViews(GtkWidget*, int width, int height, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    if (self.platform_views_) {
+      self.platform_views_->Allocate(width, height);
+    }
   }
 
   static gboolean CloseRequested(GtkWindow*, gpointer data) {
@@ -1221,8 +1297,14 @@ private:
       return FALSE;
     }
     if (type == GDK_BUTTON_PRESS) {
+      if (!self.RoutePointerToHuxerUI(position, PointerEventType::Down)) {
+        return FALSE;
+      }
       self.PressPointer(event, platform_button, position);
     } else {
+      if (!self.RoutePointerToHuxerUI(position, PointerEventType::Up)) {
+        return FALSE;
+      }
       self.ReleasePointer(event, platform_button, position);
     }
     return FALSE;
@@ -1233,6 +1315,10 @@ private:
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(gesture));
     const guint button = gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
     const Point position{static_cast<float>(x), static_cast<float>(y)};
+    if (!self.RoutePointerToHuxerUI(position, PointerEventType::Down)) {
+      static_cast<void>(gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_DENIED));
+      return;
+    }
     self.PressPointer(event, button, position);
   }
 
@@ -1240,23 +1326,37 @@ private:
     auto& self = *static_cast<LinuxUiWindow*>(data);
     const guint button = gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(gesture));
-    self.ReleasePointer(event, button, {static_cast<float>(x), static_cast<float>(y)});
+    const Point position{static_cast<float>(x), static_cast<float>(y)};
+    if (self.RoutePointerToHuxerUI(position, PointerEventType::Up)) {
+      self.ReleasePointer(event, button, position);
+    }
   }
 
   static void PointerCanceled(GtkGesture*, GdkEventSequence*, gpointer data) {
-    static_cast<LinuxUiWindow*>(data)->CancelPointer();
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    if (self.RoutePointerToHuxerUI(self.last_pointer_position_, PointerEventType::Cancel)) {
+      self.CancelPointer();
+    }
   }
 
   static void PointerEntered(GtkEventControllerMotion* controller, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
-    self.SendPointer(PointerEventType::Move, {static_cast<float>(x), static_cast<float>(y)}, PointerButton::None,
+    const Point position{static_cast<float>(x), static_cast<float>(y)};
+    if (!self.RoutePointerToHuxerUI(position, PointerEventType::Move)) {
+      return;
+    }
+    self.SendPointer(PointerEventType::Move, position, PointerButton::None,
         self.pressed_buttons_,
         TranslateModifiers(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller))));
   }
 
   static void PointerMoved(GtkEventControllerMotion* controller, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
-    self.SendPointer(PointerEventType::Move, {static_cast<float>(x), static_cast<float>(y)}, PointerButton::None,
+    const Point position{static_cast<float>(x), static_cast<float>(y)};
+    if (!self.RoutePointerToHuxerUI(position, PointerEventType::Move)) {
+      return;
+    }
+    self.SendPointer(PointerEventType::Move, position, PointerButton::None,
         self.pressed_buttons_,
         TranslateModifiers(gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller))));
   }
@@ -1273,6 +1373,9 @@ private:
   static gboolean Scrolled(GtkEventControllerScroll* controller, double dx, double dy, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     if (self.IsInitialized()) {
+      if (!self.RoutePointerToHuxerUI(self.last_pointer_position_, PointerEventType::Move)) {
+        return FALSE;
+      }
       GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
       const GdkModifierType state = event ? gdk_event_get_modifier_state(event) : GdkModifierType{};
       const Point consumed = self.UiWindow::HandleScrollInput({
@@ -1290,6 +1393,9 @@ private:
       GtkEventControllerKey* controller, guint key_value, guint key_code, GdkModifierType state, gpointer data
   ) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    if (self.platform_views_ && self.platform_views_->HasPlatformFocus()) {
+      return FALSE;
+    }
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
     const LinuxKeyPressResult press =
         self.key_tracker_.Press(key_code, self.text_input_.FilterKeyEvent(event));
@@ -1303,6 +1409,9 @@ private:
       GtkEventControllerKey* controller, guint key_value, guint key_code, GdkModifierType state, gpointer data
   ) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    if (self.platform_views_ && self.platform_views_->HasPlatformFocus()) {
+      return;
+    }
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
     if (self.key_tracker_.Release(key_code, self.text_input_.FilterKeyEvent(event))) {
       static_cast<void>(self.SendKey(KeyEventType::Up, key_value, state, event));
@@ -1327,6 +1436,7 @@ private:
   gulong toplevel_state_handler_ = 0;
   LinuxRenderer renderer_;
   LinuxTextInput text_input_;
+  std::unique_ptr<LinuxPlatformViews> platform_views_;
   std::unique_ptr<LinuxFileDrop> file_drop_;
   PlatformFrameState frame_state_;
   const RenderFrame* committed_frame_ = nullptr;

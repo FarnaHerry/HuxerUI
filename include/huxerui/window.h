@@ -123,6 +123,8 @@ enum class WindowCommand {
   Show,          ///< Makes the window visible without otherwise changing placement.
   Hide,          ///< Hides the window without closing the application.
   Activate,      ///< Shows and brings the window to the foreground when the platform permits it.
+  EnterFullscreen, ///< Covers the window's current monitor without desktop chrome.
+  ExitFullscreen, ///< Restores the placement preceding EnterFullscreen.
 };
 
 /// Selects the foreground brightness of native system-bar text and icons.
@@ -409,6 +411,12 @@ public:
 
   /// Toggles between the platform's maximized and restored states.
   void ToggleMaximize() const;
+
+  /// Requests native fullscreen on the current monitor, or restores the previous window placement.
+  /// Repeated requests are idempotent. Desktop adapters suppress caption controls and resizing while fullscreen.
+  /// Host-owned mobile and Web surfaces ignore this command; mobile system bars remain separately controlled.
+  /// Native window managers may complete or reject the request asynchronously.
+  void SetFullscreen(bool fullscreen) const;
 
   /// Requests the platform's normal close path after consulting the active close handler.
   void Close() const;
