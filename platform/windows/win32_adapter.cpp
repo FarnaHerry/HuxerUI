@@ -1455,14 +1455,9 @@ private:
       {
         const bool shutdown_application = primary_ && IsInitialized();
         Retire();
-        file_drop_.reset();
-        text_input_.SetWindow(nullptr);
-        accessibility_.Reset();
-        if (platform_views_) {
-          platform_views_->Shutdown();
-        }
         window_ = nullptr;
         committed_frame_ = nullptr;
+        Cleanup();
         if (shutdown_application) {
           ApplicationRuntime().RequestShutdown();
         }
