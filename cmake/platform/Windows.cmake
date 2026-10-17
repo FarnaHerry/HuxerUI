@@ -3,6 +3,9 @@ if (HUXERUI_WINDOWS_7_COMPAT)
             HUXERUI_WINDOWS_7_COMPAT=1
             WINVER=0x0601
             _WIN32_WINNT=0x0601
+            # dcomp.h declares the DirectComposition types only at NTDDI_WIN8 and later; the runtime side already
+            # resolves dcomp.dll dynamically so the types must stay visible for the Windows 7 compatibility build.
+            NTDDI_VERSION=0x06020000
     )
 else ()
     set(HUXERUI_WINDOWS_VERSION_DEFINITIONS
