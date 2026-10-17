@@ -26,6 +26,7 @@
 #include <huxerui/state.h>
 #include <huxerui/windows/installer.h>
 
+#include "installer_command_policy.h"
 #include "win32_application_runner.h"
 
 namespace huxerui::detail {
@@ -240,12 +241,7 @@ public:
   // displays, or action switches such as /uninstall) have no user available to click through
   // interactive pages and must proceed on their own.
   [[nodiscard]] bool CommandPreemptsInteraction() const {
-    if (command_display_ == BOOTSTRAPPER_DISPLAY_EMBEDDED || command_display_ == BOOTSTRAPPER_DISPLAY_NONE ||
-        command_display_ == BOOTSTRAPPER_DISPLAY_PASSIVE || command_relation_ != BOOTSTRAPPER_RELATION_NONE) {
-      return true;
-    }
-    return command_action_ == BOOTSTRAPPER_ACTION_UNINSTALL ||
-           command_action_ == BOOTSTRAPPER_ACTION_UNSAFE_UNINSTALL || command_action_ == BOOTSTRAPPER_ACTION_REPAIR;
+    return detail::InstallerCommandPreemptsInteraction(command_action_, command_display_, command_relation_);
   }
 
   void Cancel();
@@ -286,17 +282,9 @@ public:
       if (status.product == windows::InstallerProductState::NewerVersion) {
         return;
       }
-      if (package_state == BOOTSTRAPPER_PACKAGE_STATE_PRESENT) {
-        status.product = windows::InstallerProductState::Present;
-      } else if (package_state == BOOTSTRAPPER_PACKAGE_STATE_ABSENT) {
-        status.product = windows::InstallerProductState::Absent;
-      } else if (package_state == BOOTSTRAPPER_PACKAGE_STATE_OBSOLETE ||
-                 package_state == BOOTSTRAPPER_PACKAGE_STATE_SUPERSEDED) {
-        // A superseded package during a commanded run (for example a related bundle asked to
-        // uninstall itself by the upgrading bundle) still owns a live registration that must be
-        // removed; only interactive runs are gated behind the newer-version page.
-        status.product =
-            preempts ? windows::InstallerProductState::Present : windows::InstallerProductState::NewerVersion;
+      const windows::InstallerProductState detected = InstallerProductStateForPackage(package_state, preempts);
+      if (detected != windows::InstallerProductState::Unknown) {
+        status.product = detected;
       }
     });
   }
@@ -337,6 +325,7 @@ public:
 
   void ApplyComplete(HRESULT result, BOOTSTRAPPER_APPLY_RESTART restart) {
     bool should_quit = false;
+    bool should_close = false;
     {
       std::lock_guard lock(mutex_);
       status_.prompt.reset();
@@ -355,17 +344,20 @@ public:
       }
       prompt_response_ = windows::InstallerPromptChoice::Cancel;
       prompt_condition_.notify_all();
-      // Commanded runs finish by themselves; there is no user left to dismiss a result page.
-      should_quit = ui_closed_ || CommandPreemptsInteraction();
+      // Commanded runs finish by closing the UI window so the platform application returns before
+      // the engine shutdown waits for the UI thread; there is no user left to dismiss a page.
+      should_quit = ui_closed_;
+      should_close = CommandPreemptsInteraction();
     }
     SchedulePublish();
     if (should_quit) {
       Quit(InstallerExitCode(result));
+    } else if (should_close) {
+      CloseInstallerWindow();
     }
   }
 
-  int Ask(windows::InstallerPromptKind kind, std::string message,
-          std::vector<windows::InstallerPromptChoice> choices,
+  int Ask(windows::InstallerPromptKind kind, std::string message, std::vector<windows::InstallerPromptChoice> choices,
           std::optional<windows::InstallerPromptChoice> recommended) {
     std::unique_lock lock(mutex_);
     const std::uint64_t id = next_prompt_id_++;
@@ -410,18 +402,20 @@ public:
   }
 
   void Fail(HRESULT result, std::string message = {}) {
-    bool should_quit = false;
+    bool should_close = false;
     {
       std::lock_guard lock(mutex_);
       if (message.empty()) {
         message = ErrorMessage(result);
       }
       SetFailureLocked(result, std::move(message));
-      should_quit = ui_closed_;
+      // A commanded run has no user to dismiss the failure page; end it through the UI close so
+      // UiExited performs the single engine quit with the failure exit code.
+      should_close = CommandPreemptsInteraction();
     }
     SchedulePublish();
-    if (should_quit) {
-      Quit(InstallerExitCode(result));
+    if (should_close) {
+      CloseInstallerWindow();
     }
   }
 
@@ -429,21 +423,26 @@ private:
   void Start(windows::InstallerAction action, windows::InstallerInstallOptions options);
   void Quit(DWORD exit_code);
 
-  // Maps a preempting engine command to the session action executed without user input.
-  [[nodiscard]] std::optional<windows::InstallerAction> CommandedAction() const {
-    if (!CommandPreemptsInteraction()) {
-      return std::nullopt;
+  // Asks the installer window to close on the UI thread. Commanded runs end through this path so
+  // the platform application returns and the engine shutdown is never left waiting for the UI
+  // thread; UiExited then performs the single engine quit with the terminal status mapped to an
+  // exit code. Dropping the engine quit when no window is attached yet is safe: RunUi always ends
+  // in UiExited, which retries the quit there.
+  void CloseInstallerWindow() {
+    UiThreadDispatcher dispatcher;
+    HWND window = nullptr;
+    {
+      std::lock_guard lock(mutex_);
+      if (ui_closed_) {
+        // The UI thread already exited and UiExited performed the engine quit; the window handle
+        // must not be messaged anymore.
+        return;
+      }
+      dispatcher = dispatcher_;
+      window = window_;
     }
-    switch (command_action_) {
-    case BOOTSTRAPPER_ACTION_INSTALL:
-      return windows::InstallerAction::Install;
-    case BOOTSTRAPPER_ACTION_UNINSTALL:
-    case BOOTSTRAPPER_ACTION_UNSAFE_UNINSTALL:
-      return windows::InstallerAction::Uninstall;
-    case BOOTSTRAPPER_ACTION_REPAIR:
-      return windows::InstallerAction::Repair;
-    default:
-      return std::nullopt;
+    if (dispatcher && window != nullptr) {
+      dispatcher([window] { SendMessageW(window, WM_CLOSE, 0, 0); });
     }
   }
 
@@ -451,7 +450,8 @@ private:
   // Repair or uninstall of an absent product has nothing to do, so the run ends quietly instead
   // of parking an unreachable page.
   void RunCommandedAction() {
-    const std::optional<windows::InstallerAction> action = CommandedAction();
+    const std::optional<windows::InstallerAction> action =
+        InstallerCommandedAction(command_action_, command_display_, command_relation_);
     if (!action.has_value()) {
       return;
     }
@@ -461,13 +461,13 @@ private:
       product = status_.product;
     }
     if (*action != windows::InstallerAction::Install && product != windows::InstallerProductState::Present) {
-      Quit(ERROR_SUCCESS);
+      CloseInstallerWindow();
       return;
     }
     try {
       Start(*action, {});
-    } catch (const std::logic_error&) {
-      Quit(ERROR_INSTALL_FAILURE);
+    } catch (const std::logic_error& error) {
+      Fail(E_FAIL, error.what());
     }
   }
 
@@ -532,6 +532,9 @@ private:
   bool publish_scheduled_ = false;
   bool cancel_requested_ = false;
   bool ui_closed_ = false;
+  // Set by the first delivered engine quit so terminal paths racing with the UI exit cannot
+  // request duplicate quits.
+  bool engine_quit_started_ = false;
 };
 
 namespace {
@@ -609,25 +612,30 @@ public:
   STDMETHODIMP OnExecutePackageBegin(const wchar_t* package, BOOL execute, BOOTSTRAPPER_ACTION_STATE action,
                                       INSTALLUILEVEL ui_level, BOOL disable_external_ui, BOOL* cancel) override {
     session_->PackageStarted(package);
-    return CBootstrapperApplicationBase::OnExecutePackageBegin(
-        package, execute, action, ui_level, disable_external_ui, cancel);
+    return CBootstrapperApplicationBase::OnExecutePackageBegin(package, execute, action, ui_level, disable_external_ui,
+                                                               cancel);
   }
 
-  STDMETHODIMP OnError(BOOTSTRAPPER_ERROR_TYPE type, const wchar_t* package, DWORD code,
-                       const wchar_t* message, DWORD ui_hint, DWORD data_count, const wchar_t** data,
-                       int recommendation, int* result) override {
+  STDMETHODIMP OnError(BOOTSTRAPPER_ERROR_TYPE type, const wchar_t* package, DWORD code, const wchar_t* message,
+                       DWORD ui_hint, DWORD data_count, const wchar_t** data, int recommendation,
+                       int* result) override {
     int engine_result = recommendation;
     const HRESULT engine_status = CBootstrapperApplicationBase::OnError(
         type, package, code, message, ui_hint, data_count, data, recommendation, &engine_result);
     if (FAILED(engine_status)) {
       return engine_status;
     }
+    if (!InstallerPromptAnswersLocally(session_->CommandPreemptsInteraction())) {
+      // No local user can answer: the base implementation already resolved the response (embedded
+      // runs answer through the parent bundle via SendEmbeddedError), so return it deterministically
+      // instead of blocking on a prompt nobody can click.
+      *result = engine_result;
+      return S_OK;
+    }
     std::vector<windows::InstallerPromptChoice> choices = PromptChoices(ui_hint);
     // 引擎错误不允许"忽略后继续"：忽略卸载/写入失败会同时留下新旧两套程序
     // 文件（升级残留的直接来源）。错误要么重试，要么中止整次安装。
-    choices.erase(std::remove(choices.begin(), choices.end(),
-                              windows::InstallerPromptChoice::Ignore),
-                  choices.end());
+    choices.erase(std::remove(choices.begin(), choices.end(), windows::InstallerPromptChoice::Ignore), choices.end());
     std::optional<windows::InstallerPromptChoice> recommended = PromptChoice(recommendation);
     if (recommended && std::find(choices.begin(), choices.end(), *recommended) == choices.end()) {
       recommended.reset();
@@ -636,13 +644,17 @@ public:
     return S_OK;
   }
 
-  STDMETHODIMP OnExecuteFilesInUse(const wchar_t* package, DWORD file_count, const wchar_t** files,
-                                   int recommendation, BOOTSTRAPPER_FILES_IN_USE_TYPE source,
-                                   int* result) override {
+  STDMETHODIMP OnExecuteFilesInUse(const wchar_t* package, DWORD file_count, const wchar_t** files, int recommendation,
+                                   BOOTSTRAPPER_FILES_IN_USE_TYPE source, int* result) override {
     const HRESULT engine_status =
         CBootstrapperApplicationBase::OnExecuteFilesInUse(package, file_count, files, recommendation, source, result);
     if (FAILED(engine_status)) {
       return engine_status;
+    }
+    if (!InstallerPromptAnswersLocally(session_->CommandPreemptsInteraction())) {
+      // Deterministic noninteractive policy: keep the engine/base resolution (the recommendation,
+      // or IDCANCEL once canceled) instead of blocking on a prompt nobody can click.
+      return S_OK;
     }
     const std::vector<windows::InstallerPromptChoice> choices{
         windows::InstallerPromptChoice::Retry,
@@ -856,6 +868,8 @@ void WindowsInstallerSession::PlanComplete(HRESULT result) {
     SchedulePublish();
     if (ui_closed) {
       Quit(ERROR_INSTALL_USEREXIT);
+    } else if (CommandPreemptsInteraction()) {
+      CloseInstallerWindow();
     }
     return;
   }
@@ -897,11 +911,17 @@ void WindowsInstallerSession::Quit(DWORD exit_code) {
   HuxerUIBootstrapperApplication* application = nullptr;
   {
     std::lock_guard lock(mutex_);
+    if (engine_quit_started_) {
+      return;
+    }
     application = application_;
+    if (application == nullptr) {
+      // The engine is not attached yet; RunUi always ends in UiExited, which retries the quit.
+      return;
+    }
+    engine_quit_started_ = true;
   }
-  if (application != nullptr) {
-    application->Quit(exit_code);
-  }
+  application->Quit(exit_code);
 }
 
 } // namespace huxerui::detail
