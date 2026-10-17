@@ -734,6 +734,9 @@ public:
     renderer_.Initialize();
     CreateApplicationWindow(runtime, options, window_ordinal);
     runtime.RegisterAttachedWindow(window_, this);
+    if (primary_) {
+      static_cast<void>(SetPropW(window_, win32_primary_window_property, reinterpret_cast<HANDLE>(this)));
+    }
     runtime.NotifyInitialWindowReady(window_);
     UiWindow::UpdateResourceConfiguration(Configuration());
 
