@@ -72,4 +72,31 @@ InstallerProductStateForPackage(BOOTSTRAPPER_PACKAGE_STATE package_state, bool p
   return !preempts;
 }
 
+// Terminal events (apply completion, failure) end the run through one of three routes.
+enum class InstallerTerminalAction {
+  // Interactive runs with a live window keep their page for the user.
+  None,
+  // Commanded runs with a live window close it so UiExited performs the single engine quit.
+  CloseWindow,
+  // A window that already exited while planning was active skipped the engine quit on purpose;
+  // the terminal path must issue it directly or the engine waits forever.
+  QuitEngine,
+};
+
+[[nodiscard]] inline InstallerTerminalAction InstallerTerminalActionFor(bool ui_closed, bool preempts) {
+  if (ui_closed) {
+    return InstallerTerminalAction::QuitEngine;
+  }
+  return preempts ? InstallerTerminalAction::CloseWindow : InstallerTerminalAction::None;
+}
+
+// A commanded uninstall is meaningful while the product is present or while the bundle still owns
+// registration or cache entries. The engine can skip bundle cleanup under elevation or restart
+// conditions, so the Add/Remove entry may survive the MSI itself and a plain absent-product check
+// would strand it.
+[[nodiscard]] inline bool InstallerUninstallIsMeaningful(windows::InstallerProductState product,
+                                                         bool bundle_registered) {
+  return product == windows::InstallerProductState::Present || bundle_registered;
+}
+
 } // namespace huxerui::detail

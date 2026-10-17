@@ -121,4 +121,34 @@ TEST_CASE("engine prompts are only answered locally when a user is available", "
   CHECK_FALSE(detail::InstallerPromptAnswersLocally(true));
 }
 
+TEST_CASE("terminal events quit the engine when the window already exited", "[installer][windows]") {
+  SECTION("interactive runs with a live window stay on the page") {
+    CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/false, /*preempts=*/false) ==
+          detail::InstallerTerminalAction::None);
+  }
+
+  SECTION("commanded runs with a live window close it so UiExited quits once") {
+    CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/false, /*preempts=*/true) ==
+          detail::InstallerTerminalAction::CloseWindow);
+  }
+
+  SECTION("an exited window after a failed plan must still quit the engine") {
+    CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/true, /*preempts=*/false) ==
+          detail::InstallerTerminalAction::QuitEngine);
+    CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/true, /*preempts=*/true) ==
+          detail::InstallerTerminalAction::QuitEngine);
+  }
+}
+
+TEST_CASE("commanded uninstall stays meaningful while the bundle is registered", "[installer][windows]") {
+  CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::Present, /*bundle_registered=*/false));
+  CHECK_FALSE(detail::InstallerUninstallIsMeaningful(InstallerProductState::Absent, /*bundle_registered=*/false));
+  CHECK_FALSE(detail::InstallerUninstallIsMeaningful(InstallerProductState::Unknown, /*bundle_registered=*/false));
+
+  SECTION("a missing MSI with surviving bundle registration still uninstalls") {
+    CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::Absent, /*bundle_registered=*/true));
+    CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::Unknown, /*bundle_registered=*/true));
+  }
+}
+
 } // namespace huxerui::test

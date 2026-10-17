@@ -264,7 +264,9 @@ public:
     prompt_condition_.notify_all();
   }
 
-  void Detecting() {
+  void Detecting(BOOTSTRAPPER_REGISTRATION_TYPE registration_type) {
+    // Written once before package detection starts and read-only afterwards.
+    bundle_registered_ = registration_type != BOOTSTRAPPER_REGISTRATION_TYPE_NONE;
     Mutate([](windows::InstallerStatus& status) {
       status.phase = windows::InstallerPhase::Detecting;
       status.product = windows::InstallerProductState::Unknown;
@@ -402,6 +404,7 @@ public:
   }
 
   void Fail(HRESULT result, std::string message = {}) {
+    bool should_quit = false;
     bool should_close = false;
     {
       std::lock_guard lock(mutex_);
@@ -409,12 +412,19 @@ public:
         message = ErrorMessage(result);
       }
       SetFailureLocked(result, std::move(message));
-      // A commanded run has no user to dismiss the failure page; end it through the UI close so
-      // UiExited performs the single engine quit with the failure exit code.
-      should_close = CommandPreemptsInteraction();
+      // A commanded run has no user to dismiss the failure page: with a live window it ends through
+      // the UI close so UiExited performs the single engine quit. When the window already exited
+      // while planning was active, UiExited skipped that quit on purpose (the plan was still
+      // running) and this path must issue it directly or the engine waits forever.
+      const detail::InstallerTerminalAction terminal =
+          detail::InstallerTerminalActionFor(ui_closed_, CommandPreemptsInteraction());
+      should_quit = terminal == detail::InstallerTerminalAction::QuitEngine;
+      should_close = terminal == detail::InstallerTerminalAction::CloseWindow;
     }
     SchedulePublish();
-    if (should_close) {
+    if (should_quit) {
+      Quit(InstallerExitCode(result));
+    } else if (should_close) {
       CloseInstallerWindow();
     }
   }
@@ -447,8 +457,8 @@ private:
   }
 
   // Starts the commanded action after detection when the engine command leaves no user to click.
-  // Repair or uninstall of an absent product has nothing to do, so the run ends quietly instead
-  // of parking an unreachable page.
+  // Repair of an absent product and uninstall of a product with no registration left have nothing
+  // to do, so the run ends quietly instead of parking an unreachable page.
   void RunCommandedAction() {
     const std::optional<windows::InstallerAction> action =
         InstallerCommandedAction(command_action_, command_display_, command_relation_);
@@ -460,7 +470,12 @@ private:
       std::lock_guard lock(mutex_);
       product = status_.product;
     }
-    if (*action != windows::InstallerAction::Install && product != windows::InstallerProductState::Present) {
+    if (*action == windows::InstallerAction::Repair && product != windows::InstallerProductState::Present) {
+      CloseInstallerWindow();
+      return;
+    }
+    if (*action == windows::InstallerAction::Uninstall &&
+        !InstallerUninstallIsMeaningful(product, bundle_registered_)) {
       CloseInstallerWindow();
       return;
     }
@@ -519,10 +534,12 @@ private:
   std::condition_variable prompt_condition_;
   windows::InstallerStatus status_;
   // Written once by SetCommand before the engine starts detecting and read-only afterwards, so
-  // the helpers above intentionally skip the mutex.
+  // the helpers above intentionally skip the mutex. bundle_registered_ is likewise written once
+  // by Detecting before package detection starts.
   BOOTSTRAPPER_ACTION command_action_ = BOOTSTRAPPER_ACTION_UNKNOWN;
   BOOTSTRAPPER_DISPLAY command_display_ = BOOTSTRAPPER_DISPLAY_UNKNOWN;
   BOOTSTRAPPER_RELATION_TYPE command_relation_ = BOOTSTRAPPER_RELATION_NONE;
+  bool bundle_registered_ = false;
   std::shared_ptr<StateCell<windows::InstallerStatus>> status_cell_;
   UiThreadDispatcher dispatcher_;
   HuxerUIBootstrapperApplication* application_ = nullptr;
@@ -567,7 +584,7 @@ public:
 
   STDMETHODIMP OnDetectBegin(BOOL cached, BOOTSTRAPPER_REGISTRATION_TYPE registration_type, DWORD packages,
                              BOOL* cancel) override {
-    session_->Detecting();
+    session_->Detecting(registration_type);
     return CBootstrapperApplicationBase::OnDetectBegin(cached, registration_type, packages, cancel);
   }
 
@@ -807,7 +824,8 @@ void WindowsInstallerSession::Start(windows::InstallerAction action, windows::In
     if (action == windows::InstallerAction::Repair && status_.product != windows::InstallerProductState::Present) {
       throw std::logic_error("HuxerUI Windows installer cannot repair an absent product");
     }
-    if (action == windows::InstallerAction::Uninstall && status_.product != windows::InstallerProductState::Present) {
+    if (action == windows::InstallerAction::Uninstall &&
+        !InstallerUninstallIsMeaningful(status_.product, bundle_registered_)) {
       throw std::logic_error("HuxerUI Windows installer cannot uninstall an absent product");
     }
     application = application_;
