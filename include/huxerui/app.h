@@ -492,12 +492,22 @@ public:
   void SetRelationship(
       detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner, bool modal
   );
-  /// Retires every window owned by the given window, deepest chain first, then leaves the window itself to its
-  /// normal retirement path. Platform adapters call this before destroying a window through a user close so owned
-  /// transients and dialogs disappear with their owner; application shutdown retires all windows without it.
+  /// Retires every window owned by the given window, deepest chain first, including their native attachments; the
+  /// owner itself continues its normal retirement path with the platform caller. Platform adapters call this before
+  /// destroying a window through a user close so owned transients and dialogs disappear with their owner; application
+  /// shutdown retires all windows without it.
   /// @param owner Live window whose owned subtree retires now.
   /// Call on the application thread.
   void RetireOwned(UiWindow& owner);
+  /// Retires one live window, bypassing the platform close path and its request handlers. Owned windows retire
+  /// first, deepest chain first. Shared teardown runs before the native attachment is discarded, so retiring the
+  /// initial window keeps the application running; close-path shutdown semantics are unchanged. Already-retired
+  /// windows and retirements requested after shutdown begins are ignored.
+  /// @param target Service of the live window to retire.
+  /// Call on the application thread; WindowHandle::Retire() queues this from any thread.
+  /// @throws std::logic_error If called before the application runs, from another thread, or when the host does not
+  /// support explicit window retirement.
+  void RetireWindow(detail::WindowService& target);
   /// Returns the monotonic clock used for this Runtime's ordinary timer deadlines.
   /// @return A steady-clock time point in the same clock domain accepted by ScheduleTimerAt.
   /// Native subclasses and deterministic test hosts must keep their clock and scheduling implementation consistent.
@@ -1012,6 +1022,11 @@ protected:
   /// Runs on the application thread, clears the window identity, retires component work and window services, and leaves
   /// application-owned services and Tasks alive. Native callbacks must stop entering this window as retirement begins.
   void Retire() noexcept;
+  /// Synchronously destroys the native window or host surface backing this attachment. Shared teardown (Retire())
+  /// must already have run; the resulting native teardown path is idempotent. Platform adapters override this on
+  /// hosts that support explicit window retirement; the default reports the capability gap.
+  /// @throws std::logic_error By default, when the host does not support explicit window retirement.
+  virtual void DiscardHost();
   /// Creates the file-picker transport anchored to this native attachment during window installation.
   /// @return A transport retaining its native operations safely, or null when this host does not support picking.
   virtual std::shared_ptr<detail::FilePickerTransport> CreateFilePickerTransport();

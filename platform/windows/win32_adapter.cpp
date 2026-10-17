@@ -879,6 +879,12 @@ public:
     input_blocked_ = false;
   }
 
+  void DiscardHost() override {
+    if (window_ != nullptr) {
+      static_cast<void>(DestroyWindow(window_));
+    }
+  }
+
 
 
   ResourceConfiguration Configuration() const {

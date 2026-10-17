@@ -462,11 +462,36 @@ void Runtime::RetireOwned(UiWindow& owner) {
       reactivate.push_back(activation);
     }
     window->Retire();
+    window->DiscardHost();
   }
   if (UiWindow* activation = RemoveWindowRelations(owner); activation != nullptr) {
     reactivate.push_back(activation);
   }
   RebuildWindowBlocking(reactivate);
+}
+
+void Runtime::RetireWindow(detail::WindowService& target) {
+  if (!state_) {
+    throw std::logic_error("HuxerUI cannot retire a window before the application is initialized");
+  }
+  state_->RequireThread();
+  if (state_->phase == ApplicationRuntimeState::Phase::Stopping ||
+      state_->phase == ApplicationRuntimeState::Phase::Stopped) {
+    return;
+  }
+  if (state_->phase != ApplicationRuntimeState::Phase::Running) {
+    throw std::logic_error("HuxerUI cannot retire a window while the application is not running");
+  }
+  UiWindow* const window = WindowForService(target);
+  if (window == nullptr) {
+    return;
+  }
+  RetireOwned(*window);
+  // Shared teardown precedes the native discard so the platform teardown path observes a retired window; on hosts
+  // whose initial window close requests application shutdown, this is what keeps an explicit Retire() running.
+  window->Retire();
+  RebuildWindowBlocking({});
+  window->DiscardHost();
 }
 
 UiWindow* Runtime::WindowForService(const detail::WindowService& service) const {

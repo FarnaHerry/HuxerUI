@@ -452,6 +452,13 @@ public:
   /// Requests the platform's normal close path after consulting the active close handler.
   void Close() const;
 
+  /// Requests retirement of this window, bypassing the platform close path and its request handlers. The retirement
+  /// runs on the application thread after the current callback returns; owned windows retire first, deepest chain
+  /// first. The application keeps running even when the initial window retires, so applications can reopen windows
+  /// later, for example from a tray activation, and stop with ApplicationHandle::Quit().
+  /// Safe to call from any thread, and ignored when this window has already retired or shutdown has begun.
+  void Retire() const;
+
   /// Registers a lifecycle-bound minimize request handler. Return true to consume the request or false to continue the
   /// native minimize operation. Changing a dependency reconnects the handler.
   template <class... Dependencies>

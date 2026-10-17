@@ -251,6 +251,22 @@ void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owne
   state->owner->SetRelationship(*this, owner, modal);
 }
 
+void WindowService::Retire() {
+  const auto state = application_.lock();
+  if (!state || state->owner == nullptr) {
+    return;
+  }
+  Runtime* const runtime = state->owner;
+  const std::weak_ptr<WindowService> weak = weak_from_this();
+  // Queue the retirement so it runs after the current callback returns: retiring synchronously from inside
+  // pointer, semantic, or lifecycle dispatch would tear down the structures that dispatch still references.
+  state->Post([runtime, weak] {
+    if (const auto service = weak.lock()) {
+      runtime->RetireWindow(*service);
+    }
+  });
+}
+
 bool WindowService::HandleRequest(WindowCommand command) {
   RequestHandler& request = Handler(command);
   if (!request.handler) {
@@ -447,6 +463,10 @@ void WindowHandle::SetFullscreen(bool fullscreen) const {
 
 void WindowHandle::Close() const {
   service_->Request(WindowCommand::Close);
+}
+
+void WindowHandle::Retire() const {
+  service_->Retire();
 }
 
 std::function<void()>
