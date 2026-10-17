@@ -112,3 +112,5 @@ Android and iOS remain platform-driven attachments and do not support runtime wi
 The branch keeps single-window behavior unchanged; the initial window uses the same creation path as runtime windows.
 Only the Windows adapter overrides `CreateNativeWindow` in this revision; Linux, macOS, and Web keep the unsupported
 default until their hosts can build and verify the port. Windows is the only host built and tested during development.
+[Developing Multi-Window](multi-window.md) records the validation results, behavioral notes, and the per-platform
+porting checklist for that follow-up work.

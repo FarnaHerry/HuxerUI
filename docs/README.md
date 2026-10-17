@@ -23,6 +23,7 @@ User guides describe the current public SDK, development guides cover this repos
 
 - [Building HuxerUI](development/building.md): configure, build, test, and run repository examples.
 - [Downstream integration](development/farna-integration.md): the `farna/main` patch inventory, validation, and adoption.
+- [Developing Multi-Window](development/multi-window.md): the multi-window extension status, validation, behavioral notes, and desktop porting checklist.
 - [SDK Packaging](development/sdk-packaging.md): produce and validate release-ready SDK archives.
 
 ## Design reference
