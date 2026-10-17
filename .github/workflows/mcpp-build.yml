@@ -106,7 +106,9 @@ permissions:
 env:
   # Pinned rather than latest: an mcpp release changes build behaviour, and a
   # green PR should stay green until someone chooses to move this line.
-  MCPP_VERSION: '2026.9.10.2'
+  # 2026.9.18.3 is the floor the package index currently declares; older
+  # releases fail every index fetch with E0006 before any build starts.
+  MCPP_VERSION: '2026.9.18.3'
   # The Linux clang leg. Pinned for the same reason mcpp is: a toolchain
   # release changes what compiles, and a green PR should stay green until
   # someone moves this line. Windows and macOS already build with clang --
