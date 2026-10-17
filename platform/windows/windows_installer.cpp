@@ -538,7 +538,12 @@ public:
     if (FAILED(engine_status)) {
       return engine_status;
     }
-    const std::vector<windows::InstallerPromptChoice> choices = PromptChoices(ui_hint);
+    std::vector<windows::InstallerPromptChoice> choices = PromptChoices(ui_hint);
+    // 引擎错误不允许"忽略后继续"：忽略卸载/写入失败会同时留下新旧两套程序
+    // 文件（升级残留的直接来源）。错误要么重试，要么中止整次安装。
+    choices.erase(std::remove(choices.begin(), choices.end(),
+                              windows::InstallerPromptChoice::Ignore),
+                  choices.end());
     std::optional<windows::InstallerPromptChoice> recommended = PromptChoice(recommendation);
     if (recommended && std::find(choices.begin(), choices.end(), *recommended) == choices.end()) {
       recommended.reset();
