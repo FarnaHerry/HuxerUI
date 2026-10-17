@@ -385,6 +385,7 @@ export namespace huxerui {
     using huxerui::SemanticRange;
     using huxerui::SemanticRole;
     using huxerui::Semantics;
+    using huxerui::SetWindowRelationship;
     using huxerui::Shadow;
     using huxerui::ShapeScheme;
     using huxerui::SharedBounds;
