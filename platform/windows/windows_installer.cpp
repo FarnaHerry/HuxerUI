@@ -228,6 +228,26 @@ public:
   [[nodiscard]] std::optional<std::filesystem::path> ChooseDestination(const std::filesystem::path& initial) const;
   void Repair();
   void Uninstall();
+
+  // Captures the engine command once at application creation, before detection starts.
+  void SetCommand(BOOTSTRAPPER_ACTION action, BOOTSTRAPPER_DISPLAY display, BOOTSTRAPPER_RELATION_TYPE relation) {
+    command_action_ = action;
+    command_display_ = display;
+    command_relation_ = relation;
+  }
+
+  // Runs driven by an explicit engine command (embedded related-bundle runs, quiet or passive
+  // displays, or action switches such as /uninstall) have no user available to click through
+  // interactive pages and must proceed on their own.
+  [[nodiscard]] bool CommandPreemptsInteraction() const {
+    if (command_display_ == BOOTSTRAPPER_DISPLAY_EMBEDDED || command_display_ == BOOTSTRAPPER_DISPLAY_NONE ||
+        command_display_ == BOOTSTRAPPER_DISPLAY_PASSIVE || command_relation_ != BOOTSTRAPPER_RELATION_NONE) {
+      return true;
+    }
+    return command_action_ == BOOTSTRAPPER_ACTION_UNINSTALL ||
+           command_action_ == BOOTSTRAPPER_ACTION_UNSAFE_UNINSTALL || command_action_ == BOOTSTRAPPER_ACTION_REPAIR;
+  }
+
   void Cancel();
 
   void SetDefaults(std::filesystem::path destination, bool create_desktop_shortcut) {
@@ -261,7 +281,8 @@ public:
       Fail(result);
       return;
     }
-    Mutate([package_state](windows::InstallerStatus& status) {
+    const bool preempts = CommandPreemptsInteraction();
+    Mutate([package_state, preempts](windows::InstallerStatus& status) {
       if (status.product == windows::InstallerProductState::NewerVersion) {
         return;
       }
@@ -269,10 +290,13 @@ public:
         status.product = windows::InstallerProductState::Present;
       } else if (package_state == BOOTSTRAPPER_PACKAGE_STATE_ABSENT) {
         status.product = windows::InstallerProductState::Absent;
-      } else if (
-          package_state == BOOTSTRAPPER_PACKAGE_STATE_OBSOLETE || package_state == BOOTSTRAPPER_PACKAGE_STATE_SUPERSEDED
-      ) {
-        status.product = windows::InstallerProductState::NewerVersion;
+      } else if (package_state == BOOTSTRAPPER_PACKAGE_STATE_OBSOLETE ||
+                 package_state == BOOTSTRAPPER_PACKAGE_STATE_SUPERSEDED) {
+        // A superseded package during a commanded run (for example a related bundle asked to
+        // uninstall itself by the upgrading bundle) still owns a live registration that must be
+        // removed; only interactive runs are gated behind the newer-version page.
+        status.product =
+            preempts ? windows::InstallerProductState::Present : windows::InstallerProductState::NewerVersion;
       }
     });
   }
@@ -286,6 +310,7 @@ public:
       status.phase = windows::InstallerPhase::Ready;
       status.progress = 0.0F;
     });
+    RunCommandedAction();
   }
 
   void NewerVersionDetected() {
@@ -330,7 +355,8 @@ public:
       }
       prompt_response_ = windows::InstallerPromptChoice::Cancel;
       prompt_condition_.notify_all();
-      should_quit = ui_closed_;
+      // Commanded runs finish by themselves; there is no user left to dismiss a result page.
+      should_quit = ui_closed_ || CommandPreemptsInteraction();
     }
     SchedulePublish();
     if (should_quit) {
@@ -403,6 +429,48 @@ private:
   void Start(windows::InstallerAction action, windows::InstallerInstallOptions options);
   void Quit(DWORD exit_code);
 
+  // Maps a preempting engine command to the session action executed without user input.
+  [[nodiscard]] std::optional<windows::InstallerAction> CommandedAction() const {
+    if (!CommandPreemptsInteraction()) {
+      return std::nullopt;
+    }
+    switch (command_action_) {
+    case BOOTSTRAPPER_ACTION_INSTALL:
+      return windows::InstallerAction::Install;
+    case BOOTSTRAPPER_ACTION_UNINSTALL:
+    case BOOTSTRAPPER_ACTION_UNSAFE_UNINSTALL:
+      return windows::InstallerAction::Uninstall;
+    case BOOTSTRAPPER_ACTION_REPAIR:
+      return windows::InstallerAction::Repair;
+    default:
+      return std::nullopt;
+    }
+  }
+
+  // Starts the commanded action after detection when the engine command leaves no user to click.
+  // Repair or uninstall of an absent product has nothing to do, so the run ends quietly instead
+  // of parking an unreachable page.
+  void RunCommandedAction() {
+    const std::optional<windows::InstallerAction> action = CommandedAction();
+    if (!action.has_value()) {
+      return;
+    }
+    windows::InstallerProductState product = windows::InstallerProductState::Unknown;
+    {
+      std::lock_guard lock(mutex_);
+      product = status_.product;
+    }
+    if (*action != windows::InstallerAction::Install && product != windows::InstallerProductState::Present) {
+      Quit(ERROR_SUCCESS);
+      return;
+    }
+    try {
+      Start(*action, {});
+    } catch (const std::logic_error&) {
+      Quit(ERROR_INSTALL_FAILURE);
+    }
+  }
+
   template <class Function> void Mutate(Function&& mutation) {
     {
       std::lock_guard lock(mutex_);
@@ -450,6 +518,11 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable prompt_condition_;
   windows::InstallerStatus status_;
+  // Written once by SetCommand before the engine starts detecting and read-only afterwards, so
+  // the helpers above intentionally skip the mutex.
+  BOOTSTRAPPER_ACTION command_action_ = BOOTSTRAPPER_ACTION_UNKNOWN;
+  BOOTSTRAPPER_DISPLAY command_display_ = BOOTSTRAPPER_DISPLAY_UNKNOWN;
+  BOOTSTRAPPER_RELATION_TYPE command_relation_ = BOOTSTRAPPER_RELATION_NONE;
   std::shared_ptr<StateCell<windows::InstallerStatus>> status_cell_;
   UiThreadDispatcher dispatcher_;
   HuxerUIBootstrapperApplication* application_ = nullptr;
@@ -467,6 +540,13 @@ class HuxerUIBootstrapperApplication final : public CBootstrapperApplicationBase
 public:
   explicit HuxerUIBootstrapperApplication(std::shared_ptr<WindowsInstallerSession> session)
       : session_(std::move(session)) {}
+
+  STDMETHODIMP OnCreate(IBootstrapperEngine* pEngine, BOOTSTRAPPER_COMMAND* pCommand) override {
+    if (pCommand != nullptr) {
+      session_->SetCommand(pCommand->action, pCommand->display, pCommand->relationType);
+    }
+    return CBootstrapperApplicationBase::OnCreate(pEngine, pCommand);
+  }
 
   STDMETHODIMP OnStartup() override {
     ui_thread_ = CreateThread(nullptr, 0, RunUi, this, 0, nullptr);
@@ -500,11 +580,15 @@ public:
   }
 
   STDMETHODIMP OnDetectForwardCompatibleBundle(const wchar_t* bundle, BOOTSTRAPPER_RELATION_TYPE relation,
-                                                const wchar_t* tag, BOOL per_machine, const wchar_t* version,
-                                                BOOL missing_from_cache, BOOL* cancel) override {
-    session_->NewerVersionDetected();
-    return CBootstrapperApplicationBase::OnDetectForwardCompatibleBundle(
-        bundle, relation, tag, per_machine, version, missing_from_cache, cancel);
+                                               const wchar_t* tag, BOOL per_machine, const wchar_t* version,
+                                               BOOL missing_from_cache, BOOL* cancel) override {
+    // Forward-compatible detection must not hijack a commanded run; the engine already chose
+    // its action (the callback also fires for equal-version related bundles).
+    if (!session_->CommandPreemptsInteraction()) {
+      session_->NewerVersionDetected();
+    }
+    return CBootstrapperApplicationBase::OnDetectForwardCompatibleBundle(bundle, relation, tag, per_machine, version,
+                                                                         missing_from_cache, cancel);
   }
 
   STDMETHODIMP OnPlanComplete(HRESULT result) override {
