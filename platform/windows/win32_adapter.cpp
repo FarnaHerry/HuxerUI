@@ -846,6 +846,39 @@ public:
     PostMessageW(window_, kWindowCommandMessage, static_cast<WPARAM>(command), 0);
   }
 
+  void ApplyWindowOwnership(UiWindow* owner) override {
+    if (window_ == nullptr) {
+      return;
+    }
+    HWND owner_window = nullptr;
+    if (owner != nullptr) {
+      owner_window = static_cast<WindowsUiWindow*>(owner)->window_;
+    }
+    static_cast<void>(
+        SetWindowLongPtrW(window_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner_window))
+    );
+  }
+
+  void ApplyWindowModalState(bool modal, bool blocked) override {
+    static_cast<void>(modal);
+    if (window_ == nullptr || blocked == input_blocked_) {
+      return;
+    }
+    if (blocked) {
+      enabled_before_input_block_ = IsWindowEnabled(window_) != FALSE;
+      if (enabled_before_input_block_) {
+        static_cast<void>(EnableWindow(window_, FALSE));
+      }
+      input_blocked_ = true;
+      return;
+    }
+    if (enabled_before_input_block_) {
+      static_cast<void>(EnableWindow(window_, TRUE));
+    }
+    enabled_before_input_block_ = true;
+    input_blocked_ = false;
+  }
+
 
 
   ResourceConfiguration Configuration() const {
@@ -1474,6 +1507,9 @@ private:
       if (primary_) {
         ApplicationRuntime().RequestShutdown();
       } else {
+        if (runtime_ != nullptr) {
+          runtime_->RetireOwned(*this);
+        }
         static_cast<void>(DestroyWindow(window_));
       }
       return 0;
@@ -1731,6 +1767,8 @@ private:
   HWND mouse_tracking_window_ = nullptr;
   bool pointer_down_ = false;
   bool performing_close_ = false;
+  bool input_blocked_ = false;
+  bool enabled_before_input_block_ = true;
   Point last_pointer_position_;
   Win32Accessibility accessibility_;
   Win32TextInput text_input_;
