@@ -893,6 +893,8 @@ public:
     return configuration;
   }
 private:
+  friend class WindowsRuntime;
+
   void UpdateApplicationLifecycleState(ApplicationLifecycleState lifecycle_state) {
     if (IsInitialized()) {
       switch (lifecycle_state) {

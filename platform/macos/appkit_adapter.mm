@@ -1037,15 +1037,6 @@ private:
   std::exception_ptr failure_;
 };
 
-@implementation HuxerUIWindow (ModalInputGate)
-
-/// A window blocked by a window-level modal refuses key status so input stays with the modal chain.
-- (BOOL)canBecomeKey {
-  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKey];
-}
-
-@end
-
 int RunPlatformApplication(const Application& application) {
   @autoreleasepool {
     MacRuntime runtime;
@@ -1068,6 +1059,15 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 } // namespace huxerui::macos::detail
+
+@implementation HuxerUIWindow (ModalInputGate)
+
+/// A window blocked by a window-level modal refuses key status so input stays with the modal chain.
+- (BOOL)canBecomeKey {
+  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKey];
+}
+
+@end
 
 @implementation HuxerUIWindow
 
