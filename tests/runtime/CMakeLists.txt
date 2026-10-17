@@ -45,6 +45,7 @@ huxerui_add_test_suite(huxerui_runtime_tests HuxerUIRuntimeTests
             virtual_layout.cpp
             window.cpp
             multi_window.cpp
+            window_relationship.cpp
             "${HUXERUI_TEST_DIR}/support/builtin_resources.cpp"
 )
 if (TARGET HuxerUI::testing)
