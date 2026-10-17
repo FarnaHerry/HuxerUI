@@ -114,3 +114,7 @@ Only the Windows adapter overrides `CreateNativeWindow` in this revision; Linux,
 default until their hosts can build and verify the port. Windows is the only host built and tested during development.
 [Developing Multi-Window](multi-window.md) records the validation results, behavioral notes, and the per-platform
 porting checklist for that follow-up work.
+The window-relationship extension is developed on the `feat/window-relationship` branch from multi-window.
+[docs/design/window-relationship.md](../design/window-relationship.md) records its ownership, modality, and cascade
+contract; Windows implements the native ownership and modality application, and Linux/macOS ports remain unverified
+until their hosts build them.
