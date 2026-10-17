@@ -1316,6 +1316,7 @@ void UiWindow::Retire() noexcept {
   state_->retired_ = true;
   if (state_->file_drop_) {
     state_->file_drop_->DisconnectFileDrop();
+    state_->file_drop_.reset();
   }
   try {
     if (state_->text_) {
@@ -1323,10 +1324,15 @@ void UiWindow::Retire() noexcept {
     }
   } catch (...) {
   }
+  state_->text_.reset();
   DeactivateExternalTextures(state_->committed_scene_snapshot_, state_->owner_.external_texture_frame_requester_);
+  state_->committed_scene_snapshot_.clear();
+  state_->has_committed_scene_snapshot_ = false;
   if (state_->pointer_) {
     state_->pointer_->Disconnect();
+    state_->pointer_.reset();
   }
+  state_->semantics_.reset();
   state_->layer_controller_.Disconnect();
 
   if (state_->window_service_) {
