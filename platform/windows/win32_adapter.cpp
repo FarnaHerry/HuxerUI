@@ -1182,15 +1182,36 @@ private:
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
                    PointerButton pressed_buttons = PointerButton::None) {
     last_pointer_position_ = position;
-    UiWindow::HandlePointerEvent({
-        type,
-        0,
-        position,
-        PointerDeviceKind::Mouse,
-        changed_button,
-        pressed_buttons,
-        CurrentKeyModifiers(),
-    });
+    // Disabling or re-enabling this window (modal blocking), destroying a capturing window, or other capture
+    // changes can synchronously deliver WM_CANCELMODE or WM_CAPTURECHANGED while a pointer event is still being
+    // dispatched. Delivering that nested cancellation immediately would re-enter the shared pointer interaction
+    // and end the active session while the outer dispatch still references it, so defer the cancellation until
+    // the outer dispatch returns.
+    if (type == PointerEventType::Cancel && dispatching_pointer_event_) {
+      pointer_cancel_deferred_ = true;
+      return;
+    }
+    const bool outermost = !dispatching_pointer_event_;
+    dispatching_pointer_event_ = true;
+    try {
+      UiWindow::HandlePointerEvent({
+          type,
+          0,
+          position,
+          PointerDeviceKind::Mouse,
+          changed_button,
+          pressed_buttons,
+          CurrentKeyModifiers(),
+      });
+    } catch (...) {
+      dispatching_pointer_event_ = false;
+      throw;
+    }
+    dispatching_pointer_event_ = false;
+    if (outermost && pointer_cancel_deferred_) {
+      pointer_cancel_deferred_ = false;
+      SendPointer(PointerEventType::Cancel, last_pointer_position_);
+    }
   }
 
   void CancelPointer() {
@@ -1766,6 +1787,8 @@ private:
   PointerCursorKind pointer_cursor_kind_ = PointerCursorKind::Default;
   HWND mouse_tracking_window_ = nullptr;
   bool pointer_down_ = false;
+  bool dispatching_pointer_event_ = false;
+  bool pointer_cancel_deferred_ = false;
   bool performing_close_ = false;
   bool input_blocked_ = false;
   bool enabled_before_input_block_ = true;
