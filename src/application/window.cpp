@@ -450,4 +450,15 @@ WindowHandle UseWindow() {
   return WindowHandle{UseService<detail::WindowService>()};
 }
 
+namespace detail {
+
+WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service) {
+  if (!service) {
+    throw std::logic_error("HuxerUI window handle requires an initialized window service");
+  }
+  return WindowHandle{std::move(service)};
+}
+
+} // namespace detail
+
 } // namespace huxerui

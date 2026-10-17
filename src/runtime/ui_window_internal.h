@@ -487,7 +487,7 @@ struct LayerController::State {
 /// Application services stay on Runtime; execution_ records the original window context for retained callbacks.
 /// Shared retirement clears native access before the derived window releases its platform members.
 struct UiWindow::State {
-  State(UiWindow& owner, const Application& application);
+  State(UiWindow& owner, const Application& application, const WindowOptions& window_options);
   ~State();
 
   UiWindow& owner_;

@@ -265,7 +265,16 @@ private:
   std::vector<PaintCommand> commands_;
 
   friend class UiWindow;
+  friend FlattenedScene FlattenedFrame(const huxerui::FrameCommit& commit);
 };
+
+/// Flattens one committed frame for assertions on windows owned directly by a Runtime, such as windows created
+/// through Runtime::OpenWindow in multi-window tests.
+inline FlattenedScene FlattenedFrame(const huxerui::FrameCommit& commit) {
+  FlattenedScene scene;
+  scene.Update(commit.render_frame);
+  return scene;
+}
 
 class RuntimeLifetime final {
 public:
@@ -300,7 +309,7 @@ public:
         application_runtime_(&dynamic_cast<huxerui::Runtime&>(platform)), runtime_(platform) {
     try {
       detail::InternalAccess::InitializeRuntime(*application_runtime_, *application_, std::move(startup_activation));
-      detail::InternalAccess::InitializeWindow(runtime_, *application_runtime_);
+      detail::InternalAccess::InitializeWindow(runtime_, *application_runtime_, application_->options.window);
     } catch (...) {
       detail::InternalAccess::RetireWindow(runtime_);
       detail::InternalAccess::RetireRuntime(*application_runtime_);
@@ -311,8 +320,18 @@ public:
   UiWindow(huxerui::Runtime& application, huxerui::UiWindow& platform,
       std::optional<ResourceConfiguration> configuration = std::nullopt,
       WindowLifecycleState lifecycle = WindowLifecycleState::Background)
+      : UiWindow(
+            application, platform, huxerui::detail::CurrentApplication().options.window, 0, std::move(configuration),
+            lifecycle
+        ) {}
+
+  UiWindow(huxerui::Runtime& application, huxerui::UiWindow& platform, const WindowOptions& window_options,
+      std::uint32_t window_ordinal, std::optional<ResourceConfiguration> configuration = std::nullopt,
+      WindowLifecycleState lifecycle = WindowLifecycleState::Background)
       : application_runtime_(&application), runtime_(platform) {
-    detail::InternalAccess::InitializeWindow(runtime_, application, std::move(configuration), lifecycle);
+    detail::InternalAccess::InitializeWindow(
+        runtime_, application, window_options, window_ordinal, std::move(configuration), lifecycle
+    );
   }
 
   ~UiWindow() {
@@ -578,6 +597,14 @@ public:
   ~TestPlatform() override { huxerui::UiWindow::Retire(); huxerui::Runtime::Retire(); }
 
   void OnRuntimeStopped() override { ++application_quit_requests; }
+
+  std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
+                                                        std::uint32_t window_ordinal) override {
+    auto window = std::make_unique<TestPlatform>();
+    detail::InternalAccess::InitializeWindow(*window, *this, options, window_ordinal);
+    created_windows.push_back(window.get());
+    return window;
+  }
 
   std::chrono::steady_clock::time_point TimerNow() const noexcept override {
     return std::chrono::steady_clock::time_point{} +
@@ -905,6 +932,8 @@ public:
   std::optional<huxerui::ProcessMetrics> process_metrics;
   std::vector<huxerui::WindowCommand> window_commands;
   int application_quit_requests = 0;
+  /// Windows produced by CreateNativeWindow for multi-window tests, valid until the Runtime retires them.
+  std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;
   std::shared_ptr<TestPermissionTransport> permission_transport;
   huxerui::PlatformTextInput* platform_text_input = nullptr;

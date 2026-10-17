@@ -368,6 +368,10 @@ private:
 struct AppOptions {
   /// Initial native-window configuration.
   WindowOptions window{};
+  /// Additional windows opened in declaration order immediately after the application starts.
+  /// Windows created here share the initial window's creation path and may select distinct content through
+  /// WindowOptions::key. An empty list preserves single-window startup.
+  std::vector<WindowOptions> extra_windows{};
   /// Width thresholds used by `UseViewportClass()`.
   ViewportBreakpoints viewport_breakpoints{};
 #if defined(NDEBUG)
@@ -456,6 +460,15 @@ public:
   /// Keep Runtime alive during this call. The callback acquires no captured Environment or scope cancellation;
   /// use TaskScope::Post when application work requires those lifetime and context rules.
   void DispatchToApplicationThread(std::function<void()> task) const;
+  /// Creates one additional native window attached to this application.
+  /// The platform subclass performs the native creation; the returned handle controls only the new window.
+  /// @param options Per-window configuration validated before creation.
+  /// @return A handle for the new window, valid until that window retires; harmless after retirement.
+  /// Call on the application thread while the application is running.
+  /// @throws std::invalid_argument If the platform rejects the window configuration.
+  /// @throws std::logic_error If called before the application runs, from another thread, after shutdown begins, or
+  /// when the host does not support runtime window creation.
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options);
   /// Returns the monotonic clock used for this Runtime's ordinary timer deadlines.
   /// @return A steady-clock time point in the same clock domain accepted by ScheduleTimerAt.
   /// Native subclasses and deterministic test hosts must keep their clock and scheduling implementation consistent.
@@ -524,6 +537,15 @@ protected:
   /// Creates the application's native tray capability during initialization.
   /// @return An application-owned transport, or null if the platform has no tray support.
   virtual std::shared_ptr<detail::SystemTrayTransport> CreateSystemTrayTransport();
+  /// Creates one native window for Runtime::OpenWindow on the application thread.
+  /// The implementation constructs its platform UiWindow, creates the native window, and calls InitializeWindow with
+  /// the given options and ordinal; a window that fails initialization is retired before the exception propagates.
+  /// @param options Validated per-window configuration.
+  /// @param window_ordinal Creation order among this Runtime's windows; zero is the initial window.
+  /// @return An initialized platform window owned by this Runtime until retirement.
+  /// The default implementation reports that the host does not support runtime window creation; desktop platforms
+  /// override it, while mobile and embedded hosts leave it unsupported.
+  virtual std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options, std::uint32_t window_ordinal);
   /// Notifies the native host after RequestShutdown has retired shared state.
   /// Runs on the application thread. The host may now stop its event loop and release native application facilities;
   /// the callback must not attempt to resume shared application or window work.
@@ -622,6 +644,15 @@ public:
   /// @return A handle whose Show/Schedule calls resolve text using the calling context's current resource
   /// configuration.
   [[nodiscard]] LocalNotificationHandle LocalNotifications() const;
+  /// Creates one additional native window attached to this application.
+  /// @param options Per-window configuration; WindowOptions::key selects content through the window environment
+  /// identity.
+  /// @return A handle controlling only the new window; its commands become harmless after that window retires.
+  /// Call on the application thread. A captured ApplicationHandle keeps this usable outside composition while the
+  /// application runs.
+  /// @throws std::logic_error If the application is not running, the service is disconnected, or the host does not
+  /// support runtime window creation.
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options) const;
   /// Queries current platform authorization without presenting system UI.
   /// @param permission Permission capability to query; validation occurs before returning the lazy Task.
   /// @return A Task resolving to current authorization or Unavailable when unsupported/disconnected.
@@ -901,11 +932,16 @@ protected:
   bool IsInitialized() const noexcept;
   /// Installs this native attachment once after its derived facilities are ready.
   /// @param application Already initialized Runtime on whose application thread this window will operate.
+  /// @param window_options This window's own configuration, validated here; AppOptions::window is only the initial
+  /// window's default.
+  /// @param window_ordinal Creation order among the application's windows, exposed through the window environment
+  /// identity; zero is the initial window.
   /// @param configuration Optional per-window resource overrides; absence uses application defaults.
   /// @param initial_lifecycle Initial native foreground state, visible to WindowHook before first composition.
   /// Runs window_hooks, installs shared UI services, then admits native input. Failure retires partial UI state.
   /// @throws std::logic_error If initialized twice, the application is not running, or the calling thread differs.
-  void InitializeWindow(Runtime& application, std::optional<ResourceConfiguration> configuration = std::nullopt,
+  void InitializeWindow(Runtime& application, const WindowOptions& window_options, std::uint32_t window_ordinal,
+                        std::optional<ResourceConfiguration> configuration = std::nullopt,
                         WindowLifecycleState initial_lifecycle = WindowLifecycleState::Background);
   /// Idempotently tears down the mounted UI before the native attachment releases its facilities.
   /// Runs on the application thread, clears the window identity, retires component work and window services, and leaves

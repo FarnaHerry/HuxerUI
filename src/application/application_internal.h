@@ -150,6 +150,10 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   std::vector<std::weak_ptr<HttpOperationState>> http_operations;
   std::shared_ptr<TaskScopeState> tasks;
   std::vector<std::weak_ptr<UiExecutionState>> uis;
+  /// Native windows created through Runtime::OpenWindow, owned until retirement clears them before services.
+  std::vector<std::unique_ptr<UiWindow>> windows;
+  /// Next creation order assigned to a window; zero is the initial window.
+  std::uint32_t next_window_ordinal = 0;
   std::vector<std::function<void()>> handler_cleanups;
   bool event_dispatch_pending = false;
   bool hosted = false;
@@ -295,6 +299,7 @@ public:
   [[nodiscard]] const std::shared_ptr<SystemTrayService>& SystemTray() const noexcept;
   [[nodiscard]] const std::shared_ptr<huxerui::Clipboard>& Clipboard() const noexcept;
   [[nodiscard]] const AppDirectories& Directories() const;
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options) const;
   void Quit() const;
   void Enqueue(ApplicationActivation activation);
   void UpdateLifecycleState(ApplicationLifecycleState lifecycle_state);

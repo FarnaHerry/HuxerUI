@@ -29,19 +29,19 @@ The table is append-only from the application side: windows leave the table by r
 ```cpp
 class Runtime {
  public:
-  [[nodiscard]] WindowHandle CreateWindow(const WindowOptions& options);
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options);
  protected:
-  virtual std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options) = 0;
+  virtual std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options, std::uint32_t window_ordinal);
 };
 ```
 
-`Runtime::CreateWindow` is the single public creation path.
+`Runtime::OpenWindow` is the single public creation path.
 It validates on the application thread that the Runtime is running, assigns the next window ordinal, asks the platform subclass for one native window, registers it, and returns its `WindowHandle`.
 The platform virtual constructs the platform `UiWindow`, creates the native window, and calls `UiWindow::InitializeWindow` with the per-window options; creation failures retire the partial window and propagate.
 
-`ApplicationHandle::CreateWindow(const WindowOptions&)` forwards to `Runtime::CreateWindow` on the application thread and exists so a captured `ApplicationHandle` can open windows outside composition, matching the existing handle contract.
+`ApplicationHandle::OpenWindow(const WindowOptions&)` forwards to `Runtime::OpenWindow` on the application thread and exists so a captured `ApplicationHandle` can open windows outside composition, matching the existing handle contract.
 
-The platform application entry creates the initial window by calling `Runtime::CreateWindow` with `AppOptions::window` instead of constructing its platform window inline, so startup and runtime windows share one path.
+The platform application entry creates the initial window by calling `Runtime::OpenWindow` with `AppOptions::window` instead of constructing its platform window inline, so startup and runtime windows share one path.
 `AppOptions::extra_windows` lists additional windows opened in declaration order immediately after the Runtime starts; an empty list preserves single-window startup.
 
 ## Per-window options and content selection
@@ -70,11 +70,10 @@ The root factory selects content by reading `UseEnvironment<WindowIdentity>()` d
 
 ## Platform mapping
 
-- Windows creates one top-level HWND per `WindowsUiWindow`; the window procedure already routes by per-window instance data.
-- Linux runs one shared `GMainContext` iteration for the process, owned by the Runtime entry rather than by the first window, and presents each additional `GtkWindow` as it is attached.
-- macOS resolves its application delegate callbacks from the NSWindow that originated them, so one delegate serves every attached `MacUiWindow`.
-- Web already mounts one composition root and session per host element; runtime creation exposes a second session instead of a second in-page root.
-- Android and iOS ignore `CreateWindow`; their attachments remain platform-driven.
+- Windows creates one top-level HWND per `WindowsUiWindow` through one shared message loop owned by `WindowsRuntime`; the window procedure routes by per-window instance data. The initial window requests application shutdown when closed, matching historical single-window behavior; windows opened later retire independently.
+- Linux, macOS, Web, Android, and iOS do not override `CreateNativeWindow` in this revision, so `OpenWindow` reports that the host does not support runtime window creation; their platform-driven attachments are unchanged.
+- Desktop follow-up ports move the Linux `GMainContext` iteration and the macOS application-delegate routing to their Runtime owners and override `CreateNativeWindow` there, using the same ownership contract as Windows.
+- Android and iOS keep platform-driven attachments permanently; their multi-window surface remains scene- and activity-based.
 
 ## Shutdown and failure
 

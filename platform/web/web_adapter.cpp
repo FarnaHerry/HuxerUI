@@ -996,7 +996,8 @@ public:
       : session_id_(session_id), renderer_(session_id, canvas), configuration_(configuration),
         text_input_(session_id), host_(std::move(host)), root_(std::move(root)), base_canvas_(std::move(canvas)) {
     try {
-      InitializeWindow(*WebApplication(), configuration, static_cast<WindowLifecycleState>(BrowserLifecycleState()));
+      InitializeWindow(*WebApplication(), CurrentApplication().options.window, 0, configuration,
+                       static_cast<WindowLifecycleState>(BrowserLifecycleState()));
       text_input_.SetUiWindow(this);
       platform_views_ = std::make_unique<WebPlatformViews>(renderer_, PlatformRegistry(), *this, root_, base_canvas_);
     } catch (...) {

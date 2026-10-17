@@ -521,7 +521,7 @@ public:
       window_.contentView = view_;
       auto configuration = application_runtime.Configuration();
       if (window_.screen != nil) configuration.display_scale = static_cast<float>(window_.screen.backingScaleFactor);
-      InitializeWindow(application_runtime, configuration);
+      InitializeWindow(application_runtime, options, 0, configuration);
       view_->huxeruiWindow = this;
       [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
       [NSNotificationCenter.defaultCenter addObserver:view_

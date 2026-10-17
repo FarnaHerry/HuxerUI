@@ -367,6 +367,31 @@ bool Runtime::IsInitialized() const noexcept {
   return state_ && state_->phase == ApplicationRuntimeState::Phase::Running;
 }
 
+WindowHandle Runtime::OpenWindow(const WindowOptions& options) {
+  if (!state_) {
+    throw std::logic_error("HuxerUI cannot create a window before the application is initialized");
+  }
+  state_->RequireThread();
+  if (state_->phase != ApplicationRuntimeState::Phase::Running) {
+    throw std::logic_error("HuxerUI cannot create a window while the application is not running");
+  }
+  const std::uint32_t ordinal = state_->next_window_ordinal++;
+  std::unique_ptr<UiWindow> window = CreateNativeWindow(options, ordinal);
+  if (!window || !window->IsInitialized()) {
+    throw std::logic_error("HuxerUI host did not return an initialized window");
+  }
+  const std::shared_ptr<detail::WindowService> service = detail::InternalAccess::WindowServiceOf(*window);
+  if (!service) {
+    throw std::logic_error("HuxerUI host returned a window without its window service");
+  }
+  state_->windows.push_back(std::move(window));
+  return detail::MakeWindowHandle(std::move(service));
+}
+
+std::unique_ptr<UiWindow> Runtime::CreateNativeWindow(const WindowOptions&, std::uint32_t) {
+  throw std::logic_error("HuxerUI host does not support runtime window creation");
+}
+
 void Runtime::RequestShutdown() {
   state_->RequireThread();
   if (state_->phase == ApplicationRuntimeState::Phase::Stopping ||
@@ -401,6 +426,7 @@ void Runtime::Retire() noexcept {
       ui->ui_window->Retire();
     }
   }
+  state_->windows.clear();
   CloseTaskScope(state_->tasks);
   DisconnectHttpOperations(*state_);
   for (auto cleanup = state_->handler_cleanups.rbegin(); cleanup != state_->handler_cleanups.rend(); ++cleanup) {

@@ -665,7 +665,7 @@ public:
       CreateWindow(options, initial_size);
       auto configuration = application.Resources()->Configuration();
       configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
-      InitializeWindow(application, configuration);
+      InitializeWindow(application, options, 0, configuration);
       text_input_.SetUiWindow(this);
       platform_views_ = std::make_unique<LinuxPlatformViews>(drawing_area_, renderer_, PlatformRegistry(), *this);
       platform_views_->SetFocusChangedHandler([this](bool focused) {

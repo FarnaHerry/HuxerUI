@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -21,8 +22,13 @@
 namespace huxerui {
 
 class UiWindow;
+class WindowHandle;
 
 namespace detail {
+class WindowService;
+/// Creates a public window handle for an initialized window's service.
+/// Framework use only; applications obtain handles through UseWindow() or ApplicationHandle::OpenWindow().
+[[nodiscard]] WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service);
 /// Rejects a window service key already owned by the application's service table.
 /// @param type Exact C++ key about to be installed by WindowContext::Provide.
 void ValidateRootServiceType(std::type_index type);
@@ -197,6 +203,10 @@ struct WindowOptions {
   /// The top-level window or surface title. Platforms without an application-owned title may ignore it.
   std::string title = "HuxerUI";
 
+  /// Stable application-defined identity of this window's content. Empty selects the default root content;
+  /// distinct keys let one root factory render different content per window through UseEnvironment<WindowIdentity>().
+  std::string key{};
+
   /// The preferred initial logical client size.
   Size initial_size = {520.0F, 360.0F};
 
@@ -218,6 +228,23 @@ struct WindowOptions {
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;
+};
+
+/// Identifies one attached window within its application, seeded into each root composition's Environment.
+/// Read it during composition with UseEnvironment<WindowIdentity>() to select content for the calling window.
+struct WindowIdentity {
+  /// WindowOptions::key of this window; empty unless the application set one.
+  std::string key{};
+
+  /// Creation order among this Runtime's windows; zero is the initial window.
+  std::uint32_t ordinal = 0;
+
+  static WindowIdentity Default() {
+    return {};
+  }
+
+  /// Compares both identity fields exactly.
+  bool operator==(const WindowIdentity&) const = default;
 };
 
 /// Current platform-submitted window geometry in logical units.
@@ -464,6 +491,7 @@ private:
   std::shared_ptr<detail::WindowService> service_;
 
   friend WindowHandle UseWindow();
+  friend WindowHandle detail::MakeWindowHandle(std::shared_ptr<detail::WindowService> service);
 };
 
 /// Returns a handle for the UiWindow in the current composition or captured window callback context.

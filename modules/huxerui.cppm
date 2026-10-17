@@ -583,6 +583,7 @@ export namespace huxerui {
     using huxerui::WindowDragRegion;
     using huxerui::WindowHandle;
     using huxerui::WindowHook;
+    using huxerui::WindowIdentity;
     using huxerui::WindowLifecycleState;
     using huxerui::WindowMetrics;
     using huxerui::WindowOptions;

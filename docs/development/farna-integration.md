@@ -105,10 +105,10 @@ it is a straight port of the patch llm-switch CI already applies and validates o
 ## Multi-window development
 
 The downstream-only multi-window extension is developed on the `feat/multi-window` branch from this integration.
-[docs/design/multi-window.md](../design/multi-window.md) records its ownership contract: `Runtime::CreateWindow`
+[docs/design/multi-window.md](../design/multi-window.md) records its ownership contract: `Runtime::OpenWindow`
 with a platform `CreateNativeWindow` virtual, per-window `WindowOptions` through `UiWindow::InitializeWindow`,
 a seeded `WindowIdentity` Environment value for content selection, and `AppOptions::extra_windows` for the initial set.
-Android and iOS remain platform-driven attachments and ignore runtime window creation.
+Android and iOS remain platform-driven attachments and do not support runtime window creation.
 The branch keeps single-window behavior unchanged; the initial window uses the same creation path as runtime windows.
-Windows is the only host built and tested during development; the Linux, macOS, and Web adapter ports are code-complete
-but unverified until their hosts run them.
+Only the Windows adapter overrides `CreateNativeWindow` in this revision; Linux, macOS, and Web keep the unsupported
+default until their hosts can build and verify the port. Windows is the only host built and tested during development.
