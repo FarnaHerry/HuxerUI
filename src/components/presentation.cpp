@@ -15,6 +15,7 @@
 
 #include "huxerui_builtin_resources.h"
 #include "internal_access.h"
+#include "graphics/effects_internal.h"
 #include "runtime/ui_window_internal.h"
 #include "resources/resource_internal.h"
 #include "tooltip_internal.h"
@@ -800,6 +801,9 @@ void ValidateDialogStyle(const DialogStyle& style) {
         "extents"
     );
   }
+  if (style.backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.backdrop_effect);
+  }
 }
 
 std::shared_ptr<detail::LayerTransitionState> BottomSheetTransition(const BottomSheetStyle& style) {
@@ -1218,6 +1222,9 @@ void ValidateMenuStyle(const MenuStyle& style) {
       (style.motion.has_value() && !ValidMotion(*style.motion))) {
     throw std::invalid_argument("HuxerUI menu geometry, shadow, and motion must be finite and non-negative");
   }
+  if (style.backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.backdrop_effect);
+  }
 }
 
 class DebugOverlayLayout final : public Layout<DebugOverlayLayout> {
@@ -1513,14 +1520,17 @@ struct LayerAnchorState : std::enable_shared_from_this<LayerAnchorState> {
   explicit LayerAnchorState(LayerController controller) : layers(std::move(controller)) {}
 
   void Mount(std::uint64_t identity) {
-    if (mounted) {
-      throw std::logic_error("HuxerUI presentation anchor must be mounted on only one View");
-    }
+    // Structural recomposition (responsive breakpoint crossing, layout swaps)
+    // builds the replacement node before the previous node is destroyed, and
+    // composition-hook state (UsePopup/UseMenu handles) outlives the swap.
+    // The anchor therefore TRANSFERS to the new node instead of aborting the
+    // runtime; the stale node's UnmountNode(identity) becomes a no-op.
     mounted_identity = identity;
     mounted = true;
   }
 
-  void Unmount() {
+  void UnmountNode(std::uint64_t identity) {
+    if (!mounted || mounted_identity != identity) return;
     mounted = false;
     mounted_identity.reset();
     node_bounds.reset();
@@ -2072,6 +2082,9 @@ View MenuService::Surface(
       style.shadow,
       detail::BuiltInSemantics{MenuContainerSemantics(item_count)}
   );
+  if (style.backdrop_effect) {
+    result = std::move(result).With(BackdropFilter{*style.backdrop_effect});
+  }
   if (request_dismiss) {
     result = std::move(result).With(DismissAction{std::move(request_dismiss)});
   }
@@ -2180,7 +2193,7 @@ View DialogService::StandardContent(
   Frame surface_frame;
   surface_frame.min_width = style.minimum_width;
   surface_frame.max_width = style.maximum_width;
-  return Column {
+  View result = Column {
     std::move(body),
     std::move(actions),
   }.With(
@@ -2192,6 +2205,10 @@ View DialogService::StandardContent(
       CornerRadius{style.corner_radii},
       style.shadow
   );
+  if (style.backdrop_effect) {
+    result = std::move(result).With(BackdropFilter{*style.backdrop_effect});
+  }
+  return result;
 }
 
 class LayerAnchorExtension final : public NodeExtension {
@@ -2201,25 +2218,27 @@ public:
   }
 
   ~LayerAnchorExtension() override {
-    if (state_) {
+    if (state_ && node_identity.has_value()) {
       try {
-        state_->Unmount();
+        state_->UnmountNode(*node_identity);
       } catch (...) {
       }
     }
   }
 
   void Update(huxerui::ViewNode& node, const LayerAnchor& modifier) {
-    static_cast<void>(node);
+    const auto identity = static_cast<const detail::MountedNode&>(node).identity;
     if (state_ == modifier.state_) {
+      node_identity = identity;
       return;
     }
-    if (state_) {
-      state_->Unmount();
+    if (state_ && node_identity.has_value()) {
+      state_->UnmountNode(*node_identity);
     }
     state_ = modifier.state_;
+    node_identity = identity;
     if (state_) {
-      state_->Mount(static_cast<const detail::MountedNode&>(node).identity);
+      state_->Mount(identity);
     }
   }
 
@@ -2233,6 +2252,7 @@ public:
 
 private:
   std::shared_ptr<LayerAnchorState> state_;
+  std::optional<std::uint64_t> node_identity;
 };
 
 class DebugOverlayInstaller {
