@@ -26,6 +26,7 @@ They explain the current implementation and deliberately unsupported behavior, w
 - [Pager](pager.md): controlled animated and directly draggable paging across retained peer pages.
 - [Window Insets and System Bars](window-insets.md): safe area, edge-to-edge content, and system-bar appearance.
 - [Window Chrome](window-chrome.md): system and custom desktop chrome.
+- [Multi-Window](multi-window.md): runtime window creation, per-window content selection, and shared-Runtime ownership.
 - [System Tray and Window Visibility](system-tray.md): tray presentation, window request handling, visibility, and application termination.
 - [Application Permissions](permissions.md): typed authorization, Task delivery, native policy, and platform mapping.
 - [Local Notifications](local-notifications.md): shared authorization, presentation, scheduling, activation, and target platform boundaries.
