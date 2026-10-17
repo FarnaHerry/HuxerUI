@@ -28,11 +28,13 @@ MSVC Release, full build with examples and tests enabled.
 | Codegen suites and header checks | Built clean |
 
 The focused multi-window filter is `"MultiWindow*,RuntimeOpenWindow*,RetiringOneWindow*,ApplicationHandleOpenWindow*"` against `huxerui_runtime_tests`.
+A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice and checks that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
 The interactive demo is `example_multi_window`: the primary window opens a secondary one at runtime, both windows share one counter service, and each window keeps its own local state.
 
 ## Behavioral notes
 
 - Closing the initial window requests whole-application shutdown, preserving historical single-window behavior on every platform. Closing a runtime-opened window retires only that window.
+- A forwarded single-instance activation (URL or file) targets the visible initial window first, then the foreground window of the application class, then any visible window, so the surfaced target stays predictable while extra windows are open.
 - `WindowIdentity::ordinal` is assigned by `Runtime::OpenWindow`; callers that attach windows directly through `UiWindow::InitializeWindow` (embedded hosts and windowless tests) supply their own ordinal and are responsible for keeping it distinct.
 - Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the committed damage snapshot, and the native resources of hosts that override `CreateNativeWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`.
 - Closing a Windows window frees object memory immediately; the graphics driver returns the remaining working set asynchronously. This looks like a partial drop in Task Manager and is expected. If retention is ever suspected again, compare "Commit size" across repeated open/close cycles and use `EmptyWorkingSet` to prove that no object pins the memory before investigating further.

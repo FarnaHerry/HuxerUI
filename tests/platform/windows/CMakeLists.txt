@@ -14,6 +14,7 @@ target_sources(huxerui_windows_tests PRIVATE
         external_texture.cpp
         file.cpp
         http.cpp
+        multi_window_native.cpp
         platform_module.cpp
         platform_view.cpp
         renderer.cpp
