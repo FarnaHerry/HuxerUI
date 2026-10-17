@@ -35,6 +35,7 @@ The interactive demo is `example_multi_window`: the primary window opens a secon
 
 - Closing the initial window requests whole-application shutdown, preserving historical single-window behavior on every platform. Closing a runtime-opened window retires only that window.
 - A forwarded single-instance activation (URL or file) targets the visible initial window first, then the foreground window of the application class, then any visible window, so the surfaced target stays predictable while extra windows are open.
+- Tray hibernation is an application policy, not a framework switch: applications intercept minimize through `WindowHandle::OnMinimizeRequest`, then either `Hide()` (window stays alive) or retire the window to release the mounted tree and native resources, and reopen it from `SystemTrayHandle::OnActivate` with application services surviving on the Runtime. The framework mechanism still missing for the retiring path is a public per-window retirement operation for the initial window; today only runtime-opened windows can retire without whole-application shutdown. Track that primitive before recommending hibernation in application documentation.
 - `WindowIdentity::ordinal` is assigned by `Runtime::OpenWindow`; callers that attach windows directly through `UiWindow::InitializeWindow` (embedded hosts and windowless tests) supply their own ordinal and are responsible for keeping it distinct.
 - Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the committed damage snapshot, and the native resources of hosts that override `CreateNativeWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`.
 - Closing a Windows window frees object memory immediately; the graphics driver returns the remaining working set asynchronously. This looks like a partial drop in Task Manager and is expected. If retention is ever suspected again, compare "Commit size" across repeated open/close cycles and use `EmptyWorkingSet` to prove that no object pins the memory before investigating further.
@@ -53,8 +54,8 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 
 Concrete anchors on the unported adapters:
 
-- Linux: `LinuxUiWindow::Run` in `platform/linux/linux_adapter.cpp` still creates its `GtkWindow` and runs `g_main_context_iteration` inline; the loop condition is the single window's `running_` flag.
-- macOS: `MacUiWindow::Run` in `platform/macos/appkit_adapter.mm` stores itself on the application delegate's single `huxeruiWindow` pointer, and delegate callbacks such as `windowShouldClose:` assume one window.
+- Linux: `LinuxUiWindow::Run` in `platform/linux/linux_adapter.cpp` still creates its `GtkWindow` and runs `g_main_context_iteration` inline; the loop condition is the single window's `running_` flag. Ownership and modality virtuals are implemented through `gtk_window_set_transient_for` and `gtk_window_set_modal`, but the close path still shuts the application down until runtime window creation lands.
+- macOS: `MacUiWindow::Run` in `platform/macos/appkit_adapter.mm` stores itself on the application delegate's single `huxeruiWindow` pointer, and delegate callbacks such as `windowShouldClose:` assume one window. Ownership uses `addChildWindow:ordered:`, and blocked windows refuse key status through the `HuxerUIWindow (ModalInputGate)` category; both are unverified on a macOS host.
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest

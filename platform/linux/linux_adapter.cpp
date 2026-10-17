@@ -747,6 +747,22 @@ public:
     return CreateLinuxFilePickerTransport([this] { return X11WindowId(); });
   }
 
+  void ApplyWindowOwnership(UiWindow* owner) override {
+    if (window_ == nullptr) {
+      return;
+    }
+    GtkWindow* owner_window = owner != nullptr ? static_cast<LinuxUiWindow*>(owner)->window_ : nullptr;
+    gtk_window_set_transient_for(window_, owner_window);
+  }
+
+  void ApplyWindowModalState(bool modal, bool blocked) override {
+    static_cast<void>(blocked);
+    if (window_ == nullptr) {
+      return;
+    }
+    gtk_window_set_modal(window_, modal ? TRUE : FALSE);
+  }
+
   void RequestWindowCommand(WindowCommand command) override {
     if (window_ == nullptr) {
       return;
