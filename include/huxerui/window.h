@@ -29,6 +29,9 @@ class WindowService;
 /// Creates a public window handle for an initialized window's service.
 /// Framework use only; applications obtain handles through UseWindow() or ApplicationHandle::OpenWindow().
 [[nodiscard]] WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service);
+/// Borrows the service behind a public window handle for framework relationship resolution.
+/// Framework use only; applications never need the service object.
+[[nodiscard]] std::shared_ptr<WindowService> WindowServiceFor(const WindowHandle& handle) noexcept;
 /// Rejects a window service key already owned by the application's service table.
 /// @param type Exact C++ key about to be installed by WindowContext::Provide.
 void ValidateRootServiceType(std::type_index type);
@@ -492,7 +495,27 @@ private:
 
   friend WindowHandle UseWindow();
   friend WindowHandle detail::MakeWindowHandle(std::shared_ptr<detail::WindowService> service);
+  friend std::shared_ptr<detail::WindowService> detail::WindowServiceFor(const WindowHandle& handle) noexcept;
 };
+
+/// Describes how one window relates to the rest of the application: which window owns it and whether it blocks
+/// user input. A modal window with no owner is application-modal and blocks every other window.
+struct WindowRelationship {
+  /// The window that owns the target. The owned window stays ordered above its owner and retires with it.
+  std::optional<WindowHandle> owner{};
+
+  /// Whether the window blocks user input to the windows its relationship covers.
+  bool modal = false;
+};
+
+/// Changes one window's ownership and modality. The platform applies the native relationship; blocked windows
+/// stop receiving user input until every modal window covering them retires. No nested event loop is introduced.
+/// @param window Live window whose relationship changes; an empty owner with modal set blocks the whole
+/// application.
+/// Call on the application thread. Captured handles keep this usable while the windows are alive.
+/// @throws std::invalid_argument If the relationship would make the window own itself or create an owner cycle.
+/// @throws std::logic_error If the target or the requested owner has already retired.
+void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship);
 
 /// Returns a handle for the UiWindow in the current composition or captured window callback context.
 /// @return A handle retaining that window's service, without extending the native window's lifetime.

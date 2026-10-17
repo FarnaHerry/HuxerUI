@@ -186,6 +186,7 @@ class SemanticTree;
 class SystemTrayService;
 class TaskScopeState;
 class TextInteraction;
+class WindowService;
 struct ApplicationRuntimeState;
 struct InternalAccess;
 } // namespace detail
@@ -469,6 +470,34 @@ public:
   /// @throws std::logic_error If called before the application runs, from another thread, after shutdown begins, or
   /// when the host does not support runtime window creation.
   [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options);
+  /// Creates one additional native window with an ownership/modality relationship applied at creation.
+  /// @param options Per-window configuration validated before creation.
+  /// @param relationship Owner and modality applied to the new window after the platform creates it.
+  /// @return A handle for the new window, valid until that window retires; harmless after retirement.
+  /// Call on the application thread while the application is running.
+  /// @throws std::invalid_argument If the platform rejects the configuration or the relationship is cyclic.
+  /// @throws std::logic_error If called before the application runs, from another thread, after shutdown begins, or
+  /// when the host does not support runtime window creation.
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options, const WindowRelationship& relationship);
+  /// Applies a new ownership/modality relationship to one live window.
+  /// Runtime validation rejects self-ownership and owner cycles before any native change; the platform then
+  /// receives the ownership and the derived per-window blocked state.
+  /// Framework entry used by WindowHandle::SetWindowRelationship; applications use the free function.
+  /// @param target Window service of the live target window.
+  /// @param owner Service of the new owner window, or null for an independent window.
+  /// @param modal Whether the window blocks user input to the windows its relationship covers.
+  /// Call on the application thread.
+  /// @throws std::invalid_argument If the relationship would make the window own itself or create an owner cycle.
+  /// @throws std::logic_error If the target or the requested owner has already retired.
+  void SetRelationship(
+      detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner, bool modal
+  );
+  /// Retires every window owned by the given window, deepest chain first, then leaves the window itself to its
+  /// normal retirement path. Platform adapters call this before destroying a window through a user close so owned
+  /// transients and dialogs disappear with their owner; application shutdown retires all windows without it.
+  /// @param owner Live window whose owned subtree retires now.
+  /// Call on the application thread.
+  void RetireOwned(UiWindow& owner);
   /// Returns the monotonic clock used for this Runtime's ordinary timer deadlines.
   /// @return A steady-clock time point in the same clock domain accepted by ScheduleTimerAt.
   /// Native subclasses and deterministic test hosts must keep their clock and scheduling implementation consistent.
@@ -566,6 +595,20 @@ private:
   void FinishShutdown();
   /// Idempotently closes the ordinary timer queue before its dispatcher or native owner can disappear.
   void CloseTimers() noexcept;
+  /// Resolves one window service to its live UiWindow through the attached-window registry, or null when retired.
+  [[nodiscard]] UiWindow* WindowForService(const detail::WindowService& service) const;
+  /// Resolves one window service to its live UiWindow and throws when the window has retired.
+  [[nodiscard]] UiWindow* RequireLiveWindow(const detail::WindowService& service) const;
+  /// Collects every live attached window from the weak registry.
+  [[nodiscard]] std::vector<UiWindow*> LiveWindows() const;
+  /// Collects the owned subtree of one window through the relationship registry in deterministic depth-first order.
+  [[nodiscard]] std::vector<UiWindow*> OwnedSubtree(UiWindow& root, bool include_root) const;
+  /// Applies an already-validated relationship to the registry and the target's native ownership.
+  void ApplyWindowRelationship(detail::WindowService& target, detail::WindowService* owner, bool modal);
+  /// Removes one window from every relationship edge; returns the owner to reactivate when a modal retired.
+  [[nodiscard]] UiWindow* RemoveWindowRelations(UiWindow& window);
+  /// Recomputes modal coverage for every live window, pushes native diffs, and reactivates the given owners.
+  void RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate);
   UiThreadDispatcher application_dispatcher_;
   std::shared_ptr<detail::ApplicationTimerQueue> timers_;
   std::shared_ptr<detail::ApplicationRuntimeState> state_;
@@ -653,6 +696,18 @@ public:
   /// @throws std::logic_error If the application is not running, the service is disconnected, or the host does not
   /// support runtime window creation.
   [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options) const;
+  /// Creates one additional native window with an ownership/modality relationship applied at creation.
+  /// @param options Per-window configuration; WindowOptions::key selects content through the window environment
+  /// identity.
+  /// @param relationship Owner and modality applied to the new window after the platform creates it; an empty owner
+  /// with modal set blocks the whole application.
+  /// @return A handle controlling only the new window; its commands become harmless after that window retires.
+  /// Call on the application thread. A captured ApplicationHandle keeps this usable outside composition while the
+  /// application runs.
+  /// @throws std::invalid_argument If the relationship is cyclic.
+  /// @throws std::logic_error If the application is not running, the service is disconnected, or the host does not
+  /// support runtime window creation.
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const;
   /// Queries current platform authorization without presenting system UI.
   /// @param permission Permission capability to query; validation occurs before returning the lazy Task.
   /// @return A Task resolving to current authorization or Unavailable when unsupported/disconnected.
@@ -801,6 +856,16 @@ public:
   /// window;
   /// native minimize/close callbacks still pass through HandleWindowRequest before applying their default operation.
   virtual void RequestWindowCommand(WindowCommand) {}
+  /// Applies this window's native ownership. The Runtime resolves blocked input state from the relationship
+  /// registry and pushes it through SetWindowModalState; ownership here covers ordering, minimization follow, and
+  /// native cascade only.
+  /// @param owner New owner window of this native attachment, or null for an independent window.
+  /// Called on the application thread. The default ignores the request on hosts without native ownership.
+  virtual void ApplyWindowOwnership(UiWindow* owner) {}
+  /// Applies the derived modal state of this window. A window is modal when its relationship says so and blocked
+  /// while any live modal window covers it; the Runtime computes both and pushes every change.
+  /// Called on the application thread. The default ignores the request on hosts without native modality.
+  virtual void ApplyWindowModalState(bool modal, bool blocked) {}
   /// Updates native system-bar foreground contrast on the application thread.
   /// The first SystemBarContentBrightness argument describes the status bar; the second describes the navigation bar.
   /// The UI paints backgrounds separately. Hosts without these system bars may ignore the request.

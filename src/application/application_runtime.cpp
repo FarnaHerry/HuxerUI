@@ -20,6 +20,7 @@
 #include <huxerui/http.h>
 
 #include "application_internal.h"
+#include "window_internal.h"
 #include "io/http_internal.h"
 #include "resources/resource_internal.h"
 #include "runtime/task_internal.h"
@@ -390,6 +391,243 @@ WindowHandle Runtime::OpenWindow(const WindowOptions& options) {
 
 std::unique_ptr<UiWindow> Runtime::CreateNativeWindow(const WindowOptions&, std::uint32_t) {
   throw std::logic_error("HuxerUI host does not support runtime window creation");
+}
+
+WindowHandle Runtime::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) {
+  const std::shared_ptr<detail::WindowService> owner_service =
+      relationship.owner.has_value() ? detail::WindowServiceFor(*relationship.owner) : nullptr;
+  if (owner_service != nullptr) {
+    static_cast<void>(RequireLiveWindow(*owner_service));
+  }
+  WindowHandle handle = OpenWindow(options);
+  ApplyWindowRelationship(*detail::WindowServiceFor(handle), owner_service.get(), relationship.modal);
+  RebuildWindowBlocking({});
+  return handle;
+}
+
+void Runtime::SetRelationship(detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner_service,
+                              bool modal) {
+  if (!state_) {
+    throw std::logic_error("HuxerUI cannot change a window relationship before the application is initialized");
+  }
+  state_->RequireThread();
+  if (state_->phase != ApplicationRuntimeState::Phase::Running) {
+    throw std::logic_error("HuxerUI cannot change a window relationship while the application is not running");
+  }
+  UiWindow* const target_window = RequireLiveWindow(target);
+  UiWindow* owner = nullptr;
+  if (owner_service != nullptr) {
+    if (owner_service.get() == &target) {
+      throw std::invalid_argument("HuxerUI window cannot own itself");
+    }
+    owner = RequireLiveWindow(*owner_service);
+    for (UiWindow* cursor = owner; cursor != nullptr;) {
+      if (cursor == target_window) {
+        throw std::invalid_argument("HuxerUI window relationship would create an owner cycle");
+      }
+      const auto relation = state_->window_relations.find(cursor);
+      if (relation == state_->window_relations.end() || relation->second.first == nullptr) {
+        break;
+      }
+      cursor = relation->second.first;
+    }
+  }
+  ApplyWindowRelationship(target, owner_service.get(), modal);
+  RebuildWindowBlocking({});
+}
+
+void Runtime::RetireOwned(UiWindow& owner) {
+  if (!state_) {
+    return;
+  }
+  state_->RequireThread();
+  std::vector<UiWindow*> retiring;
+  const std::function<void(UiWindow*)> collect = [&](UiWindow* window) {
+    const auto edges = state_->owned_window_edges.find(window);
+    if (edges == state_->owned_window_edges.end()) {
+      return;
+    }
+    for (UiWindow* child : edges->second) {
+      if (child == nullptr || !child->IsInitialized()) {
+        continue;
+      }
+      collect(child);
+      retiring.push_back(child);
+    }
+  };
+  collect(&owner);
+  std::vector<UiWindow*> reactivate;
+  for (UiWindow* window : retiring) {
+    if (UiWindow* activation = RemoveWindowRelations(*window); activation != nullptr) {
+      reactivate.push_back(activation);
+    }
+    window->Retire();
+  }
+  if (UiWindow* activation = RemoveWindowRelations(owner); activation != nullptr) {
+    reactivate.push_back(activation);
+  }
+  RebuildWindowBlocking(reactivate);
+}
+
+UiWindow* Runtime::WindowForService(const detail::WindowService& service) const {
+  if (!state_) {
+    return nullptr;
+  }
+  std::erase_if(state_->uis, [](const auto& weak) {
+    const auto ui = weak.lock();
+    return !ui || !ui->ui_window;
+  });
+  for (const auto& weak : state_->uis) {
+    if (const auto ui = weak.lock(); ui && ui->ui_window) {
+      if (detail::InternalAccess::WindowServiceOf(*ui->ui_window).get() == &service) {
+        return ui->ui_window;
+      }
+    }
+  }
+  return nullptr;
+}
+
+UiWindow* Runtime::RequireLiveWindow(const detail::WindowService& service) const {
+  UiWindow* const window = WindowForService(service);
+  if (window == nullptr) {
+    throw std::logic_error("HuxerUI window has retired");
+  }
+  return window;
+}
+
+std::vector<UiWindow*> Runtime::LiveWindows() const {
+  std::vector<UiWindow*> live;
+  if (!state_) {
+    return live;
+  }
+  for (const auto& weak : state_->uis) {
+    if (const auto ui = weak.lock(); ui && ui->ui_window) {
+      live.push_back(ui->ui_window);
+    }
+  }
+  return live;
+}
+
+std::vector<UiWindow*> Runtime::OwnedSubtree(UiWindow& root, bool include_root) const {
+  std::vector<UiWindow*> result;
+  if (include_root) {
+    result.push_back(&root);
+  }
+  const std::function<void(UiWindow*)> walk = [&](UiWindow* window) {
+    const auto edges = state_->owned_window_edges.find(window);
+    if (edges == state_->owned_window_edges.end()) {
+      return;
+    }
+    for (UiWindow* child : edges->second) {
+      result.push_back(child);
+      walk(child);
+    }
+  };
+  walk(&root);
+  return result;
+}
+
+void Runtime::ApplyWindowRelationship(detail::WindowService& target, detail::WindowService* owner_service, bool modal) {
+  UiWindow* const target_window = RequireLiveWindow(target);
+  UiWindow* const owner = owner_service != nullptr ? RequireLiveWindow(*owner_service) : nullptr;
+  const auto previous = state_->window_relations.find(target_window);
+  if (previous != state_->window_relations.end()) {
+    UiWindow* const previous_owner = previous->second.first;
+    if (previous_owner != nullptr && previous_owner != owner) {
+      auto& edges = state_->owned_window_edges[previous_owner];
+      std::erase(edges, target_window);
+      if (edges.empty()) {
+        state_->owned_window_edges.erase(previous_owner);
+      }
+    }
+  }
+  state_->window_relations[target_window] = {owner, modal};
+  if (owner != nullptr) {
+    auto& edges = state_->owned_window_edges[owner];
+    if (std::find(edges.begin(), edges.end(), target_window) == edges.end()) {
+      edges.push_back(target_window);
+    }
+  }
+  target_window->ApplyWindowOwnership(owner);
+}
+
+UiWindow* Runtime::RemoveWindowRelations(UiWindow& window) {
+  state_->window_blocked_state.erase(&window);
+  const auto relation = state_->window_relations.find(&window);
+  if (relation == state_->window_relations.end()) {
+    state_->owned_window_edges.erase(&window);
+    return nullptr;
+  }
+  UiWindow* const owner = relation->second.first;
+  const bool modal = relation->second.second;
+  if (owner != nullptr) {
+    auto& edges = state_->owned_window_edges[owner];
+    std::erase(edges, &window);
+    if (edges.empty()) {
+      state_->owned_window_edges.erase(owner);
+    }
+  }
+  state_->window_relations.erase(relation);
+  state_->owned_window_edges.erase(&window);
+  if (modal && owner != nullptr && owner->IsInitialized()) {
+    return owner;
+  }
+  return nullptr;
+}
+
+void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
+  const std::vector<UiWindow*> live = LiveWindows();
+  std::vector<UiWindow*> modals;
+  for (UiWindow* window : live) {
+    const auto relation = state_->window_relations.find(window);
+    if (relation != state_->window_relations.end() && relation->second.second) {
+      modals.push_back(window);
+    }
+  }
+  const auto contains = [](const std::vector<UiWindow*>& windows, const UiWindow* needle) {
+    return std::find(windows.begin(), windows.end(), needle) != windows.end();
+  };
+  for (UiWindow* window : live) {
+    const auto relation = state_->window_relations.find(window);
+    const bool modal = relation != state_->window_relations.end() && relation->second.second;
+    bool blocked = false;
+    for (UiWindow* covering : modals) {
+      if (covering == window) {
+        continue;
+      }
+      const auto covering_relation = state_->window_relations.find(covering);
+      const UiWindow* const covering_owner =
+          covering_relation != state_->window_relations.end() ? covering_relation->second.first : nullptr;
+      const std::vector<UiWindow*> excluded = OwnedSubtree(*covering, true);
+      if (contains(excluded, window)) {
+        continue;
+      }
+      if (covering_owner == nullptr) {
+        blocked = true;
+        break;
+      }
+      const std::vector<UiWindow*> covered = OwnedSubtree(const_cast<UiWindow&>(*covering_owner), true);
+      if (contains(covered, window)) {
+        blocked = true;
+        break;
+      }
+    }
+    const auto pushed = state_->window_blocked_state.find(window);
+    const std::pair<bool, bool> state_value{modal, blocked};
+    if (pushed == state_->window_blocked_state.end() || pushed->second != state_value) {
+      window->ApplyWindowModalState(modal, blocked);
+      state_->window_blocked_state[window] = state_value;
+    }
+  }
+  for (UiWindow* owner : reactivate) {
+    if (owner == nullptr || !owner->IsInitialized()) {
+      continue;
+    }
+    const std::shared_ptr<detail::WindowService> service = detail::InternalAccess::WindowServiceOf(*owner);
+    if (service) {
+      service->Request(WindowCommand::Activate);
+    }
+  }
 }
 
 void Runtime::RequestShutdown() {

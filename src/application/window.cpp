@@ -243,6 +243,14 @@ void WindowService::Request(WindowCommand command) {
   ui_window_->RequestWindowCommand(command);
 }
 
+void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal) {
+  const auto state = application_.lock();
+  if (!state || state->owner == nullptr) {
+    throw std::logic_error("HuxerUI application is disconnected");
+  }
+  state->owner->SetRelationship(*this, owner, modal);
+}
+
 bool WindowService::HandleRequest(WindowCommand command) {
   RequestHandler& request = Handler(command);
   if (!request.handler) {
@@ -459,6 +467,16 @@ WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service) {
   return WindowHandle{std::move(service)};
 }
 
+std::shared_ptr<WindowService> WindowServiceFor(const WindowHandle& handle) noexcept {
+  return handle.service_;
+}
+
 } // namespace detail
+
+void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship) {
+  detail::WindowServiceFor(window)->ApplyRelationship(
+      relationship.owner.has_value() ? detail::WindowServiceFor(*relationship.owner) : nullptr, relationship.modal
+  );
+}
 
 } // namespace huxerui

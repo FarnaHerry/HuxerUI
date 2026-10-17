@@ -47,6 +47,12 @@ public:
   explicit WindowService(UiWindow& ui_window);
 
   void Request(WindowCommand command);
+  /// Applies one relationship change resolved by the Runtime after validation.
+  /// @param owner Service of the new owner window, or null for an independent window.
+  /// @param modal Whether the window blocks user input to the windows its relationship covers.
+  /// @throws std::invalid_argument If the relationship is cyclic.
+  /// @throws std::logic_error If the target or owner window has retired.
+  void ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal);
   [[nodiscard]] bool HandleRequest(WindowCommand command);
   [[nodiscard]] std::function<void()>
   ConnectRequest(WindowCommand command, std::function<bool()> handler);

@@ -587,6 +587,7 @@ export namespace huxerui {
     using huxerui::WindowLifecycleState;
     using huxerui::WindowMetrics;
     using huxerui::WindowOptions;
+    using huxerui::WindowRelationship;
     using huxerui::WindowTitleBar;
     using huxerui::WindowTitleBarMetrics;
     using huxerui::WorkerSequence;

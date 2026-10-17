@@ -543,6 +543,13 @@ WindowHandle ApplicationService::OpenWindow(const WindowOptions& options) const 
   return runtime_->OpenWindow(options);
 }
 
+WindowHandle ApplicationService::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const {
+  if (runtime_ == nullptr) {
+    throw std::logic_error("HuxerUI application service is disconnected");
+  }
+  return runtime_->OpenWindow(options, relationship);
+}
+
 void ApplicationService::Enqueue(ApplicationActivation activation) {
   ValidateApplicationActivation(activation);
   if (runtime_ == nullptr) {
@@ -646,6 +653,10 @@ const AppDirectories& ApplicationHandle::Directories() const {
 
 WindowHandle ApplicationHandle::OpenWindow(const WindowOptions& options) const {
   return service_->OpenWindow(options);
+}
+
+WindowHandle ApplicationHandle::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const {
+  return service_->OpenWindow(options, relationship);
 }
 
 File ApplicationHandle::CurrentDirectory() const {
