@@ -114,6 +114,12 @@ NSCursor* MacPointerCursor(huxerui::PointerCursorKind kind) {
 }
 @end
 
+// Upstream clang (the mcpp toolchain) does not expose NSWindow's canBecomeKey property
+// selector to [super ...] messages against this SDK, so the gate below declares it.
+@interface NSWindow (HuxerUIKeyGate)
+- (BOOL)canBecomeKey;
+@end
+
 @interface HuxerUIView : NSView {
 @public
   huxerui::detail::MacUiWindow* huxeruiWindow;
