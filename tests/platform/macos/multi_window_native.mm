@@ -74,6 +74,7 @@ struct NativeScenario {
   bool block_extra_close = true;
   int close_requests = 0;
   bool completed = false;
+  bool native_quit = false;
   bool native_primary_close = false;
   bool destroy_primary = false;
   bool key_close_returned = false;
@@ -138,7 +139,9 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
         scenario.failure = std::current_exception();
       }
       [sender invalidate];
-      if (scenario.completed && scenario.native_primary_close) {
+      if (scenario.completed && scenario.native_quit) {
+        [NSApplication.sharedApplication terminate:nil];
+      } else if (scenario.completed && scenario.native_primary_close) {
         NSWindow* native = scenario.watches.front()->Window();
         if (scenario.destroy_primary) [native close];
         else [native performClose:nil];
@@ -196,6 +199,7 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
 TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-native]") {
   NativeScenario scenario;
   SECTION("The initial handle requests application shutdown") {}
+  SECTION("Native application Quit returns after orderly shutdown") { scenario.native_quit = true; }
   SECTION("Native initial-window close requests application shutdown") { scenario.native_primary_close = true; }
   SECTION("Native initial-window destruction requests application shutdown") {
     scenario.native_primary_close = true;
@@ -407,7 +411,8 @@ TEST_CASE("MacNativeOwnedModalsPreserveIndependentWindowsAndCascade", "[macos-na
       SetWindowRelationship(*records.at(2).handle, {.owner = *records.at(0).handle});
       scenario.Check(IsInteractive(scenario.watches[1]->Window()),
                      "Reparenting left the old owner blocked");
-      scenario.Check(scenario.watches[2]->Window().parentWindow == scenario.watches[0]->Window(), "Native reparenting was not applied");
+      scenario.Check(scenario.watches[2]->Window().parentWindow == scenario.watches[0]->Window(),
+                     "Native reparenting was not applied");
       SetWindowRelationship(*records.at(2).handle, {.owner = *records.at(1).handle, .modal = true});
       scenario.block_extra_close = false;
       if (destroy_owner) {

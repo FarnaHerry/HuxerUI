@@ -678,7 +678,7 @@ public:
       [window_ resignKeyWindow];
       [window_ resignMainWindow];
     } else if (text_input_) {
-      text_input_->ApplicationActiveChanged(NSApplication.sharedApplication.active);
+      text_input_->ApplicationActiveChanged(NSApplication.sharedApplication.active && window_.keyWindow);
     }
   }
 
@@ -949,7 +949,7 @@ public:
   void ApplicationActiveChanged(bool active) {
     UpdateWindowLifecycleState();
     if (text_input_) {
-      text_input_->ApplicationActiveChanged(active && !input_blocked_);
+      text_input_->ApplicationActiveChanged(active && window_.keyWindow && !input_blocked_);
     }
   }
 
@@ -961,6 +961,9 @@ public:
         : window_.keyWindow && NSApplication.sharedApplication.active
             ? WindowLifecycleState::Active : WindowLifecycleState::Inactive;
     UiWindow::UpdateWindowLifecycleState(state);
+    if (text_input_) {
+      text_input_->ApplicationActiveChanged(state == WindowLifecycleState::Active && !input_blocked_);
+    }
   }
 
   void InvalidateTextInputGeometry() {
@@ -1212,7 +1215,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
   [self draggingExited:nil];
-  if (huxeruiWindow == nullptr || !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() ||
+      !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     return NSDragOperationNone;
   }
   const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
@@ -1230,7 +1234,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
-  if (!(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() ||
+      !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     [self draggingExited:nil];
     return NSDragOperationNone;
   }
@@ -1260,7 +1265,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-  if (huxeruiWindow == nullptr || !huxeruiFileDropHover ||
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() || !huxeruiFileDropHover ||
       !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     [self draggingExited:nil];
     return NO;
