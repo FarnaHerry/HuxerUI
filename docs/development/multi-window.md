@@ -35,14 +35,14 @@ The interactive demo is `example_multi_window`: the primary window opens a secon
 
 The `macOS Multi-Window Preview` workflow builds on GitHub-hosted macOS runners: arm64 with static linkage and Intel with shared linkage, both retaining the macOS 12 deployment target.
 It builds common and codegen suites, AppKit platform suites, standalone headers, `example_multi_window`, and `example_window_relationship`.
-The separate `HuxerUIMacOSNativeTests` bundle creates real NSWindows on the main thread and exercises startup extras, runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
-Weak native references check that retired windows and their content views are released.
+The separate native test bundle creates real NSWindows on the main thread and exercises startup extras, runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
+Each CTest scenario runs in a fresh process because AppKit owns a process-wide NSApplication; weak native references check that retired windows and their content views are released after bounded native autorelease cleanup.
 
 Run the same checks on a Mac with a normal CMake configure:
 
 ```bash
 cmake --build build --parallel 3 --target huxerui_macos_tests huxerui_macos_native_tests example_multi_window example_window_relationship
-ctest --test-dir build --output-on-failure -R '^HuxerUIMacOS(Tests|NativeTests)$'
+ctest --test-dir build --output-on-failure -R '^HuxerUIMacOS(Tests|Native)'
 ```
 
 CI results establish compilation and automated lifecycle behavior on the runner, not interactive validation on a physical Mac.

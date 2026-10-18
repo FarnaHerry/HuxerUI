@@ -53,7 +53,7 @@ jobs:
       - name: Build native lifecycle bundle
         run: cmake --build build --parallel 3 --target huxerui_macos_native_tests
       - name: Native multi-window lifecycle
-        run: ctest --test-dir build --output-on-failure -R '^HuxerUIMacOSNativeTests$'
+        run: ctest --test-dir build --output-on-failure -R '^HuxerUIMacOSNative'
       - name: Diagnose native failure
         if: failure()
         run: |
