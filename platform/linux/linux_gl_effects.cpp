@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "graphics/backdrop_gl_impl.inc"
+#include "linux_external_texture_internal.h"
 #include "graphics/effects_internal.h"
 #include "graphics/geometry_internal.h"
 
@@ -110,8 +111,22 @@ void ReleasePublishedTexture(gpointer data) noexcept {
 
 struct LinuxBackdropGl::Resources {
   explicit Resources(bool gles) : engine(gles) {}
+  ~Resources() {
+    if (external_frame != nullptr) g_object_unref(external_frame);
+    glDeleteTextures(1, &external_texture);
+    glDeleteFramebuffers(2, external_framebuffers);
+  }
   BackdropGl engine;
   std::shared_ptr<PublishedReleaseContext> release_context;
+  GLuint external_texture = 0;
+  GLuint external_framebuffers[2]{};
+  int external_width = 0;
+  int external_height = 0;
+  ::GdkTexture* external_frame = nullptr;
+  Rect external_source;
+  Rect external_destination;
+  std::uint64_t external_identity = 0;
+  std::uint64_t external_raster_prefix_bytes = 0;
 };
 
 LinuxBackdropGl::LinuxBackdropGl() noexcept = default;
@@ -201,6 +216,64 @@ void LinuxBackdropGl::CompositeRaster(const std::uint8_t* bgra, std::size_t stri
   }
   CurrentContextScope current(context_);
   resources_->engine.CompositeRaster(bgra, stride, bounds);
+}
+
+bool LinuxBackdropGl::CompositeSnapshot(const LinuxGdkTextureFrame& frame, Rect source, Rect destination) {
+  const LinuxGlSnapshot& snapshot = frame.GlSnapshot();
+  if (resources_ == nullptr || snapshot.context == nullptr || !snapshot.premultiplied ||
+      gdk_gl_context_is_shared(context_, snapshot.context) == FALSE) {
+    return false;
+  }
+  CurrentContextScope current(context_);
+  const int width = static_cast<int>(source.width);
+  const int height = static_cast<int>(source.height);
+  if (resources_->external_width != width || resources_->external_height != height) {
+    glDeleteTextures(1, &resources_->external_texture);
+    resources_->external_texture = 0;
+    resources_->external_width = resources_->external_height = 0;
+    resources_->external_texture = CreateTexture(width, height);
+    resources_->external_width = width;
+    resources_->external_height = height;
+  }
+  if (resources_->external_framebuffers[0] == 0) glGenFramebuffers(2, resources_->external_framebuffers);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, resources_->external_framebuffers[0]);
+  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapshot.texture, 0);
+  RequireFramebuffer(GL_READ_FRAMEBUFFER);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resources_->external_framebuffers[1]);
+  glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resources_->external_texture, 0);
+  RequireFramebuffer(GL_DRAW_FRAMEBUFFER);
+  int top = static_cast<int>(source.y);
+  int bottom = top + height;
+  if (frame.TextureOrigin() == linux::GlTexture::Origin::BottomLeft) {
+    const int texture_height = gdk_texture_get_height(frame.Texture());
+    top = texture_height - top;
+    bottom = top - height;
+  }
+  glDisable(GL_SCISSOR_TEST);
+  glBlitFramebuffer(static_cast<int>(source.x), top, static_cast<int>(source.x) + width, bottom,
+                    0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  RequireGlSuccess();
+  // Retain the exact immutable source so pointer reuse cannot make a later publication reuse an old blur.
+  // The preceding raster byte count distinguishes native/raster interleaving; raster bytes themselves are compared
+  // by the executor. One retained source and one crop are bounded by the renderer's 16-Mpixel admission limit.
+  const auto raster_prefix_bytes = resources_->engine.FrameStats().raster_upload_bytes;
+  if (resources_->external_frame != frame.Texture() || resources_->external_source != source ||
+      resources_->external_destination != destination ||
+      resources_->external_raster_prefix_bytes != raster_prefix_bytes) {
+    if (resources_->external_frame != nullptr) g_object_unref(resources_->external_frame);
+    resources_->external_frame = GDK_TEXTURE(g_object_ref(frame.Texture()));
+    resources_->external_source = source;
+    resources_->external_destination = destination;
+    resources_->external_raster_prefix_bytes = raster_prefix_bytes;
+    if (++resources_->external_identity == 0) {
+      throw std::logic_error("HuxerUI Linux backdrop external source identity exhausted");
+    }
+  }
+  resources_->engine.CompositeTexture(resources_->external_texture, resources_->external_identity, destination, false);
+  // Detach borrowed storage before the frame's last GDK reference can release its texture name.
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, resources_->external_framebuffers[0]);
+  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+  return true;
 }
 
 void LinuxBackdropGl::PushGroup() {

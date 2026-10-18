@@ -38,11 +38,17 @@ Backdrop scenes instead use `SnapshotBackdropScene` and `BackdropScenePainter`: 
 This satisfies the native ownership and presentation boundary, with resident optical processing, source-compatible planes and bounded reuse; it is still a hybrid path with CPU rasterization and uploads rather than a complete native-node filter graph.
 The GPU publication fence and independent release context preserve outstanding frames, but do not prove that every GSK renderer or driver imports that texture without additional copies or waits.
 
-`BackdropScenePainter::Command(const DrawExternalTextureCommand&)` currently calls `gdk_texture_download()` before Cairo replay, so a GPU-backed external source can introduce a GPU-to-CPU transfer followed by a raster upload.
-`LinuxBackdropStats::readback_bytes` comes from the optical executor and does not include that external-source download; zero in that counter must not be described as zero readback for every complete glass scene.
+`BackdropScenePainter::Command(const DrawExternalTextureCommand&)` directly imports compatible framework-owned `linux::GlTexture` snapshots for integral, one-to-one, positive axis-aligned mappings without an explicit clip and with unit command opacity.
+The imported source must be opaque or premultiplied; its GDK contexts must share resources, and its complete dimensions must fit the 16-Mpixel admission limit.
+The GPU crops and normalizes row orientation before the existing prefix compositor; opacity isolation remains owned by the existing group path, and foreground ordering is unchanged.
+A retained immutable input and exact source/destination rectangles identify blur reuse, including when material feedback changes; a new publication invalidates reuse even when the ExternalTexture object itself remains the same.
+One reusable crop and one retained input are each bounded by 64 MiB, in addition to the existing working targets and source/kernel cache budgets, and retire with the renderer.
+Straight-alpha input, scaling, fractional placement, explicit clips, partial command opacity, incompatible contexts and opaque GDK texture handles retain `gdk_texture_download()` and Cairo replay.
+`LinuxBackdropStats::texture_download_bytes` counts the API-requested download bytes, and `readback_bytes` includes those bytes as well as optical-executor readback; GDK decides whether a particular download requires a physical GPU transfer.
+Neither counter measures driver-internal GSK import copies or presentation waits, so zero must not be described as proof of a completely zero-copy presentation path.
 Resident fixtures cover optical-result readback, source ordering, masks, cropped raster uploads and immutable texture lifetime; their capture downloads are test observations, not evidence of a production readback.
 
-Future optimization should first qualify direct native/GPU external-texture composition, then reduce Cairo raster and mask transfers by reusing compatible Snapshot/GSK operations or retained resources.
+Future optimization should expand qualified native/GPU external-texture mappings and reduce Cairo raster and mask transfers by reusing compatible Snapshot/GSK operations or retained resources.
 Keep neutral native-blur experiments distinct from general refraction/fusion, preserve the CPU fallback and existing Precise/Fast gates, and measure complete frames before changing backend admission.
 
 ## Ownership

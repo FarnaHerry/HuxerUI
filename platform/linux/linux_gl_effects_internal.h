@@ -9,6 +9,8 @@
 
 namespace huxerui::detail {
 
+class LinuxGdkTextureFrame;
+
 using LinuxBackdropGlStats = BackdropGlStats;
 
 // GPU execution of one backdrop plane through a private GdkGLContext. Initialization is explicit and
@@ -37,6 +39,9 @@ public:
   [[nodiscard]] bool BeginFrame(std::size_t width, std::size_t height);
   void CompositeRaster(const std::uint8_t* bgra, std::size_t stride);
   void CompositeRaster(const std::uint8_t* bgra, std::size_t stride, Rect bounds);
+  // Copies an integral one-to-one crop from a compatible immutable GL snapshot without CPU pixel transfer.
+  // The caller admits unscaled, unclipped commands with unit opacity; straight-alpha sources fall back.
+  [[nodiscard]] bool CompositeSnapshot(const LinuxGdkTextureFrame& frame, Rect source, Rect destination);
   void PushGroup();
   void PopGroup(const std::uint8_t* mask_bgra, std::size_t mask_stride, float opacity, bool mask_changed = true);
 

@@ -24,6 +24,8 @@ struct LinuxBackdropStats {
   std::size_t readback_bytes = 0;
   std::size_t mask_upload_bytes = 0;
   std::size_t mask_rasterizations = 0;
+  std::size_t external_texture_imports = 0;
+  std::size_t texture_download_bytes = 0;
 };
 
 // Records the platform-neutral scene into GTK Snapshot nodes, using Cairo nodes

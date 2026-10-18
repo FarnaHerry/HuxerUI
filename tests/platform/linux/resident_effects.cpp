@@ -2,6 +2,7 @@
 
 #include <catch2/catch_amalgamated.hpp>
 #include <gtk/gtk.h>
+#include <epoxy/gl.h>
 
 #include <algorithm>
 #include <array>
@@ -15,12 +16,14 @@
 #include <vector>
 
 #include <huxerui/effects.h>
+#include <huxerui/linux/external_texture.h>
 #include <huxerui/geometry.h>
 #include <huxerui/paint.h>
 #include <huxerui/render_scene.h>
 #include <huxerui/text.h>
 
 #include "linux_renderer.h"
+#include "linux_external_texture_internal.h"
 
 namespace huxerui::test {
 namespace {
@@ -526,6 +529,220 @@ TEST_CASE("LinuxResidentBackdropReportsScrollingMultiPlaneTiming", "[backdrop][g
        << "ms p95=" << milliseconds[18] << "ms planes=" << stats.gpu_plane_count
        << " upload_bytes=" << stats.raster_upload_bytes << " mask_rasterizations=" << stats.mask_rasterizations
        << " mask_upload_bytes=" << stats.mask_upload_bytes);
+}
+
+namespace {
+
+std::shared_ptr<linux::GlTexture> MakeNativeBackdropSource(
+    GdkDisplay* display, linux::GlTexture::Origin origin, linux::GlTexture::Alpha alpha,
+    int phase = 0, int width = 32, int height = 24,
+    std::shared_ptr<linux::GlTexture> texture = {}
+) {
+  GError* error = nullptr;
+  GdkGLContext* context = gdk_display_create_gl_context(display, &error);
+  REQUIRE(context != nullptr);
+  gdk_gl_context_set_allowed_apis(context, GDK_GL_API_GL);
+  gdk_gl_context_set_required_version(context, 3, 3);
+  const bool realized = gdk_gl_context_realize(context, &error);
+  if (error) g_error_free(error);
+  REQUIRE(realized);
+  GdkGLContext* previous = gdk_gl_context_get_current();
+  if (previous) g_object_ref(previous);
+  gdk_gl_context_make_current(context);
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const int offset = (y * width + x) * 4;
+      pixels[offset] = static_cast<std::uint8_t>((x * 3 + phase * 17) % 128);
+      pixels[offset + 1] = static_cast<std::uint8_t>((y * 5) % 128);
+      pixels[offset + 2] = static_cast<std::uint8_t>(((x + y) * 2) % 128);
+      pixels[offset + 3] = 160;
+    }
+  }
+  GLuint name = 0;
+  glGenTextures(1, &name);
+  glBindTexture(GL_TEXTURE_2D, name);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+  if (!texture) {
+    texture = std::make_shared<linux::GlTexture>(Size{static_cast<float>(width), static_cast<float>(height)});
+  }
+  texture->PublishCurrent({name, width, height, origin, alpha});
+  glDeleteTextures(1, &name);
+  if (previous) {
+    gdk_gl_context_make_current(previous);
+    g_object_unref(previous);
+  } else {
+    gdk_gl_context_clear_current();
+  }
+  g_object_unref(context);
+  return texture;
+}
+
+void PaintNativeBackdrop(RenderNode& root, std::shared_ptr<ExternalTexture> texture, int variant = 0,
+                         float highlight = 0.15F) {
+  root.content = {};
+  root.opacity = variant == 4 ? 0.6F : 1.0F;
+  PaintContext paint(root.content, {0, 0, 32, 24});
+  if (variant == 1) paint.PushClip({1, 1, 28, 20}, 3);
+  const Rect source = variant == 2 ? Rect{0, 0, 16, 12} : Rect{2, 3, 20, 14};
+  const Rect destination = variant == 2 ? Rect{0, 0, 32, 24} : Rect{-1, 2, 20, 14};
+  paint.DrawImageRect(std::move(texture), source, destination, ImageSampling::Linear, variant == 3 ? 0.5F : 1.0F);
+  if (variant == 1) paint.PopClip();
+  paint.DrawBackdrop({4, 4, 18, 14}, BackdropEffect{.blur_radius = 3, .refraction = 2, .highlight = highlight},
+                     CornerRadii{3});
+  paint.DrawRect({10, 7, 3, 3}, Color::White());
+  paint.Finish();
+}
+
+} // namespace
+
+TEST_CASE("LinuxResidentBackdropImportsImmutableGlSnapshotsWithoutCpuTransfers", "[backdrop][gpu]") {
+  GdkDisplay* display = RequireGpuDisplay();
+  for (auto origin : {linux::GlTexture::Origin::TopLeft, linux::GlTexture::Origin::BottomLeft}) {
+    for (auto alpha : {linux::GlTexture::Alpha::Opaque, linux::GlTexture::Alpha::Premultiplied,
+                       linux::GlTexture::Alpha::Straight}) {
+      auto source = MakeNativeBackdropSource(display, origin, alpha);
+      RenderNode root;
+      PaintNativeBackdrop(root, source);
+      RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+      detail::LinuxRenderer gpu;
+      detail::LinuxRenderer cpu;
+      for (auto* renderer : {&gpu, &cpu}) {
+        renderer->SetViewport({32, 24});
+        renderer->SetDeviceScale(1);
+      }
+      gpu.SetDisplay(display);
+      auto actual = SnapshotTexture(gpu, frame);
+      const auto expected = SnapshotTexture(cpu, frame);
+      RequireMatchingPixels(Download(actual.get()), Download(expected.get()));
+      const bool native = alpha != linux::GlTexture::Alpha::Straight;
+      REQUIRE(gpu.BackdropStats().external_texture_imports == (native ? 1 : 0));
+      REQUIRE(gpu.BackdropStats().texture_download_bytes == (native ? 0 : 32 * 24 * 4));
+      REQUIRE(cpu.BackdropStats().texture_download_bytes == 32 * 24 * 4);
+      const auto retained = Download(actual.get());
+      for (int variant : {1, 2, 3, 4, 0}) {
+        PaintNativeBackdrop(root, source, variant);
+        ++frame.revision;
+        actual = SnapshotTexture(gpu, frame);
+        RequireMatchingPixels(Download(actual.get()), Download(SnapshotTexture(cpu, frame).get()));
+        REQUIRE(gpu.BackdropStats().external_texture_imports == ((variant == 0 || variant == 4) && native ? 1 : 0));
+      }
+      auto old = std::move(actual);
+      source = MakeNativeBackdropSource(display, origin, alpha, 1, 32, 24, source);
+      PaintNativeBackdrop(root, source);
+      ++frame.revision;
+      actual = SnapshotTexture(gpu, frame);
+      RequireMatchingPixels(Download(actual.get()), Download(SnapshotTexture(cpu, frame).get()));
+      REQUIRE(Download(old.get()) == retained);
+      gpu.Discard();
+      REQUIRE(Download(actual.get()).size() == 32 * 24 * 4);
+    }
+  }
+}
+
+TEST_CASE("LinuxResidentNativeSnapshotPreservesKernelReuseForUnchangedInput", "[backdrop][gpu]") {
+  GdkDisplay* display = RequireGpuDisplay();
+  auto source = MakeNativeBackdropSource(display, linux::GlTexture::Origin::TopLeft,
+                                        linux::GlTexture::Alpha::Premultiplied);
+  RenderNode root;
+  detail::LinuxRenderer gpu;
+  gpu.SetDisplay(display);
+  gpu.SetViewport({32, 24});
+  gpu.SetDeviceScale(1);
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  PaintNativeBackdrop(root, source);
+  auto first = SnapshotTexture(gpu, frame);
+  PaintNativeBackdrop(root, source, 0, 0.3F);
+  ++frame.revision;
+  auto second = SnapshotTexture(gpu, frame);
+  REQUIRE(gpu.BackdropStats().external_texture_imports == 1);
+  REQUIRE(gpu.BackdropStats().texture_download_bytes == 0);
+  REQUIRE(gpu.BackdropStats().blur_cache_hits > 0);
+}
+
+TEST_CASE("LinuxResidentNativeSnapshotInvalidatesWhenRasterAndTextureOrderChanges", "[backdrop][gpu]") {
+  GdkDisplay* display = RequireGpuDisplay();
+  auto source = MakeNativeBackdropSource(display, linux::GlTexture::Origin::TopLeft,
+                                        linux::GlTexture::Alpha::Premultiplied);
+  RenderNode root;
+  detail::LinuxRenderer gpu;
+  detail::LinuxRenderer cpu;
+  for (auto* renderer : {&gpu, &cpu}) {
+    renderer->SetViewport({32, 24});
+    renderer->SetDeviceScale(1);
+  }
+  gpu.SetDisplay(display);
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  std::vector<std::uint8_t> first;
+  for (bool texture_first : {false, true, false}) {
+    root.content = {};
+    PaintContext paint(root.content, {0, 0, 32, 24});
+    if (!texture_first) paint.DrawRect({0, 0, 32, 24}, Color::White());
+    paint.DrawImageRect(source, {0, 0, 32, 24}, {0, 0, 32, 24}, ImageSampling::Linear, 1);
+    if (texture_first) paint.DrawRect({0, 0, 32, 24}, Color::White());
+    paint.DrawBackdrop({4, 4, 18, 14}, BackdropEffect{.blur_radius = 3, .refraction = 2}, CornerRadii{3});
+    paint.Finish();
+    ++frame.revision;
+    auto actual = SnapshotTexture(gpu, frame);
+    const auto pixels = Download(actual.get());
+    RequireMatchingPixels(pixels, Download(SnapshotTexture(cpu, frame).get()));
+    REQUIRE(gpu.BackdropStats().blur_cache_hits == 0);
+    if (texture_first) REQUIRE(pixels != first);
+    if (first.empty()) first = pixels;
+  }
+}
+
+TEST_CASE("LinuxResidentNativeSnapshotReportsCompletedExportTiming", "[backdrop][gpu][.benchmark]") {
+  GdkDisplay* display = RequireGpuDisplay();
+  std::vector<std::shared_ptr<linux::GlTexture>> native;
+  std::vector<std::shared_ptr<linux::GdkTexture>> opaque;
+  for (int phase = 0; phase < 2; ++phase) {
+    native.push_back(MakeNativeBackdropSource(display, linux::GlTexture::Origin::TopLeft,
+                                            linux::GlTexture::Alpha::Premultiplied, phase, 1280, 720));
+    auto wrapper = std::make_shared<linux::GdkTexture>(Size{1280, 720});
+    wrapper->Publish(detail::GetGlFrame(*native.back())->Texture());
+    opaque.push_back(std::move(wrapper));
+  }
+  std::array<std::vector<double>, 2> timings;
+  for (bool use_native : {false, true, true, false}) {
+    detail::LinuxRenderer renderer;
+    renderer.SetDisplay(display);
+    renderer.SetViewport({1280, 720});
+    renderer.SetDeviceScale(1);
+    RenderNode root;
+    RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+    for (int iteration = 0; iteration < 28; ++iteration) {
+      root.content = {};
+      PaintContext paint(root.content, {0, 0, 1280, 720});
+      std::shared_ptr<ExternalTexture> source = use_native
+          ? std::static_pointer_cast<ExternalTexture>(native[iteration % 2])
+          : std::static_pointer_cast<ExternalTexture>(opaque[iteration % 2]);
+      paint.DrawImageRect(source, {0, 0, 1280, 720}, {0, 0, 1280, 720}, ImageSampling::Linear, 1);
+      paint.DrawBackdrop({100, 100, 480, 300}, BackdropEffect{.blur_radius = 12, .refraction = 2}, CornerRadii{12});
+      paint.DrawRect({120, 120, 30, 20}, Color::White());
+      paint.Finish();
+      ++frame.revision;
+      const auto start = std::chrono::steady_clock::now();
+      auto output = SnapshotTexture(renderer, frame);
+      // Download completes this export for observation; this timing is not native window presentation.
+      const auto pixels = Download(output.get());
+      const double elapsed =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      if (iteration >= 4) timings[use_native ? 1 : 0].push_back(elapsed);
+      REQUIRE(renderer.BackdropStats().external_texture_imports == (use_native ? 1 : 0));
+      REQUIRE(renderer.BackdropStats().texture_download_bytes == (use_native ? 0 : 1280 * 720 * 4));
+      if (iteration == 27) {
+        WARN("native=" << use_native << " download_bytes=" << renderer.BackdropStats().texture_download_bytes
+                        << " raster_upload_bytes=" << renderer.BackdropStats().raster_upload_bytes);
+      }
+    }
+  }
+  for (std::size_t index = 0; index < timings.size(); ++index) {
+    auto& values = timings[index];
+    std::sort(values.begin(), values.end());
+    WARN("native=" << index << " completed_export_ms_p50=" << values[values.size() / 2]
+                    << " p95=" << values[values.size() * 95 / 100] << " samples=" << values.size());
+  }
 }
 
 } // namespace huxerui::test

@@ -2074,8 +2074,50 @@ private:
     cairo_restore(context_);
   }
 
+  bool CompositeExternalSnapshot(const DrawExternalTextureCommand& command) {
+    if (!gpu_frame_ || clip_depth_ != 0 || command.opacity != 1.0F) return false;
+    const auto texture = std::dynamic_pointer_cast<linux::GlTexture>(command.texture);
+    if (!texture) return false;
+    const auto frame = GetGlFrame(*texture);
+    if (!frame) return false;
+    const int pixel_width = gdk_texture_get_width(frame->Texture());
+    const int pixel_height = gdk_texture_get_height(frame->Texture());
+    if (static_cast<std::uint64_t>(pixel_width) * pixel_height > 16777216) return false;
+    const Transform2D transform = CurrentDeviceTransform();
+    if (transform.m12 != 0 || transform.m21 != 0 || transform.m11 <= 0 || transform.m22 <= 0) return false;
+    const Size intrinsic = texture->IntrinsicSize();
+    const float scale_x = gdk_texture_get_width(frame->Texture()) / intrinsic.width;
+    const float scale_y = gdk_texture_get_height(frame->Texture()) / intrinsic.height;
+    Rect source{command.source.x * scale_x, command.source.y * scale_y,
+                command.source.width * scale_x, command.source.height * scale_y};
+    Rect destination = TransformBounds(transform, command.destination);
+    if (source.width != destination.width || source.height != destination.height) return false;
+    for (const float value : {source.x, source.y, source.width, source.height,
+                             destination.x, destination.y, destination.width, destination.height}) {
+      if (!std::isfinite(value) || std::floor(value) != value) return false;
+    }
+    if (source.IsEmpty() || source.x < 0 || source.y < 0 ||
+        source.x + source.width > gdk_texture_get_width(frame->Texture()) ||
+        source.y + source.height > gdk_texture_get_height(frame->Texture())) return false;
+    // Admission keeps the copied crop inside the bounded frame, without changing edge or clip sampling.
+    cairo_surface_t* target = cairo_get_target(context_);
+    const Rect bounds{0, 0, static_cast<float>(cairo_image_surface_get_width(target)),
+                     static_cast<float>(cairo_image_surface_get_height(target))};
+    const Rect clipped = destination.Intersection(bounds);
+    if (clipped.IsEmpty()) return true;
+    source.x += clipped.x - destination.x;
+    source.y += clipped.y - destination.y;
+    source.width = clipped.width;
+    source.height = clipped.height;
+    FlushRaster();
+    if (!state_.backdrop_gl->CompositeSnapshot(*frame, source, clipped)) return false;
+    ++state_.backdrop_stats.external_texture_imports;
+    return true;
+  }
+
   void Command(const DrawExternalTextureCommand& command) {
     FlushBackdropPlane();
+    if (CompositeExternalSnapshot(command)) return;
     auto acquired = state_.AcquireSnapshotTexture(command.texture);
     if (!acquired.texture) {
       return;
@@ -2091,6 +2133,8 @@ private:
     const int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
     std::vector<unsigned char> pixels(static_cast<std::size_t>(stride) * static_cast<std::size_t>(height));
     gdk_texture_download(texture.get(), pixels.data(), static_cast<std::size_t>(stride));
+    state_.backdrop_stats.texture_download_bytes += pixels.size();
+    state_.backdrop_stats.readback_bytes += pixels.size();
     CairoSurfaceHandle surface{cairo_image_surface_create_for_data(pixels.data(), CAIRO_FORMAT_ARGB32,
         width, height, stride)};
     cairo_save(context_);
@@ -2230,7 +2274,7 @@ void SnapshotBackdropScene(LinuxRenderer::State& state, GtkSnapshot* snapshot, c
       state.backdrop_stats.blur_pass_count = stats.blur_passes;
       state.backdrop_stats.blur_cache_hits = stats.blur_cache_hits;
       state.backdrop_stats.raster_upload_bytes = stats.raster_upload_bytes;
-      state.backdrop_stats.readback_bytes = stats.readback_bytes;
+      state.backdrop_stats.readback_bytes += stats.readback_bytes;
       state.backdrop_stats.mask_upload_bytes = stats.mask_upload_bytes;
     } else {
       GBytes* bytes = g_bytes_new(cairo_image_surface_get_data(surface.surface), stride * height);

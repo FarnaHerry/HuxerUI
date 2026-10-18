@@ -165,6 +165,8 @@ This also applies during opacity-based presentation transitions.
 
 Same-frame capture paths are implemented for Linux, Windows, macOS, iOS, Android and Web without raising their minimum platform versions.
 Linux uses GPU shaders for optical processing when a usable GL context is available, with the portable CPU processor as its fallback.
+Framework-owned `linux::GlTexture` sources can remain on the GPU for integral one-to-one placement with shared contexts, opaque or premultiplied input, unit image opacity and no explicit clip; other cases retain Cairo replay and may download the source.
+This does not change Precise/Fast selection, blur strength, source ordering or the CPU fallback.
 Android uses the same shader processing and plane cache on hardware Canvas targets at API 29 or later when GLES 3 and HardwareBuffer import are available.
 Software Canvas targets, API 23–28 and unavailable GPU capabilities use the portable CPU path; the minimum Android API remains 23.
 Windows, macOS, iOS and Web currently use the portable CPU processor for each glass command.
