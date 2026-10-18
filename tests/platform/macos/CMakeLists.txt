@@ -52,3 +52,17 @@ foreach (bridge_test IN ITEMS HuxerUIMacStaticPlatformBridgeImport HuxerUIMacSha
         set_tests_properties(${bridge_test} PROPERTIES LABELS "platform;macos;native;headers")
     endif ()
 endforeach ()
+
+# A bundle supplies the same package-resource and application identity boundary as an AppKit consumer.
+huxerui_add_test_suite(huxerui_macos_native_tests HuxerUIMacOSNativeTests
+        LABELS platform macos native
+        LIBRARIES ${HUXERUI_TEST_LIBRARY}
+        SOURCES multi_window_native.mm
+)
+set_source_files_properties(multi_window_native.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+set_target_properties(huxerui_macos_native_tests PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.huxerui.tests.multi-window"
+)
+_huxerui_append_resource_package_input(huxerui_macos_native_tests "${HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE}")
+set_tests_properties(HuxerUIMacOSNativeTests PROPERTIES TIMEOUT 180)
