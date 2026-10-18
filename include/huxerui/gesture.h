@@ -18,6 +18,12 @@ namespace huxerui {
 
 class View;
 
+/// Selects whether a typed transfer may reach other windows of the same Runtime.
+enum class DragDropScope {
+  Window,      ///< Restricts the transfer to its source window.
+  Application, ///< Allows transfers between opted-in windows when supported by the host.
+};
+
 // Platform-provided recognition defaults used when a gesture does not declare an explicit override.
 struct GestureSettings {
   // General movement tolerance in logical pixels for long press, delayed drag, and similar recognition.
@@ -155,7 +161,7 @@ struct DragEvents {
 
 // Describes one target-relative update during a typed drag-and-drop session.
 struct DropEvent {
-  // Pointer sequence that owns the drag-and-drop session.
+  // Original source pointer sequence, not a pointer-session identifier in the receiving window.
   std::int64_t pointer_id = 0;
   // Device kind reported by the owning pointer sequence.
   PointerDeviceKind device_kind = PointerDeviceKind::Mouse;
@@ -169,6 +175,7 @@ struct DropEvent {
 
 // Describes normal completion of a drag source, including whether a target accepted the drop.
 struct DragDropResult {
+  // Latest valid source-window snapshot; native cross-window transport may not report later source coordinates.
   DragEvent drag;
   bool dropped = false;
 
@@ -226,6 +233,11 @@ public:
 
   static const detail::ModifierDescriptor& Descriptor();
 
+  /// Allows this source to reach application-scoped targets in other windows of the same Runtime.
+  /// Window is the default. Hosts without cross-window transport retain ordinary window-local behavior.
+  /// Each pointer sequence snapshots this declaration at Down; changing it affects subsequent sequences.
+  DragSource&& Scope(DragDropScope scope) &&;
+
 private:
   DragSource(std::type_index payload_type, std::shared_ptr<const void> payload, std::function<View()> preview,
              DragGesture gesture);
@@ -234,6 +246,7 @@ private:
   std::shared_ptr<const void> payload_;
   std::function<View()> preview_;
   DragGesture gesture_;
+  DragDropScope scope_ = DragDropScope::Window;
 
   friend class detail::DragSourceExtension;
 };
@@ -276,6 +289,10 @@ public:
 
   static const detail::ModifierDescriptor& Descriptor();
 
+  /// Allows this target to receive application-scoped transfers from other windows of the same Runtime.
+  /// Window is the default. This declaration never changes ordinary same-window eligibility.
+  DropTarget&& Scope(DragDropScope scope) &&;
+
 private:
   DropTarget(std::type_index payload_type, std::function<bool(const void*)> accepts,
              detail::DropTargetDispatch dispatch);
@@ -283,6 +300,7 @@ private:
   std::type_index payload_type_ = typeid(void);
   std::function<bool(const void*)> accepts_;
   detail::DropTargetDispatch dispatch_;
+  DragDropScope scope_ = DragDropScope::Window;
 
   friend class detail::DropTargetExtension;
 };

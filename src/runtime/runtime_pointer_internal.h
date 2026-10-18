@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 #include <huxerui/app.h>
 
@@ -26,6 +27,7 @@ public:
   void RefreshCursor();
 
 private:
+  void CompleteWindowDrag(WindowDrag& drag, bool canceled, bool dropped);
   void HandlePointerDown(const PointerEvent& event);
   void HandlePointerMove(const PointerEvent& event, bool hover_moved);
   void HandlePointerUp(const PointerEvent& event);
@@ -64,7 +66,7 @@ private:
   void UpdateDragDrop(PointerSession& session, const DragEvent& drag);
   void UpdateDropTarget(PointerSession& session, const DragEvent& drag, bool emit_moved);
   [[nodiscard]] std::optional<ActiveDropTarget>
-  ResolveDropTarget(const DragDropSession& session, Point window_position) const;
+  ResolveDropTarget(const DragDropSession& session, Point window_position, bool across_windows = false) const;
   void AdvanceDragDropSession(std::int64_t pointer_id, const FrameInfo& frame);
   void FinishDragDrop(PointerSession& session, const DragEvent& drag);
   void CancelDragDrop(PointerSession& session, const DragEvent& drag);
@@ -73,8 +75,10 @@ private:
   std::optional<PointerHoverState> pointer_hover_;
   PointerCursorKind pointer_cursor_kind_ = PointerCursorKind::Default;
   std::unordered_map<std::int64_t, PointerSession> pointer_sessions_;
+  std::vector<std::weak_ptr<WindowDrag>> incoming_drags_;
 
   friend class TextInteraction;
+  friend class WindowDrag;
 };
 
 } // namespace huxerui::detail

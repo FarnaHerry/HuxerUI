@@ -47,6 +47,7 @@
 #include "application/platform_frame_internal.h"
 #include "resources/resource_internal.h"
 #include "text/text_internal.h"
+#include "runtime/window_drag_internal.h"
 #include "application/window_internal.h"
 
 namespace huxerui::detail {
@@ -698,6 +699,7 @@ public:
   /// @param window_ordinal Creation order among the application's windows; zero is the initial window and keeps
   /// the historical whole-application shutdown behavior on close.
   void Attach(LinuxRuntime& runtime, const WindowOptions& options, std::uint32_t window_ordinal) {
+    runtime_ = &runtime;
     try {
       primary_ = window_ordinal == 0;
       renderer_.Initialize();
@@ -833,11 +835,47 @@ public:
   }
 
   void ApplyWindowModalState(bool modal, bool blocked) override {
-    static_cast<void>(blocked);
+    input_blocked_ = blocked;
     if (window_ == nullptr) {
       return;
     }
     gtk_window_set_modal(window_, modal ? TRUE : FALSE);
+  }
+
+  bool BeginWindowDrag(std::shared_ptr<WindowDrag> transfer) override {
+    if (!IsInitialized() || input_blocked_ || native_drag_ || !pointer_device_ ||
+        pressed_buttons_ != PointerButton::Primary) return false;
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (!surface) return false;
+    GBytes* bytes = g_bytes_new_static("", 0);
+    GdkContentProvider* content = gdk_content_provider_new_for_bytes("application/x-huxerui-window-drag", bytes);
+    g_bytes_unref(bytes);
+    native_drag_ = gdk_drag_begin(surface, pointer_device_, content, GDK_ACTION_COPY, 0.0, 0.0);
+    g_object_unref(content);
+    if (!native_drag_) return false;
+    native_transfer_ = std::move(transfer);
+    g_object_set_data_full(
+        G_OBJECT(native_drag_), "huxerui-window-drag", new std::shared_ptr<WindowDrag>(native_transfer_),
+        [](gpointer value) { delete static_cast<std::shared_ptr<WindowDrag>*>(value); }
+    );
+    g_signal_connect(native_drag_, "cancel", G_CALLBACK(NativeDragCanceled), this);
+    g_signal_connect(native_drag_, "dnd-finished", G_CALLBACK(NativeDragFinished), this);
+    GtkWidget* icon = gtk_drag_icon_get_for_drag(native_drag_);
+    GtkWidget* empty = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_size_request(empty, 1, 1);
+    gtk_drag_icon_set_child(GTK_DRAG_ICON(icon), empty);
+    native_transfer_->SetNativeCancel([this] {
+      if (native_drag_) g_signal_emit_by_name(native_drag_, "cancel", GDK_DRAG_CANCEL_ERROR);
+    });
+    // Native capture replaces GTK's widget sequence, as it does for GtkDragSource.
+    GListModel* controllers = gtk_widget_observe_controllers(drawing_area_);
+    for (guint index = 0; index < g_list_model_get_n_items(controllers); ++index) {
+      auto* controller = GTK_EVENT_CONTROLLER(g_list_model_get_item(controllers, index));
+      gtk_event_controller_reset(controller);
+      g_object_unref(controller);
+    }
+    g_object_unref(controllers);
+    return true;
   }
 
   void RequestWindowCommand(WindowCommand command) override {
@@ -921,6 +959,87 @@ public:
 
 private:
 
+  void EndNativeDrag(bool canceled, bool success) noexcept {
+    GdkDrag* drag = std::exchange(native_drag_, nullptr);
+    auto transfer = std::move(native_transfer_);
+    if (!drag) return;
+    pressed_buttons_ = PointerButton::None;
+    suppress_pointer_release_ = false;
+    g_signal_handlers_disconnect_by_data(drag, this);
+    if (transfer) {
+      transfer->SetNativeCancel({});
+      try {
+        transfer->Finish(canceled);
+      } catch (...) {
+        runtime_->RecordWindowFailure(std::current_exception());
+      }
+    }
+    gdk_drag_drop_done(drag, success);
+    g_object_unref(drag);
+  }
+
+  static std::shared_ptr<WindowDrag> NativeTransfer(GdkDrop* drop) {
+    GdkDrag* drag = gdk_drop_get_drag(drop);
+    if (!drag) return {};
+    auto* transfer = static_cast<std::shared_ptr<WindowDrag>*>(
+        g_object_get_data(G_OBJECT(drag), "huxerui-window-drag")
+    );
+    return transfer ? *transfer : nullptr;
+  }
+
+  static gboolean NativeDragAccept(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    const auto transfer = NativeTransfer(drop);
+    return self.IsInitialized() && !self.input_blocked_ && transfer && transfer->Active();
+  }
+
+  static GdkDragAction NativeDragMoved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    const auto transfer = NativeTransfer(drop);
+    try {
+      if (self.IsInitialized() && !self.input_blocked_ && transfer &&
+          transfer->Move(self, {static_cast<float>(x), static_cast<float>(y)})) return GDK_ACTION_COPY;
+    } catch (...) {
+      self.runtime_->RecordWindowFailure(std::current_exception());
+    }
+    return static_cast<GdkDragAction>(0);
+  }
+
+  static void NativeDragLeft(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    try {
+      if (const auto transfer = NativeTransfer(drop)) transfer->Leave(self);
+    } catch (...) {
+      self.runtime_->RecordWindowFailure(std::current_exception());
+    }
+  }
+
+  static gboolean NativeDragDropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    const auto transfer = NativeTransfer(drop);
+    try {
+      if (!self.IsInitialized() || self.input_blocked_ || !transfer ||
+          !transfer->Drop(self, {static_cast<float>(x), static_cast<float>(y)})) return FALSE;
+      // Let GTK retire its drop dispatch and release the native grab before acknowledging completion.
+      g_idle_add_full(G_PRIORITY_DEFAULT, [](gpointer value) -> gboolean {
+        gdk_drop_finish(GDK_DROP(value), GDK_ACTION_COPY);
+        return G_SOURCE_REMOVE;
+      }, g_object_ref(drop), g_object_unref);
+      return TRUE;
+    } catch (...) {
+      self.runtime_->RecordWindowFailure(std::current_exception());
+      return FALSE;
+    }
+  }
+
+  static void NativeDragCanceled(GdkDrag*, GdkDragCancelReason reason, gpointer data) {
+    static_cast<LinuxUiWindow*>(data)->EndNativeDrag(reason != GDK_DRAG_CANCEL_NO_TARGET, false);
+  }
+
+  static void NativeDragFinished(GdkDrag*, gpointer data) {
+    static_cast<LinuxUiWindow*>(data)->EndNativeDrag(false, true);
+  }
+
   void CreateWindow(const WindowOptions& options, Size initial_size) {
     custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
     custom_title_bar_height_ = options.title_bar_height;
@@ -976,6 +1095,15 @@ private:
     g_signal_connect(motion, "motion", G_CALLBACK(PointerMoved), this);
     g_signal_connect(motion, "leave", G_CALLBACK(PointerLeft), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), motion);
+
+    const char* drag_formats[] = {"application/x-huxerui-window-drag"};
+    GtkDropTargetAsync* drop = gtk_drop_target_async_new(gdk_content_formats_new(drag_formats, 1), GDK_ACTION_COPY);
+    g_signal_connect(drop, "accept", G_CALLBACK(NativeDragAccept), this);
+    g_signal_connect(drop, "drag-enter", G_CALLBACK(NativeDragMoved), this);
+    g_signal_connect(drop, "drag-motion", G_CALLBACK(NativeDragMoved), this);
+    g_signal_connect(drop, "drag-leave", G_CALLBACK(NativeDragLeft), this);
+    g_signal_connect(drop, "drop", G_CALLBACK(NativeDragDropped), this);
+    gtk_widget_add_controller(GTK_WIDGET(drawing_area_), GTK_EVENT_CONTROLLER(drop));
 
     GtkEventController* scroll = gtk_event_controller_scroll_new(
         static_cast<GtkEventControllerScrollFlags>(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES |
@@ -1168,6 +1296,7 @@ private:
 
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
       PointerButton pressed_buttons = PointerButton::None, KeyModifiers modifiers = {}) {
+    if (native_drag_ && type != PointerEventType::Cancel) return;
     if (!IsInitialized()) {
       return;
     }
@@ -1266,6 +1395,8 @@ private:
     }
     native_facilities_released_ = true;
     running_ = false;
+    EndNativeDrag(true, false);
+    g_clear_object(&pointer_device_);
     if (platform_views_) {
       platform_views_->Shutdown();
       platform_views_.reset();
@@ -1445,6 +1576,7 @@ private:
       return;
     }
     pressed_buttons_ |= button;
+    if (event) g_set_object(&pointer_device_, gdk_event_get_device(event));
     SendPointer(PointerEventType::Down, position, button, pressed_buttons_,
         event ? TranslateModifiers(gdk_event_get_modifier_state(event)) : KeyModifiers{});
   }
@@ -1526,6 +1658,7 @@ private:
 
   static void PointerCanceled(GtkGesture*, GdkEventSequence*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    if (self.native_drag_) return;
     if (self.RoutePointerToHuxerUI(self.last_pointer_position_, PointerEventType::Cancel)) {
       self.CancelPointer();
     }
@@ -1630,10 +1763,15 @@ private:
   LinuxTextInput text_input_;
   std::unique_ptr<LinuxPlatformViews> platform_views_;
   std::unique_ptr<LinuxFileDrop> file_drop_;
+  GdkDevice* pointer_device_ = nullptr;
+  GdkDrag* native_drag_ = nullptr;
+  std::shared_ptr<WindowDrag> native_transfer_;
   PlatformFrameState frame_state_;
   const RenderFrame* committed_frame_ = nullptr;
   guint frame_source_ = 0;
   bool running_ = false;
+  LinuxRuntime* runtime_ = nullptr;
+  bool input_blocked_ = false;
   bool primary_ = false;
   bool minimized_ = false;
   bool native_facilities_released_ = false;

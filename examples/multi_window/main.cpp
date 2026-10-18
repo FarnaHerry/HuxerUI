@@ -16,12 +16,43 @@ void InstallSharedCounter(ApplicationContext& context) {
 }
 
 [[huxerui::composable]]
+View WindowTransfer() {
+  const auto identity = UseEnvironment<WindowIdentity>();
+  const std::string label = identity.key.empty() ? "primary" : identity.key;
+  auto received = UseState(std::string{"Drop a window label here"});
+  auto hovered = UseState(false);
+  const auto& theme = UseTheme();
+
+  return Column {
+    Text("Drag label: " + label).With(
+        Padding(12.0F),
+        Background(theme.colors.surface),
+        DragSource(label, [label] { return Text(label).With(Padding(8.0F)); })
+            .Scope(DragDropScope::Application)
+    ),
+    Text(received.Get())
+        .With(
+            Padding(12.0F),
+            Background(hovered.Get() ? theme.colors.primary : theme.colors.surface),
+            DropTarget::Accepts<std::string>().Scope(DragDropScope::Application)
+        )
+        .On<DropEvents<std::string>::Entered>([hovered](const std::string&, const DropEvent&) { hovered = true; })
+        .On<DropEvents<std::string>::Exited>([hovered](const std::string&, const DropEvent&) { hovered = false; })
+        .On<DropEvents<std::string>::Dropped>([received, hovered](const std::string& value, const DropEvent&) {
+          received = "Received from: " + value;
+          hovered = false;
+        }),
+  }.With(Spacing(8.0F));
+}
+
+[[huxerui::composable]]
 View SecondaryContent() {
   auto local = UseState(0);
   const auto shared = UseService<SharedCounter>();
 
   return Column {
     Text("Secondary window").With(FontSize(24.0F)),
+    WindowTransfer(),
     Text::Format("Local count: {}", local),
     Text::Format("Shared count: {}", shared->value.Get()),
     Button("+1 local").OnClick([local] { local += 1; }),
@@ -40,6 +71,7 @@ View PrimaryContent() {
 
   return Column {
     Text("Primary window").With(FontSize(24.0F)),
+    WindowTransfer(),
     Text::Format("Local count: {}", local),
     Text::Format("Shared count: {}", shared->value.Get()),
     Button("+1 local").OnClick([local] { local += 1; }),
