@@ -1,4 +1,5 @@
 #include "runtime_test_support.h"
+#include "runtime/window_drag_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1598,6 +1599,361 @@ TEST_CASE("Gesture declarations and platform defaults reject invalid values") {
   GesturePlatform invalid_platform;
   invalid_platform.settings.pointer_slop = std::numeric_limits<float>::quiet_NaN();
   REQUIRE_THROWS_AS(UiWindow(DragApp, invalid_platform), std::logic_error);
+}
+
+namespace {
+
+class WindowDragPlatform : public TestPlatform {
+public:
+  bool BeginWindowDrag(std::shared_ptr<detail::WindowDrag> value) override {
+    if (!supported) return false;
+    transfer = std::move(value);
+    return true;
+  }
+
+  bool supported = true;
+  std::shared_ptr<detail::WindowDrag> transfer;
+};
+
+struct WindowDragObservations {
+  DragDropScope source_scope = DragDropScope::Application;
+  DragDropScope target_scope = DragDropScope::Application;
+  State<bool> source_present{true};
+  State<bool> target_present{true};
+  State<bool> target_enabled{true};
+  State<bool> accepts{true};
+  State<int> payload{7};
+  State<Point> target_offset{Point{}};
+  std::optional<WindowHandle> source_handle;
+  std::vector<std::string> events;
+  std::optional<DropEvent> target_event;
+  int target_clicks = 0;
+  int source_hover_leaves = 0;
+  bool dropped = false;
+  bool throw_on_enter = false;
+  bool throw_on_move = false;
+  bool throw_on_exit = false;
+  bool throw_on_drop = false;
+};
+
+WindowDragObservations* window_drag_observations = nullptr;
+
+View WindowDragRoot() {
+  auto& observed = *window_drag_observations;
+  const auto identity = UseEnvironment<WindowIdentity>();
+  if (identity.ordinal == 0 || identity.key == "source") {
+    observed.source_handle = UseWindow();
+    if (!observed.source_present.Get()) return Spacer();
+    return Text("source")
+        .With(huxerui::Frame{120.0F, 60.0F},
+              DragSource(observed.payload.Get(), [] { return Text("window preview"); }).Scope(observed.source_scope))
+        .On<ViewEvents::Hover>([&observed](const HoverEvent& event) {
+          if (event.type == HoverEventType::Leave) ++observed.source_hover_leaves;
+        })
+        .On<DragSourceEvents::Started>([&observed](const DragEvent&) { observed.events.emplace_back("started"); })
+        .On<DragSourceEvents::Ended>([&observed](const DragDropResult& result) {
+          observed.events.emplace_back("ended");
+          observed.dropped = result.dropped;
+        })
+        .On<DragSourceEvents::Canceled>([&observed](const DragEvent&) { observed.events.emplace_back("canceled"); });
+  }
+  if (!observed.target_present.Get()) return Spacer();
+  return Button("target")
+      .With(huxerui::Frame{120.0F, 60.0F}, Enabled(observed.target_enabled.Get()), Offset(observed.target_offset.Get()),
+            DropTarget::Accepts<int>([&observed](int value) { return observed.accepts.Get() && value == 7; })
+                .Scope(observed.target_scope))
+      .On<DropEvents<int>::Entered>([&observed](int value, const DropEvent& event) {
+        REQUIRE(value == 7);
+        observed.events.emplace_back("entered");
+        observed.target_event = event;
+        // Resource and service lookup must use the receiver even though its input originated in another window.
+        REQUIRE(UseWindow().LifecycleState() == WindowLifecycleState::Background);
+        if (observed.throw_on_enter) throw std::runtime_error("HuxerUI window drag test failure");
+      })
+      .On<DropEvents<int>::Moved>([&observed](int, const DropEvent& event) {
+        observed.events.emplace_back("moved");
+        observed.target_event = event;
+        if (observed.throw_on_move) {
+          throw std::runtime_error("HuxerUI window drag test failure");
+        }
+      })
+      .On<DropEvents<int>::Exited>([&observed](int, const DropEvent&) {
+        observed.events.emplace_back("exited");
+        if (observed.throw_on_exit) {
+          throw std::runtime_error("HuxerUI window drag test failure");
+        }
+      })
+      .On<DropEvents<int>::Dropped>([&observed](int, const DropEvent&) {
+        observed.events.emplace_back("dropped");
+        if (observed.throw_on_drop) {
+          throw std::runtime_error("HuxerUI window drag test failure");
+        }
+      })
+      .OnClick([&observed] { ++observed.target_clicks; });
+}
+
+struct WindowDragFixture {
+  WindowDragPlatform host;
+  TestPlatform destination;
+  Application application{WindowDragRoot, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime{application, host};
+  WindowDragObservations observed;
+  UiWindow source{host, host, WindowOptions{}, 0, std::nullopt, WindowLifecycleState::Active};
+  UiWindow target{host, destination, WindowOptions{}, 1};
+
+  WindowDragFixture() {
+    window_drag_observations = &observed;
+    source.SetWindowMetrics({.viewport = {200.0F, 100.0F}});
+    target.SetWindowMetrics({.viewport = {200.0F, 100.0F}});
+    source.BuildFrame();
+    target.BuildFrame();
+  }
+
+  void Begin() {
+    Pointer(source, PointerEventType::Down, 0, {10.0F, 20.0F});
+    Pointer(source, PointerEventType::Move, 0, {30.0F, 20.0F});
+  }
+};
+
+} // namespace
+
+TEST_CASE("Application drag reaches an opted-in window without starting its pointer recognizers", "[window-drag]") {
+  WindowDragFixture fixture;
+  Pointer(fixture.source, PointerEventType::Move, 0, {10.0F, 20.0F});
+  fixture.Begin();
+  REQUIRE(fixture.observed.source_hover_leaves == 1);
+  const auto transfer = fixture.host.transfer;
+  REQUIRE(transfer);
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  REQUIRE(fixture.observed.events == std::vector<std::string>{"started", "entered"});
+  REQUIRE(fixture.observed.target_event->window_position == Point{40.0F, 30.0F});
+  REQUIRE(fixture.observed.target_event->pointer_id == 0);
+  REQUIRE(transfer->Move(fixture.destination, {50.0F, 35.0F}));
+  REQUIRE(ContainsText(fixture.target.BuildFrame(), "window preview"));
+  fixture.observed.payload = 9;
+  fixture.source.BuildFrame();
+  REQUIRE(transfer->Drop(fixture.destination, {55.0F, 35.0F}));
+  transfer->Finish(false);
+  REQUIRE(fixture.observed.dropped);
+  REQUIRE(fixture.observed.events.back() == "ended");
+  REQUIRE(std::ranges::count(fixture.observed.events, "dropped") == 1);
+  REQUIRE_FALSE(transfer->Active());
+  REQUIRE_FALSE(ContainsText(fixture.target.BuildFrame(), "window preview"));
+  Pointer(fixture.target, PointerEventType::Down, 0, {40.0F, 30.0F});
+  Pointer(fixture.target, PointerEventType::Up, 0, {40.0F, 30.0F});
+  REQUIRE(fixture.observed.target_clicks == 1);
+}
+
+TEST_CASE("Application drag requires both scopes and respects target eligibility", "[window-drag]") {
+  WindowDragFixture fixture;
+  SECTION("Source remains local by default") {
+    fixture.observed.source_scope = DragDropScope::Window;
+    detail::InternalAccess::InvalidateRoot(fixture.host);
+    fixture.source.BuildFrame();
+    fixture.Begin();
+    REQUIRE_FALSE(fixture.host.transfer);
+    return;
+  }
+  SECTION("Target remains local by default") { fixture.observed.target_scope = DragDropScope::Window; }
+  SECTION("Disabled target") { fixture.observed.target_enabled = false; }
+  SECTION("Rejected payload") { fixture.observed.accepts = false; }
+  detail::InternalAccess::InvalidateRoot(fixture.destination);
+  fixture.target.BuildFrame();
+  fixture.Begin();
+  REQUIRE(fixture.host.transfer);
+  REQUIRE_FALSE(fixture.host.transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  fixture.host.transfer->Finish(false);
+  REQUIRE(fixture.observed.events == std::vector<std::string>{"started", "ended"});
+  REQUIRE_FALSE(fixture.observed.dropped);
+}
+
+TEST_CASE("Application drag exits and re-enters windows and refreshes stationary eligibility", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  transfer->Leave(fixture.destination);
+  REQUIRE(fixture.observed.events.back() == "exited");
+  REQUIRE_FALSE(ContainsText(fixture.target.BuildFrame(), "window preview"));
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  fixture.observed.accepts = false;
+  fixture.target.BuildFrame();
+  REQUIRE(fixture.observed.events.back() == "exited");
+  fixture.observed.accepts = true;
+  fixture.target.BuildFrame();
+  REQUIRE(fixture.observed.events.back() == "entered");
+  transfer->Finish(true);
+  REQUIRE(fixture.observed.events.back() == "canceled");
+  REQUIRE(std::ranges::count(fixture.observed.events, "exited") == 3);
+}
+
+TEST_CASE("Application drag cancels on source removal and ignores late native callbacks", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  int native_cancels = 0;
+  transfer->SetNativeCancel([&] { ++native_cancels; });
+  fixture.observed.source_present = false;
+  fixture.source.BuildFrame();
+  REQUIRE_FALSE(transfer->Active());
+  REQUIRE(native_cancels == 1);
+  REQUIRE(fixture.observed.events.back() == "exited");
+  transfer->Finish(false);
+  REQUIRE_FALSE(transfer->Drop(fixture.destination, {40.0F, 30.0F}));
+  REQUIRE_FALSE(fixture.observed.dropped);
+  REQUIRE_FALSE(ContainsText(fixture.target.BuildFrame(), "window preview"));
+}
+
+TEST_CASE("Application drag survives target removal and cancels when its source retires", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  fixture.observed.target_present = false;
+  fixture.target.BuildFrame();
+  REQUIRE(transfer->Active());
+  fixture.observed.target_present = true;
+  fixture.target.BuildFrame();
+  REQUIRE(fixture.observed.events.back() == "entered");
+  detail::InternalAccess::RetireWindow(fixture.host);
+  REQUIRE_FALSE(transfer->Active());
+  REQUIRE(fixture.observed.events.back() == "entered");
+  fixture.host.RunPlatformModuleTasks();
+  REQUIRE(fixture.observed.events.back() == "exited");
+  transfer->Finish(false);
+  REQUIRE_FALSE(fixture.observed.dropped);
+}
+
+TEST_CASE("Application drag callback exceptions terminate the original session once", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  fixture.observed.throw_on_enter = true;
+  REQUIRE_THROWS_AS(transfer->Move(fixture.destination, {40.0F, 30.0F}), std::runtime_error);
+  REQUIRE_FALSE(transfer->Active());
+  REQUIRE(fixture.observed.events == std::vector<std::string>{"started", "entered", "exited", "canceled"});
+  transfer->Finish(false);
+  REQUIRE(std::ranges::count(fixture.observed.events, "canceled") == 1);
+}
+
+TEST_CASE("Application drag callback failures release native transport once", "[window-drag]") {
+  int native_cancels = 0;
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  transfer->SetNativeCancel([&native_cancels, transfer] {
+    ++native_cancels;
+    transfer->SetNativeCancel({});
+    transfer->Finish(true);
+  });
+  SECTION("Entered") {
+    fixture.observed.throw_on_enter = true;
+    REQUIRE_THROWS_AS(transfer->Move(fixture.destination, {40.0F, 30.0F}), std::runtime_error);
+  }
+  SECTION("Moved") {
+    REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+    fixture.observed.throw_on_move = true;
+    REQUIRE_THROWS_AS(transfer->Move(fixture.destination, {50.0F, 30.0F}), std::runtime_error);
+  }
+  SECTION("Exited") {
+    REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+    fixture.observed.throw_on_exit = true;
+    REQUIRE_THROWS_AS(transfer->Leave(fixture.destination), std::runtime_error);
+  }
+  SECTION("Dropped") {
+    REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+    fixture.observed.throw_on_drop = true;
+    REQUIRE_THROWS_AS(transfer->Drop(fixture.destination, {40.0F, 30.0F}), std::runtime_error);
+  }
+  REQUIRE_FALSE(transfer->Active());
+  REQUIRE(native_cancels == 1);
+  REQUIRE(std::ranges::count(fixture.observed.events, "canceled") == 1);
+  REQUIRE_FALSE(ContainsText(fixture.target.BuildFrame(), "window preview"));
+  transfer->Finish(false);
+  REQUIRE(native_cancels == 1);
+  REQUIRE(std::ranges::count(fixture.observed.events, "ended") == 0);
+}
+
+TEST_CASE("Application drag never crosses Runtime boundaries", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.Begin();
+  TestPlatform foreign;
+  UiWindow other{[]() -> View { return Spacer(); }, foreign};
+  other.SetWindowMetrics({.viewport = {200.0F, 100.0F}});
+  other.BuildFrame();
+  REQUIRE_FALSE(fixture.host.transfer->Move(foreign, {40.0F, 30.0F}));
+  REQUIRE(fixture.observed.events == std::vector<std::string>{"started"});
+}
+
+TEST_CASE("Application drag falls back locally when native transport is unavailable", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.host.supported = false;
+  fixture.Begin();
+  REQUIRE_FALSE(fixture.host.transfer);
+  Pointer(fixture.source, PointerEventType::Up, 0, {35.0F, 20.0F});
+  REQUIRE(fixture.observed.events.back() == "ended");
+  REQUIRE_FALSE(fixture.observed.dropped);
+}
+
+TEST_CASE("Application drag preserves frozen source scope and receiver-local coordinates", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.observed.target_offset = Point{10.0F, 5.0F};
+  fixture.target.BuildFrame();
+  Pointer(fixture.source, PointerEventType::Down, 0, {10.0F, 20.0F});
+  fixture.observed.source_scope = DragDropScope::Window;
+  detail::InternalAccess::InvalidateRoot(fixture.host);
+  fixture.source.BuildFrame();
+  Pointer(fixture.source, PointerEventType::Move, 0, {30.0F, 20.0F});
+  REQUIRE(fixture.host.transfer);
+  REQUIRE(fixture.host.transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  REQUIRE(fixture.observed.target_event->position == Point{30.0F, 25.0F});
+  REQUIRE(fixture.observed.target_event->window_position == Point{40.0F, 30.0F});
+}
+
+TEST_CASE("Application drag keeps source-window identities distinct for equal pointer ids", "[window-drag]") {
+  WindowDragFixture fixture;
+  WindowDragPlatform second_host;
+  UiWindow second_source{fixture.host, second_host, WindowOptions{.key = "source"}, 2};
+  second_source.SetWindowMetrics({.viewport = {200.0F, 100.0F}});
+  second_source.BuildFrame();
+  fixture.Begin();
+  Pointer(second_source, PointerEventType::Down, 0, {10.0F, 20.0F});
+  Pointer(second_source, PointerEventType::Move, 0, {30.0F, 20.0F});
+  REQUIRE(second_host.transfer);
+  REQUIRE(fixture.host.transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  REQUIRE(second_host.transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  fixture.host.transfer->Finish(true);
+  REQUIRE(second_host.transfer->Active());
+  REQUIRE(second_host.transfer->Drop(fixture.destination, {40.0F, 30.0F}));
+  second_host.transfer->Finish(false);
+  REQUIRE(fixture.observed.dropped);
+  REQUIRE(std::ranges::count(fixture.observed.events, "canceled") == 1);
+  REQUIRE(std::ranges::count(fixture.observed.events, "ended") == 1);
+}
+
+TEST_CASE("Application drag clears blocked and retired receivers without losing its source", "[window-drag]") {
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  SetWindowRelationship(*fixture.observed.source_handle, {.modal = true});
+  fixture.target.BuildFrame();
+  REQUIRE(fixture.observed.events.back() == "exited");
+  REQUIRE_FALSE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  SetWindowRelationship(*fixture.observed.source_handle, {});
+  REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  detail::InternalAccess::RetireWindow(fixture.destination);
+  REQUIRE(transfer->Active());
+  REQUIRE_FALSE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+  transfer->Finish(false);
+  REQUIRE(fixture.observed.events.back() == "ended");
+  REQUIRE_FALSE(fixture.observed.dropped);
+}
+
+TEST_CASE("Drag and drop scope rejects invalid configuration", "[window-drag]") {
+  REQUIRE_THROWS_AS(DragSource(7).Scope(static_cast<DragDropScope>(-1)), std::invalid_argument);
+  REQUIRE_THROWS_AS(DropTarget::Accepts<int>().Scope(static_cast<DragDropScope>(-1)), std::invalid_argument);
 }
 
 } // namespace huxerui::test

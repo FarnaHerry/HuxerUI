@@ -766,6 +766,7 @@ private:
     capability_.payload_type = source.payload_type_;
     capability_.payload = source.payload_;
     capability_.preview = source.preview_;
+    capability_.scope = source.scope_;
   }
 
   DragGesture gesture_;
@@ -792,6 +793,7 @@ private:
   }
 
   void UpdateCapability(const DropTarget& target) {
+    capability_.scope = target.scope_;
     capability_.payload_type = target.payload_type_;
     capability_.accepts = target.accepts_;
     capability_.dispatch = target.dispatch_;
@@ -824,6 +826,22 @@ DragSource::DragSource(std::type_index payload_type, std::shared_ptr<const void>
     throw std::invalid_argument("HuxerUI drag source payload must not be empty");
   }
   Validate(gesture_);
+}
+
+DragSource&& DragSource::Scope(DragDropScope scope) && {
+  if (scope != DragDropScope::Window && scope != DragDropScope::Application) {
+    throw std::invalid_argument("HuxerUI drag source scope is invalid");
+  }
+  scope_ = scope;
+  return std::move(*this);
+}
+
+DropTarget&& DropTarget::Scope(DragDropScope scope) && {
+  if (scope != DragDropScope::Window && scope != DragDropScope::Application) {
+    throw std::invalid_argument("HuxerUI drop target scope is invalid");
+  }
+  scope_ = scope;
+  return std::move(*this);
 }
 
 DropTarget::DropTarget(std::type_index payload_type, std::function<bool(const void*)> accepts,

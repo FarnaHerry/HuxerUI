@@ -18,6 +18,7 @@
 namespace huxerui::detail {
 
 struct MountedNode;
+class WindowDrag;
 
 struct PointerHoverState {
   std::int64_t pointer_id = 0;
@@ -132,12 +133,14 @@ struct DragSourceCapability {
   std::type_index payload_type = typeid(void);
   std::shared_ptr<const void> payload;
   std::function<View()> preview;
+  DragDropScope scope = DragDropScope::Window;
 };
 
 struct DropTargetCapability {
   std::type_index payload_type = typeid(void);
   std::function<bool(const void*)> accepts;
   DropTargetDispatch dispatch;
+  DragDropScope scope = DragDropScope::Window;
 };
 
 struct GestureRecognitionState {
@@ -238,6 +241,7 @@ struct DragDropSession {
   std::optional<LayerId> preview_layer{};
   // Layer placement is window-relative, so the frozen source transform resolves the local grab point once.
   Point preview_grab_offset{};
+  std::shared_ptr<WindowDrag> window_drag{};
 };
 
 struct PointerSession {
