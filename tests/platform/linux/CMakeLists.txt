@@ -11,6 +11,7 @@ target_sources(huxerui_linux_tests PRIVATE
         file.cpp
         file_picker.cpp
         http.cpp
+        multi_window_native.cpp
         platform_module.cpp
         renderer.cpp
         text_input.cpp

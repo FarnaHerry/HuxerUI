@@ -188,6 +188,13 @@ WindowLifecycleState WindowService::LifecycleState() const {
   return lifecycle_state_.Get();
 }
 
+std::optional<Point> WindowService::Position() const {
+  if (ui_window_ == nullptr) {
+    return std::nullopt;
+  }
+  return ui_window_->WindowScreenOrigin();
+}
+
 void WindowService::UpdateLifecycleState(WindowLifecycleState state) {
   if (state != WindowLifecycleState::Active && state != WindowLifecycleState::Inactive &&
       state != WindowLifecycleState::Background) {
@@ -463,6 +470,10 @@ void WindowHandle::SetFullscreen(bool fullscreen) const {
 
 void WindowHandle::Close() const {
   service_->Request(WindowCommand::Close);
+}
+
+std::optional<Point> WindowHandle::Position() const {
+  return service_->Position();
 }
 
 void WindowHandle::Retire() const {

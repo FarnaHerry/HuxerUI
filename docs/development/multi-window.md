@@ -8,7 +8,7 @@ It complements the ownership contract in [Multi-Window Design](../design/multi-w
 | Platform | Runtime `OpenWindow` | Status |
 |---|:---:|---|
 | Windows | Supported | Implemented, built, and tested on the development host. |
-| Linux | Throws `std::logic_error` | Port planned; adapter still owns the window and the `GMainContext` loop. |
+| Linux | Supported | Implemented, built, and tested on the development host; see the porting history below. |
 | macOS | Throws `std::logic_error` | Port planned; the application delegate still routes through one window pointer. |
 | Web | Throws `std::logic_error` | Sessions remain host-driven; no runtime creation entry exists yet. |
 | Android, iOS | Throws `std::logic_error` | Platform-driven attachments by design; no runtime creation is planned. |
@@ -29,7 +29,20 @@ MSVC Release, full build with examples and tests enabled.
 
 The focused multi-window filter is `"MultiWindow*,RuntimeOpenWindow*,RetiringOneWindow*,ApplicationHandleOpenWindow*"` against `huxerui_runtime_tests`.
 A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice and checks that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
+The Linux port has the mirror-image `[linux-native]` test (`LinuxRuntimeWindowsOpenAndCloseIndependently`): it opens and closes a runtime window twice against a real display, asserts the requested `initial_position` on platforms that honor placement, retires the runtime windows through the close path while the initial window stays alive, and finishes by closing the initial window to exercise whole-application shutdown; run it explicitly with `huxerui_linux_tests [linux-native]` because it creates real GTK toplevels.
 The interactive demo is `example_multi_window`: the primary window opens a secondary one at runtime, both windows share one counter service, and each window keeps its own local state.
+
+## Validated on the Linux host
+
+GCC 16, Fedora GTK 4.22, shared build with examples and tests enabled.
+
+| Suite | Result |
+|---|---|
+| `huxerui_runtime_tests` (includes the multi-window and relationship cases) | 979 cases, 30729 assertions |
+| `huxerui_unit_tests` | 177 cases, 11083 assertions |
+| `huxerui_ui_tests` | 35 cases, 204 assertions |
+| `huxerui_linux_tests` | 83 cases, 3765 assertions (one pre-existing bidi caret-metrics failure on hosts without the coverage font, unrelated to multi-window) |
+| `huxerui_linux_tests [linux-native]` | 409 assertions, passes with zero GLib criticals |
 
 ## Behavioral notes
 
@@ -39,7 +52,9 @@ The interactive demo is `example_multi_window`: the primary window opens a secon
 - `WindowIdentity::ordinal` is assigned by `Runtime::OpenWindow`; callers that attach windows directly through `UiWindow::InitializeWindow` (embedded hosts and windowless tests) supply their own ordinal and are responsible for keeping it distinct.
 - Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the committed damage snapshot, and the native resources of hosts that override `CreateNativeWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`. Before any of that runs, `RetireWindow` verifies through `UiWindow::CanDiscardHost()` that the window and every initialized window in its owned chain support native discard, and rejects the whole retirement with the capability error when any of them does not; the rejection leaves every window fully intact.
 - Closing a Windows window frees object memory immediately; the graphics driver returns the remaining working set asynchronously. This looks like a partial drop in Task Manager and is expected. If retention is ever suspected again, compare "Commit size" across repeated open/close cycles and use `EmptyWorkingSet` to prove that no object pins the memory before investigating further.
-- Applying modal blocking on Windows calls `EnableWindow` on the covered windows. When a modal window opens from a click, the press still holds mouse capture, and disabling the capturing window synchronously delivers `WM_CANCELMODE` or `WM_CAPTURECHANGED`; the adapter defers the nested pointer cancellation until the in-flight pointer dispatch returns (see `WindowsUiWindow::SendPointer`). Delivering that cancellation immediately re-enters the shared pointer interaction and ends the active session while the outer dispatch still holds it, which corrupts the session map. Host ports whose grab-loss notifications arrive synchronously during input dispatch need an equivalent guard.
+- Applying modal blocking on Windows calls `EnableWindow` on the covered windows. When a modal window opens from a click, the press still holds mouse capture, and disabling the capturing window synchronously delivers `WM_CANCELMODE` or `WM_CAPTURECHANGED`; the adapter defers the nested pointer cancellation until the in-flight pointer dispatch returns (see `WindowsUiWindow::SendPointer`). Delivering that cancellation immediately re-enters the shared pointer interaction and ends the active session while the outer dispatch still holds it, which corrupts the session map. Host ports whose grab-loss notifications arrive synchronously during input dispatch need an equivalent guard. The Linux port applies modality through `gtk_window_set_modal` and `gtk_window_set_transient_for`, which is window-manager mediated and produced no synchronous grab-loss during validation, so no deferred-cancellation guard was needed; revisit if a compositor is found to deliver one.
+- GTK4 defers the native dispose of `gtk_window_destroy`, so the Linux close path for runtime-opened windows runs the shared teardown (owned chain, `Retire()`, native facility release) synchronously inside `CloseRequested` before calling `gtk_window_destroy`; the later `::destroy` emission only releases the remaining native references. Native facility release is guarded to run at most once per window because the IM client and platform views must detach while the widget tree is still alive.
+- Window placement on Linux uses `XMoveWindow` after the native surface maps (`WindowOptions::initial_position`); GTK4 removed `gtk_window_move`. `WindowHandle::Position()` reports the client-area origin in logical screen coordinates through `XTranslateCoordinates` on X11 and `ClientToScreen` on Windows, and reports `std::nullopt` on Wayland where compositors own placement by protocol.
 - When several modal windows overlap in coverage, the most recently established relationship wins: each window is blocked only by modals newer than every modal whose own owned chain contains it. Sibling modals of one owner therefore stack newest-on-top instead of disabling each other, application modals stack the same way, and retiring the top modal unblocks the previous one. Re-affirming an unchanged relationship keeps its place in the stack; windows opened through the ordinary `OpenWindow` overload join the blocking set on the common creation path.
 - Running the test executables leaves an untracked `testing/Temporary/` directory next to the sources; it is a test artifact and is never committed.
 
@@ -56,7 +71,7 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 
 Concrete anchors on the unported adapters:
 
-- Linux: `LinuxUiWindow::Run` in `platform/linux/linux_adapter.cpp` still creates its `GtkWindow` and runs `g_main_context_iteration` inline; the loop condition is the single window's `running_` flag. Ownership and modality virtuals are implemented through `gtk_window_set_transient_for` and `gtk_window_set_modal`, but the close path still shuts the application down until runtime window creation lands.
+- Linux (ported): the per-window `GMainContext` iteration moved to `LinuxRuntime::RunApplication`, `LinuxRuntime::CreateNativeWindow` constructs `LinuxUiWindow` through `Attach` (which no longer enters a nested loop), the initial window opens through `Runtime::OpenWindow`, `CloseRequested` splits on the ordinal (initial window keeps whole-application shutdown, runtime windows retire independently with a synchronous shared teardown before the deferred GTK dispose), and `CanDiscardHost`/`DiscardHost` are overridden so `WindowHandle::Retire()` works. GTK signal handlers were already routed per instance through user data. X11 placement and screen-origin queries use the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
 - macOS: `MacUiWindow::Run` in `platform/macos/appkit_adapter.mm` stores itself on the application delegate's single `huxeruiWindow` pointer, and delegate callbacks such as `windowShouldClose:` assume one window. Ownership uses `addChildWindow:ordered:`, and blocked windows refuse key status through the `canBecomeKeyWindow` override on `HuxerUIWindow`; both are unverified on a macOS host.
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 

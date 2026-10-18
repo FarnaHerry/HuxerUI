@@ -11,6 +11,15 @@ if (NOT TARGET PkgConfig::HUXERUI_LIBSOUP)
     message(FATAL_ERROR
             "HuxerUI Linux HTTP requires the system libsoup 3 development package (minimum 3.0).")
 endif ()
+# Optional X11 client library for window placement (WindowOptions::initial_position) and screen-origin
+# queries; Wayland compositors own placement by protocol, so the adapter degrades gracefully without it.
+pkg_check_modules(HUXERUI_X11 QUIET IMPORTED_TARGET x11)
+if (HUXERUI_X11_FOUND)
+    list(APPEND HUXERUI_PLATFORM_INCLUDE_DIRECTORIES ${HUXERUI_X11_INCLUDE_DIRS})
+    list(APPEND HUXERUI_PLATFORM_COMPILE_OPTIONS ${HUXERUI_X11_CFLAGS_OTHER})
+    list(APPEND HUXERUI_PLATFORM_COMPILE_DEFINITIONS HUXERUI_LINUX_X11=1)
+    list(APPEND HUXERUI_PLATFORM_LINK_LIBRARIES PkgConfig::HUXERUI_X11)
+endif ()
 
 set(HUXERUI_PLATFORM_SOURCE_FILES
         "${HUXERUI_PROJECT_DIR}/platform/linux/linux_adapter.cpp"
