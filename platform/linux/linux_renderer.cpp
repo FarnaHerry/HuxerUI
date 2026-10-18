@@ -25,7 +25,11 @@
 #include <vector>
 
 #include "graphics/external_texture_internal.h"
+#include "graphics/backdrop_plane_internal.h"
+#include "graphics/effects_internal.h"
+#include "graphics/geometry_internal.h"
 #include "linux_external_texture_internal.h"
+#include "linux_gl_effects_internal.h"
 #include "graphics/path_internal.h"
 #include "graphics/paint_internal.h"
 #include "resources/resource_internal.h"
@@ -636,6 +640,9 @@ struct LinuxRenderer::State {
   }
 
   ~State() {
+    if (backdrop_frame != nullptr) {
+      g_object_unref(backdrop_frame);
+    }
     for (CachedImage& image : images) {
       g_object_unref(image.pixbuf);
     }
@@ -657,6 +664,20 @@ struct LinuxRenderer::State {
     }
     g_object_unref(context);
   }
+
+  ::GdkTexture* backdrop_frame = nullptr;
+  const RenderNode* backdrop_root = nullptr;
+  std::uint64_t backdrop_revision = 0;
+  Rect backdrop_bounds;
+  float device_scale = 1.0F;
+  float backdrop_scale = 0.0F;
+  std::optional<Size> viewport;
+  // GPU backdrop execution is created on first use on this display; once initialization fails the
+  // renderer stays on the portable CPU processor for its lifetime.
+  ::GdkDisplay* display = nullptr;
+  std::unique_ptr<LinuxBackdropGl> backdrop_gl;
+  bool backdrop_gl_unavailable = false;
+  LinuxBackdropStats backdrop_stats;
 
   GdkPixbuf* ImageFor(const ImageAsset& image) {
     if (!image.HasValue()) {
@@ -1574,6 +1595,661 @@ GskPath* CreateGskPath(const Path& path) {
   return gsk_path_builder_free_to_path(builder);
 }
 
+Rect BackdropSceneBounds(const RenderNode& node, Transform2D parent = {}) {
+  if (!node.visible || node.opacity <= 0.0F) {
+    return {};
+  }
+  const Transform2D own = ComposeTransform(parent, ComposeTransform(TranslationTransform(node.offset), node.transform));
+  Rect bounds = UnionRect(TransformBounds(own, node.content.Bounds()), TransformBounds(own, node.foreground.Bounds()));
+  const Transform2D children = ComposeTransform(own, node.children_transform);
+  for (const RenderNode* child : node.children) {
+    if (child) {
+      bounds = UnionRect(bounds, BackdropSceneBounds(*child, children));
+    }
+  }
+  return bounds;
+}
+
+void CairoTransform(cairo_t* context, const Transform2D& transform) {
+  cairo_matrix_t matrix;
+  cairo_matrix_init(&matrix, transform.m11, transform.m12, transform.m21, transform.m22,
+                   transform.translate_x, transform.translate_y);
+  cairo_transform(context, &matrix);
+}
+
+class BackdropScenePainter final {
+public:
+  BackdropScenePainter(LinuxRenderer::State& state, cairo_t* context, bool gpu_frame)
+      : state_(state), context_(context), gpu_frame_(gpu_frame) {
+    cairo_surface_t* target = cairo_get_target(context_);
+    live_group_bytes_ = static_cast<std::size_t>(cairo_image_surface_get_stride(target)) *
+                        static_cast<std::size_t>(cairo_image_surface_get_height(target)) * (gpu_frame_ ? 2 : 1);
+  }
+
+  void Draw(const RenderNode& node) {
+    if (!node.visible || node.opacity <= 0.0F) {
+      return;
+    }
+    cairo_save(context_);
+    cairo_translate(context_, node.offset.x, node.offset.y);
+    CairoTransform(context_, node.transform);
+    const bool isolated = node.opacity < 1.0F;
+    const std::size_t parent_clip_depth = clip_depth_;
+    cairo_t* parent_context = context_;
+    std::unique_ptr<cairo_surface_t, void (*)(cairo_surface_t*)> group_surface(nullptr, cairo_surface_destroy);
+    std::unique_ptr<cairo_t, void (*)(cairo_t*)> group_context(nullptr, cairo_destroy);
+    std::size_t group_bytes = 0;
+    if (isolated) {
+      FlushBackdropPlane();
+      FlushRaster();
+      cairo_surface_t* parent_target = cairo_get_target(parent_context);
+      const int width = cairo_image_surface_get_width(parent_target);
+      const int height = cairo_image_surface_get_height(parent_target);
+      group_bytes = static_cast<std::size_t>(cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width)) *
+                    static_cast<std::size_t>(height) * (gpu_frame_ ? 2 : 1);
+      if (group_bytes > maximum_backdrop_group_bytes - live_group_bytes_) {
+        throw std::runtime_error("HuxerUI Linux backdrop opacity groups exceed the capture budget");
+      }
+      group_surface.reset(cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height));
+      if (cairo_surface_status(group_surface.get()) != CAIRO_STATUS_SUCCESS) {
+        throw std::runtime_error("HuxerUI Linux backdrop opacity allocation failed");
+      }
+      double offset_x = 0.0;
+      double offset_y = 0.0;
+      cairo_surface_get_device_offset(parent_target, &offset_x, &offset_y);
+      cairo_surface_set_device_offset(group_surface.get(), offset_x, offset_y);
+      group_context.reset(cairo_create(group_surface.get()));
+      cairo_matrix_t matrix;
+      cairo_get_matrix(parent_context, &matrix);
+      cairo_set_matrix(group_context.get(), &matrix);
+      // Inherited clips apply at final composition; they must not truncate this group's sampling source.
+      context_ = group_context.get();
+      clip_depth_ = 0;
+      InvalidateClipMask();
+      live_group_bytes_ += group_bytes;
+      if (gpu_frame_) {
+        state_.backdrop_gl->PushGroup();
+      }
+    }
+    Sequence(node.content);
+    cairo_save(context_);
+    for (const RenderClip& clip : node.child_clips) {
+      std::visit([this](const auto& command) { Command(command); }, clip);
+    }
+    CairoTransform(context_, node.children_transform);
+    for (const RenderNode* child : node.children) {
+      if (child) {
+        Draw(*child);
+      }
+    }
+    if (!node.child_clips.empty()) {
+      FlushBackdropPlane();
+      FlushRaster();
+    }
+    for (std::size_t index = 0; index < node.child_clips.size(); ++index) {
+      cairo_restore(context_);
+      --clip_depth_;
+    }
+    if (!node.child_clips.empty()) {
+      InvalidateClipMask();
+    }
+    cairo_restore(context_);
+    Sequence(node.foreground);
+    if (isolated) {
+      // Deferred optical output belongs to the group surface and must be written before the group
+      // composites onto its parent.
+      FlushBackdropPlane();
+      FlushRaster();
+      if (cairo_status(context_) != CAIRO_STATUS_SUCCESS) {
+        throw std::runtime_error("HuxerUI Linux backdrop opacity replay failed");
+      }
+      context_ = parent_context;
+      clip_depth_ = parent_clip_depth;
+      InvalidateClipMask();
+      live_group_bytes_ -= group_bytes;
+      if (gpu_frame_) {
+        WithBackdropRows(ClipMask(), [&](const std::uint8_t* pixels, std::size_t stride) {
+          state_.backdrop_gl->PopGroup(pixels, stride, std::clamp(node.opacity, 0.0F, 1.0F), mask_changed_);
+        });
+        mask_changed_ = false;
+        cairo_restore(context_);
+        return;
+      }
+      double offset_x = 0.0;
+      double offset_y = 0.0;
+      cairo_surface_get_device_offset(group_surface.get(), &offset_x, &offset_y);
+      cairo_save(context_);
+      cairo_identity_matrix(context_);
+      cairo_set_source_surface(context_, group_surface.get(), -offset_x, -offset_y);
+      cairo_paint_with_alpha(context_, std::clamp(node.opacity, 0.0F, 1.0F));
+      cairo_restore(context_);
+    }
+    cairo_restore(context_);
+  }
+
+  // Writes any still-deferred optical output; call once after the root node has been replayed.
+  void Finish() {
+    FlushBackdropPlane();
+    FlushRaster();
+  }
+
+private:
+  struct DeferredRaster {
+    const PaintCommand* command;
+    cairo_matrix_t matrix;
+    Rect device_bounds;
+  };
+
+  static constexpr std::size_t maximum_deferred_commands = 4096;
+
+  template <typename Submit>
+  auto WithBackdropRows(cairo_surface_t* surface, Submit submit)
+      -> decltype(submit(static_cast<const std::uint8_t*>(nullptr), std::size_t{})) {
+    if (surface == nullptr) {
+      return submit(nullptr, 0);
+    }
+    cairo_surface_flush(surface);
+    const auto* pixels = cairo_image_surface_get_data(surface);
+    const std::size_t stride = static_cast<std::size_t>(cairo_image_surface_get_stride(surface));
+#if G_BYTE_ORDER == G_BIG_ENDIAN
+    const std::size_t height = static_cast<std::size_t>(cairo_image_surface_get_height(surface));
+    const std::size_t width = static_cast<std::size_t>(cairo_image_surface_get_width(surface));
+    std::vector<std::uint8_t> bgra(stride * height);
+    for (std::size_t row = 0; row < height; ++row) {
+      for (std::size_t column = 0; column < width; ++column) {
+        const std::size_t offset = row * stride + column * 4;
+        bgra[offset] = pixels[offset + 3];
+        bgra[offset + 1] = pixels[offset + 2];
+        bgra[offset + 2] = pixels[offset + 1];
+        bgra[offset + 3] = pixels[offset];
+      }
+    }
+    return submit(bgra.data(), stride);
+#else
+    return submit(pixels, stride);
+#endif
+  }
+
+  void InvalidateClipMask() {
+    clip_mask_.reset();
+    mask_changed_ = true;
+  }
+
+  cairo_surface_t* ClipMask() {
+    if (clip_depth_ == 0) {
+      return nullptr;
+    }
+    if (clip_mask_) {
+      return clip_mask_.get();
+    }
+    cairo_surface_t* target = cairo_get_target(context_);
+    const int width = cairo_image_surface_get_width(target);
+    const int height = cairo_image_surface_get_height(target);
+    double offset_x = 0.0;
+    double offset_y = 0.0;
+    cairo_surface_get_device_offset(target, &offset_x, &offset_y);
+    cairo_matrix_t matrix;
+    cairo_get_matrix(context_, &matrix);
+    cairo_save(context_);
+    cairo_push_group_with_content(context_, CAIRO_CONTENT_ALPHA);
+    cairo_set_operator(context_, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgba(context_, 1.0, 1.0, 1.0, 1.0);
+    cairo_paint(context_);
+    std::unique_ptr<cairo_pattern_t, void (*)(cairo_pattern_t*)> pattern(
+        cairo_pop_group(context_), cairo_pattern_destroy);
+    cairo_restore(context_);
+    std::unique_ptr<cairo_surface_t, void (*)(cairo_surface_t*)> mask(
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height), cairo_surface_destroy);
+    if (cairo_surface_status(mask.get()) != CAIRO_STATUS_SUCCESS) {
+      throw std::runtime_error("HuxerUI Linux backdrop clip allocation failed");
+    }
+    cairo_surface_set_device_offset(mask.get(), offset_x, offset_y);
+    std::unique_ptr<cairo_t, void (*)(cairo_t*)> context(cairo_create(mask.get()), cairo_destroy);
+    cairo_set_matrix(context.get(), &matrix);
+    cairo_set_source(context.get(), pattern.get());
+    cairo_paint(context.get());
+    if (cairo_status(context.get()) != CAIRO_STATUS_SUCCESS) {
+      throw std::runtime_error("HuxerUI Linux backdrop clip rasterization failed");
+    }
+    cairo_surface_flush(mask.get());
+    clip_mask_ = std::move(mask);
+    ++state_.backdrop_stats.mask_rasterizations;
+    return clip_mask_.get();
+  }
+
+  void FlushRaster() {
+    if (!gpu_frame_ || raster_bounds_.IsEmpty()) {
+      return;
+    }
+    cairo_surface_t* target = cairo_get_target(context_);
+    WithBackdropRows(target, [&](const std::uint8_t* pixels, std::size_t stride) {
+      state_.backdrop_gl->CompositeRaster(pixels, stride, raster_bounds_);
+    });
+    // Clearing the upload segment must not depend on the current node's clip or transform.
+    std::unique_ptr<cairo_t, void (*)(cairo_t*)> clear(cairo_create(target), cairo_destroy);
+    double offset_x = 0;
+    double offset_y = 0;
+    cairo_surface_get_device_offset(target, &offset_x, &offset_y);
+    cairo_set_operator(clear.get(), CAIRO_OPERATOR_CLEAR);
+    cairo_rectangle(clear.get(), raster_bounds_.x - offset_x, raster_bounds_.y - offset_y, raster_bounds_.width,
+                    raster_bounds_.height);
+    cairo_fill(clear.get());
+    raster_bounds_ = {};
+  }
+
+  void AccumulateRasterBounds(Rect local_bounds, bool use_clip = false) {
+    if (!gpu_frame_) {
+      return;
+    }
+    if (use_clip) {
+      double left, top, right, bottom;
+      cairo_clip_extents(context_, &left, &top, &right, &bottom);
+      local_bounds = {static_cast<float>(left), static_cast<float>(top), static_cast<float>(right - left),
+                      static_cast<float>(bottom - top)};
+    }
+    const Rect bounds = ExpandRect(TransformBounds(CurrentDeviceTransform(), local_bounds), 3.0F);
+    cairo_surface_t* target = cairo_get_target(context_);
+    const float width = static_cast<float>(cairo_image_surface_get_width(target));
+    const float height = static_cast<float>(cairo_image_surface_get_height(target));
+    if (!std::isfinite(bounds.x) || !std::isfinite(bounds.y) || !std::isfinite(bounds.width) ||
+        !std::isfinite(bounds.height) || !std::isfinite(bounds.x + bounds.width) ||
+        !std::isfinite(bounds.y + bounds.height)) {
+      raster_bounds_ = {0, 0, width, height};
+      return;
+    }
+    const float left = std::clamp(std::floor(bounds.x), 0.0F, width);
+    const float top = std::clamp(std::floor(bounds.y), 0.0F, height);
+    const float right = std::clamp(std::ceil(bounds.x + bounds.width), 0.0F, width);
+    const float bottom = std::clamp(std::ceil(bounds.y + bounds.height), 0.0F, height);
+    raster_bounds_ = UnionRect(raster_bounds_, {left, top, right - left, bottom - top});
+  }
+
+  template <CairoPaintCommand Command> void DrawRaster(const Command& command) {
+    CairoCommandPainter(state_, context_).Draw(command);
+    Rect bounds = CairoCommandBounds(command);
+    if constexpr (std::same_as<Command, DrawBorderCommand>) {
+      bounds = ExpandRect(bounds, command.style.width * std::max(1.0F, command.style.miter_limit));
+    }
+    // Run bounds describe layout, not necessarily glyph ink. Retain the complete clip for this command.
+    AccumulateRasterBounds(bounds, std::same_as<Command, DrawTextRunsCommand>);
+  }
+
+  void Sequence(const PaintSequence& sequence) {
+    for (const PaintCommand& command : sequence.Commands()) {
+      std::visit([this, &command](const auto& value) {
+        if constexpr (CairoPaintCommand<std::decay_t<decltype(value)>>) {
+          if (deferred_raster_.size() == maximum_deferred_commands) {
+            FlushBackdropPlane();
+          }
+          if (planes_.empty()) {
+            DrawRaster(value);
+          } else {
+            Rect bounds = CairoCommandBounds(value);
+            if constexpr (std::same_as<std::decay_t<decltype(value)>, DrawBorderCommand>) {
+              bounds = ExpandRect(bounds, value.style.width * std::max(1.0F, value.style.miter_limit));
+            }
+            cairo_matrix_t matrix;
+            cairo_get_matrix(context_, &matrix);
+            const Rect device_bounds = bounds.IsEmpty()
+                ? Rect{} : ExpandRect(TransformBounds(CurrentDeviceTransform(), bounds), 3.0F);
+            deferred_raster_.push_back({&command, matrix, device_bounds});
+          }
+        } else {
+          Command(value);
+        }
+      }, command);
+    }
+  }
+
+  void Command(const DrawBackdropCommand& command) {
+    const Transform2D local_to_pixel = CurrentDeviceTransform();
+    if (!InverseTransform(local_to_pixel)) {
+      return;
+    }
+    const Rect sampling = ExpandRect(TransformBounds(local_to_pixel, BackdropSamplingBounds(command)), 3.0F);
+    if (!std::isfinite(sampling.x) || !std::isfinite(sampling.y) || !std::isfinite(sampling.width) ||
+        !std::isfinite(sampling.height) || !std::isfinite(sampling.x + sampling.width) ||
+        !std::isfinite(sampling.y + sampling.height)) {
+      throw std::invalid_argument("HuxerUI Linux backdrop sampling bounds must remain finite");
+    }
+    // Moving earlier raster work behind this effect preserves its source only when that work lies
+    // outside the complete sampling halo. Deferred raster commands retain their original order.
+    const bool needs_raster_prefix = std::any_of(deferred_raster_.begin(), deferred_raster_.end(),
+        [&](const DeferredRaster& raster) { return sampling.Intersects(raster.device_bounds); });
+    if (needs_raster_prefix || !planes_.TryAdd(command, local_to_pixel, 3.0F)) {
+      FlushBackdropPlane();
+      const bool added = planes_.TryAdd(command, local_to_pixel, 3.0F);
+      (void)added; // An empty batch always accepts a command that passed record-time validation.
+    }
+  }
+
+  Transform2D CurrentDeviceTransform() const {
+    double offset_x = 0.0;
+    double offset_y = 0.0;
+    cairo_surface_t* target = cairo_get_group_target(context_);
+    cairo_surface_get_device_offset(target, &offset_x, &offset_y);
+    cairo_matrix_t matrix;
+    cairo_get_matrix(context_, &matrix);
+    return Transform2D{
+        static_cast<float>(matrix.xx), static_cast<float>(matrix.yx),
+        static_cast<float>(matrix.xy), static_cast<float>(matrix.yy),
+        static_cast<float>(matrix.x0 + offset_x), static_cast<float>(matrix.y0 + offset_y)};
+  }
+
+  void FlushBackdropPlane() {
+    if (planes_.empty()) {
+      return;
+    }
+    const detail::BackdropPlaneBatch batch = planes_.batch();
+    planes_.Clear();
+    ApplyBackdropPlane(batch);
+    cairo_save(context_);
+    for (const DeferredRaster& raster : deferred_raster_) {
+      cairo_set_matrix(context_, &raster.matrix);
+      std::visit([this](const auto& command) {
+        if constexpr (CairoPaintCommand<std::decay_t<decltype(command)>>) {
+          DrawRaster(command);
+        }
+      }, *raster.command);
+    }
+    cairo_restore(context_);
+    deferred_raster_.clear();
+  }
+
+  void ApplyBackdropPlane(const detail::BackdropPlaneBatch& batch) {
+    cairo_surface_t* target = cairo_get_group_target(context_);
+    if (cairo_surface_get_type(target) != CAIRO_SURFACE_TYPE_IMAGE ||
+        cairo_image_surface_get_format(target) != CAIRO_FORMAT_ARGB32) {
+      throw std::logic_error("HuxerUI Linux backdrop requires an ARGB32 capture target");
+    }
+    cairo_surface_flush(target);
+    const int width = cairo_image_surface_get_width(target);
+    const int height = cairo_image_surface_get_height(target);
+    const int stride = cairo_image_surface_get_stride(target);
+    double offset_x = 0.0;
+    double offset_y = 0.0;
+    cairo_surface_get_device_offset(target, &offset_x, &offset_y);
+    const auto clamp_start = [](float value, int extent) {
+      return static_cast<int>(std::clamp(std::floor(value), 0.0F, static_cast<float>(extent)));
+    };
+    const auto clamp_end = [](float value, int extent) {
+      return static_cast<int>(std::clamp(std::ceil(value), 0.0F, static_cast<float>(extent)));
+    };
+    const int left = clamp_start(batch.sampling_bounds.x, width);
+    const int top = clamp_start(batch.sampling_bounds.y, height);
+    const int right = clamp_end(batch.sampling_bounds.x + batch.sampling_bounds.width, width);
+    const int bottom = clamp_end(batch.sampling_bounds.y + batch.sampling_bounds.height, height);
+    if (right <= left || bottom <= top) {
+      return;
+    }
+    ++state_.backdrop_stats.plane_count;
+    state_.backdrop_stats.command_count += batch.commands.size();
+    if (gpu_frame_) {
+      FlushRaster();
+      const bool applied = WithBackdropRows(ClipMask(), [&](const std::uint8_t* pixels, std::size_t stride) {
+        return state_.backdrop_gl->ApplyToFrame(batch, pixels, stride, mask_changed_);
+      });
+      mask_changed_ = false;
+      if (!applied) {
+        throw std::logic_error("HuxerUI backdrop blur requires axis-aligned scaling or a uniform orthogonal transform");
+      }
+      ++state_.backdrop_stats.gpu_plane_count;
+      return;
+    }
+    const std::size_t capture_width = static_cast<std::size_t>(right - left);
+    const std::size_t capture_stride = capture_width * 4;
+    std::vector<std::uint8_t> capture(capture_stride * static_cast<std::size_t>(bottom - top));
+    const auto* source = cairo_image_surface_get_data(target);
+    for (int row = top; row < bottom; ++row) {
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+      std::memcpy(capture.data() + static_cast<std::size_t>(row - top) * capture_stride,
+                  source + static_cast<std::size_t>(row) * static_cast<std::size_t>(stride) + left * 4,
+                  capture_stride);
+#else
+      const auto* input = source + static_cast<std::size_t>(row) * static_cast<std::size_t>(stride) + left * 4;
+      auto* output = capture.data() + static_cast<std::size_t>(row - top) * capture_stride;
+      for (std::size_t column = 0; column < capture_width; ++column) {
+        output[column * 4] = input[column * 4 + 3];
+        output[column * 4 + 1] = input[column * 4 + 2];
+        output[column * 4 + 2] = input[column * 4 + 1];
+        output[column * 4 + 3] = input[column * 4];
+      }
+#endif
+    }
+    for (const auto& member : batch.commands) {
+      const Rect sampling = ExpandRect(
+          TransformBounds(member.local_to_device, BackdropSamplingBounds(*member.command)), 3.0F);
+      const int region_left = std::max(left, clamp_start(sampling.x, width));
+      const int region_top = std::max(top, clamp_start(sampling.y, height));
+      const int region_right = std::min(right, clamp_end(sampling.x + sampling.width, width));
+      const int region_bottom = std::min(bottom, clamp_end(sampling.y + sampling.height, height));
+      if (region_right <= region_left || region_bottom <= region_top) {
+        continue;
+      }
+      const std::size_t region_width = static_cast<std::size_t>(region_right - region_left);
+      const std::size_t region_height = static_cast<std::size_t>(region_bottom - region_top);
+      std::vector<std::uint8_t> region(region_width * region_height * 4);
+      for (std::size_t row = 0; row < region_height; ++row) {
+        std::memcpy(region.data() + row * region_width * 4,
+                    capture.data() +
+                        (static_cast<std::size_t>(region_top - top) + row) * capture_stride +
+                        static_cast<std::size_t>(region_left - left) * 4,
+                    region_width * 4);
+      }
+      const auto inverse = InverseTransform(member.local_to_device);
+      if (!inverse) {
+        continue;
+      }
+      const Transform2D pixel_to_local = ComposeTransform(*inverse, TranslationTransform(
+          {static_cast<float>(region_left), static_cast<float>(region_top)}));
+      BackdropPixels pixels = ApplyBackdropEffect(region, region_width, region_height, region_width * 4,
+          pixel_to_local, *member.command);
+      // Members never write into another member's optical output, so command-order region writes
+      // reproduce immediate per-command replay on the shared capture.
+      for (std::size_t row = 0; row < region_height; ++row) {
+        std::memcpy(capture.data() +
+                        (static_cast<std::size_t>(region_top - top) + row) * capture_stride +
+                        static_cast<std::size_t>(region_left - left) * 4,
+                    pixels.bgra.data() + row * pixels.stride,
+                    region_width * 4);
+      }
+    }
+#if G_BYTE_ORDER == G_BIG_ENDIAN
+    for (std::size_t offset = 0; offset < capture.size(); offset += 4) {
+      std::swap(capture[offset], capture[offset + 3]);
+      std::swap(capture[offset + 1], capture[offset + 2]);
+    }
+#endif
+    CairoSurfaceHandle surface{cairo_image_surface_create_for_data(capture.data(), CAIRO_FORMAT_ARGB32,
+        right - left, bottom - top, static_cast<int>(capture_stride))};
+    if (cairo_surface_status(surface.surface) != CAIRO_STATUS_SUCCESS) {
+      throw std::runtime_error("HuxerUI Linux backdrop output allocation failed");
+    }
+    cairo_save(context_);
+    cairo_identity_matrix(context_);
+    cairo_set_operator(context_, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_surface(context_, surface.surface, left - offset_x, top - offset_y);
+    cairo_rectangle(context_, left - offset_x, top - offset_y, right - left, bottom - top);
+    cairo_fill(context_);
+    cairo_restore(context_);
+  }
+
+  void Command(const DrawExternalTextureCommand& command) {
+    FlushBackdropPlane();
+    auto acquired = state_.AcquireSnapshotTexture(command.texture);
+    if (!acquired.texture) {
+      return;
+    }
+    std::unique_ptr<::GdkTexture, void (*)(::GdkTexture*)> texture(acquired.texture,
+        [](::GdkTexture* value) { g_object_unref(value); });
+    const int width = gdk_texture_get_width(texture.get());
+    const int height = gdk_texture_get_height(texture.get());
+    if (width <= 0 || height <= 0 || static_cast<std::uint64_t>(width) * height > 16777216) {
+      throw std::runtime_error("HuxerUI Linux backdrop texture exceeds the capture budget");
+    }
+    AccumulateRasterBounds(command.destination);
+    const int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(stride) * static_cast<std::size_t>(height));
+    gdk_texture_download(texture.get(), pixels.data(), static_cast<std::size_t>(stride));
+    CairoSurfaceHandle surface{cairo_image_surface_create_for_data(pixels.data(), CAIRO_FORMAT_ARGB32,
+        width, height, stride)};
+    cairo_save(context_);
+    cairo_rectangle(context_, command.destination.x, command.destination.y,
+                    command.destination.width, command.destination.height);
+    cairo_clip(context_);
+    const Size intrinsic = command.texture->IntrinsicSize();
+    cairo_translate(context_, command.destination.x, command.destination.y);
+    cairo_scale(context_, command.destination.width / command.source.width,
+                command.destination.height / command.source.height);
+    cairo_translate(context_, -command.source.x, -command.source.y);
+    if (acquired.flip_y) {
+      cairo_translate(context_, 0.0, intrinsic.height);
+      cairo_scale(context_, 1.0, -1.0);
+    }
+    cairo_scale(context_, intrinsic.width / width, intrinsic.height / height);
+    cairo_set_source_surface(context_, surface.surface, 0.0, 0.0);
+    cairo_pattern_set_filter(cairo_get_source(context_), command.sampling == ImageSampling::Nearest
+        ? CAIRO_FILTER_NEAREST : CAIRO_FILTER_BILINEAR);
+    cairo_paint_with_alpha(context_, command.opacity);
+    cairo_restore(context_);
+  }
+
+  void Command(const PushClipCommand& command) {
+    // Deferred optical output must be written under the clip active at its recording position.
+    FlushBackdropPlane();
+    cairo_save(context_);
+    cairo_new_path(context_);
+    AddRoundedRect(context_, command.rect, command.corner_radius);
+    cairo_clip(context_);
+    ++clip_depth_;
+    InvalidateClipMask();
+  }
+
+  void Command(const PushPathClipCommand& command) {
+    FlushBackdropPlane();
+    cairo_save(context_);
+    cairo_new_path(context_);
+    AppendPathContour(context_, command.path);
+    cairo_set_fill_rule(context_, command.fill_rule == PathFillRule::EvenOdd ? CAIRO_FILL_RULE_EVEN_ODD
+                                                                           : CAIRO_FILL_RULE_WINDING);
+    cairo_clip(context_);
+    ++clip_depth_;
+    InvalidateClipMask();
+  }
+
+  void Command(const PopClipCommand&) {
+    FlushBackdropPlane();
+    cairo_restore(context_);
+    --clip_depth_;
+    InvalidateClipMask();
+  }
+  void Command(const PushTransformCommand& command) {
+    cairo_save(context_);
+    CairoTransform(context_, command.transform);
+  }
+  void Command(const PopTransformCommand&) { cairo_restore(context_); }
+  void Command(const PlacePlatformViewCommand&) {
+    throw std::logic_error("HuxerUI backdrop effects cannot sample native PlatformView content");
+  }
+
+  LinuxRenderer::State& state_;
+  cairo_t* context_;
+  bool gpu_frame_ = false;
+  Rect raster_bounds_;
+  std::size_t clip_depth_ = 0;
+  std::unique_ptr<cairo_surface_t, void (*)(cairo_surface_t*)> clip_mask_{nullptr, cairo_surface_destroy};
+  bool mask_changed_ = true;
+  std::size_t live_group_bytes_ = 0;
+  detail::BackdropPlaneCollector planes_;
+  std::vector<DeferredRaster> deferred_raster_;
+};
+
+void SnapshotBackdropScene(LinuxRenderer::State& state, GtkSnapshot* snapshot, const RenderFrame& frame) {
+  Rect bounds = state.viewport
+      ? Rect{0.0F, 0.0F, state.viewport->width, state.viewport->height}
+      : BackdropSceneBounds(*frame.scene.root);
+  if (bounds.IsEmpty()) {
+    return;
+  }
+  const double pixel_left = std::floor(static_cast<double>(bounds.x) * state.device_scale);
+  const double pixel_top = std::floor(static_cast<double>(bounds.y) * state.device_scale);
+  const double pixel_width = std::ceil(static_cast<double>(bounds.x + bounds.width) * state.device_scale) - pixel_left;
+  const double pixel_height = std::ceil(static_cast<double>(bounds.y + bounds.height) * state.device_scale) - pixel_top;
+  if (!std::isfinite(pixel_width) || !std::isfinite(pixel_height) || pixel_width < 1 || pixel_height < 1 ||
+      pixel_width > 16384 || pixel_height > 16384 || pixel_width * pixel_height > 16777216) {
+    throw std::runtime_error("HuxerUI Linux backdrop scene exceeds the capture budget");
+  }
+  const int width = static_cast<int>(pixel_width);
+  const int height = static_cast<int>(pixel_height);
+  bounds.x = static_cast<float>(pixel_left / state.device_scale);
+  bounds.y = static_cast<float>(pixel_top / state.device_scale);
+  bounds.width = width / state.device_scale;
+  bounds.height = height / state.device_scale;
+  if (state.backdrop_frame == nullptr || state.backdrop_root != frame.scene.root ||
+      state.backdrop_revision != frame.revision || state.backdrop_bounds != bounds ||
+      state.backdrop_scale != state.device_scale) {
+    CairoSurfaceHandle surface{cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height)};
+    if (cairo_surface_status(surface.surface) != CAIRO_STATUS_SUCCESS) {
+      throw std::runtime_error("HuxerUI Linux backdrop scene allocation failed");
+    }
+    std::unique_ptr<cairo_t, void (*)(cairo_t*)> context(cairo_create(surface.surface), cairo_destroy);
+    cairo_scale(context.get(), state.device_scale, state.device_scale);
+    cairo_translate(context.get(), -bounds.x, -bounds.y);
+    bool gpu_frame = false;
+    if (!state.backdrop_gl_unavailable && state.display != nullptr) {
+      if (!state.backdrop_gl) {
+        state.backdrop_gl = std::make_unique<LinuxBackdropGl>();
+      }
+      if (!state.backdrop_gl->TryInitialize(state.display)) {
+        state.backdrop_gl_unavailable = true;
+        state.backdrop_gl.reset();
+      } else {
+        gpu_frame = state.backdrop_gl->BeginFrame(static_cast<std::size_t>(width), static_cast<std::size_t>(height));
+      }
+    }
+    BackdropScenePainter painter(state, context.get(), gpu_frame);
+    try {
+      painter.Draw(*frame.scene.root);
+      painter.Finish();
+    } catch (...) {
+      if (gpu_frame) {
+        state.backdrop_gl->CancelFrame();
+      }
+      throw;
+    }
+    if (cairo_status(context.get()) != CAIRO_STATUS_SUCCESS) {
+      throw std::runtime_error("HuxerUI Linux backdrop scene replay failed");
+    }
+    cairo_surface_flush(surface.surface);
+    const std::size_t stride = static_cast<std::size_t>(cairo_image_surface_get_stride(surface.surface));
+    ::GdkTexture* texture = nullptr;
+    if (gpu_frame) {
+      texture = state.backdrop_gl->FinishFrame();
+      const LinuxBackdropGlStats stats = state.backdrop_gl->FrameStats();
+      state.backdrop_stats.source_capture_count = stats.source_captures;
+      state.backdrop_stats.blur_pass_count = stats.blur_passes;
+      state.backdrop_stats.blur_cache_hits = stats.blur_cache_hits;
+      state.backdrop_stats.raster_upload_bytes = stats.raster_upload_bytes;
+      state.backdrop_stats.readback_bytes = stats.readback_bytes;
+      state.backdrop_stats.mask_upload_bytes = stats.mask_upload_bytes;
+    } else {
+      GBytes* bytes = g_bytes_new(cairo_image_surface_get_data(surface.surface), stride * height);
+      texture = gdk_memory_texture_new(width, height, GDK_MEMORY_DEFAULT, bytes, stride);
+      g_bytes_unref(bytes);
+    }
+    if (state.backdrop_frame) {
+      g_object_unref(state.backdrop_frame);
+    }
+    state.backdrop_frame = texture;
+    state.backdrop_root = frame.scene.root;
+    state.backdrop_revision = frame.revision;
+    state.backdrop_bounds = bounds;
+    state.backdrop_scale = state.device_scale;
+  }
+  const graphene_rect_t output = GrapheneRect(bounds);
+  gtk_snapshot_append_texture(snapshot, state.backdrop_frame, &output);
+}
+
 class SnapshotScenePainter final {
 public:
   SnapshotScenePainter(LinuxRenderer::State& state, GtkSnapshot* snapshot,
@@ -1730,6 +2406,10 @@ private:
     Flush(batch);
   }
 
+  void DrawCommand(CairoBatch&, const PaintCommand&, const DrawBackdropCommand&) {
+    throw std::logic_error("HuxerUI Linux backdrop requires complete scene capture");
+  }
+
   void Flush(CairoBatch& batch) {
     if (batch.commands.empty()) {
       return;
@@ -1878,7 +2558,51 @@ void LinuxRenderer::Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame) {
   if (snapshot == nullptr) {
     throw std::invalid_argument("HuxerUI Linux renderer requires a GTK snapshot");
   }
-  SnapshotScenePainter(*state_, snapshot).Draw(frame.scene);
+  state_->backdrop_stats = {};
+  ValidateBackdropScene(frame.scene);
+  if (RenderSceneHasBackdropEffects(frame.scene.root)) {
+    SnapshotBackdropScene(*state_, snapshot, frame);
+  } else {
+    if (state_->backdrop_frame) {
+      g_object_unref(state_->backdrop_frame);
+      state_->backdrop_frame = nullptr;
+      state_->backdrop_root = nullptr;
+    }
+    state_->backdrop_gl.reset();
+    SnapshotScenePainter(*state_, snapshot).Draw(frame.scene);
+  }
+}
+
+LinuxBackdropStats LinuxRenderer::BackdropStats() const noexcept {
+  return state_ ? state_->backdrop_stats : LinuxBackdropStats{};
+}
+
+void LinuxRenderer::SetDeviceScale(float scale) {
+  if (!std::isfinite(scale) || scale <= 0.0F) {
+    throw std::invalid_argument("HuxerUI Linux renderer scale must be finite and positive");
+  }
+  state_->device_scale = scale;
+}
+
+void LinuxRenderer::SetViewport(Size viewport) {
+  if (!std::isfinite(viewport.width) || !std::isfinite(viewport.height) ||
+      viewport.width < 0.0F || viewport.height < 0.0F) {
+    throw std::invalid_argument("HuxerUI Linux renderer viewport must be finite and non-negative");
+  }
+  state_->viewport = viewport;
+}
+
+void LinuxRenderer::SetDisplay(::GdkDisplay* display) {
+  if (state_->display != display) {
+    state_->backdrop_gl.reset();
+    state_->backdrop_gl_unavailable = false;
+    if (state_->backdrop_frame != nullptr) {
+      g_object_unref(state_->backdrop_frame);
+      state_->backdrop_frame = nullptr;
+      state_->backdrop_root = nullptr;
+    }
+  }
+  state_->display = display;
 }
 
 void LinuxRenderer::SnapshotSlice(GtkSnapshot* snapshot, const RenderFrame& frame, std::size_t first_command,
@@ -1886,7 +2610,15 @@ void LinuxRenderer::SnapshotSlice(GtkSnapshot* snapshot, const RenderFrame& fram
   if (snapshot == nullptr) {
     throw std::invalid_argument("HuxerUI Linux renderer requires a GTK snapshot");
   }
+  ValidateBackdropSceneSlice(frame.scene, first_command, command_count);
   if (command_count == 0) {
+    return;
+  }
+  if (RenderSceneHasBackdropEffects(frame.scene.root)) {
+    if (first_command != 0) {
+      throw std::logic_error("HuxerUI backdrop effects cannot sample native drawing slices");
+    }
+    Snapshot(snapshot, frame);
     return;
   }
   SnapshotScenePainter(*state_, snapshot, std::pair{first_command, command_count}).Draw(frame.scene);

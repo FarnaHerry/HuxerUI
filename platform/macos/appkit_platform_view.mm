@@ -56,7 +56,8 @@
       huxeruiFrame,
       huxeruiFirstCommand,
       huxeruiCommandCount,
-      false
+      false,
+      NSRectToCGRect(self.bounds)
   );
 }
 
@@ -500,10 +501,11 @@ bool AppKitPlatformViews::Commit(NSView* root, const RenderFrame& frame) {
 void AppKitPlatformViews::DrawBase(CGContextRef context, CGRect dirty_rect) {
   if (state_->base_slice.has_value()) {
     const RenderSlice& slice = *state_->base_slice;
-    state_->renderer->DrawSlice(context, dirty_rect, state_->frame, slice.first_command, slice.command_count, true);
+    state_->renderer->DrawSlice(context, dirty_rect, state_->frame, slice.first_command, slice.command_count, true,
+        NSRectToCGRect(state_->root.bounds));
     return;
   }
-  state_->renderer->DrawSlice(context, dirty_rect, state_->frame, 0, 0, true);
+  state_->renderer->DrawSlice(context, dirty_rect, state_->frame, 0, 0, true, NSRectToCGRect(state_->root.bounds));
 }
 
 NSView* AppKitPlatformViews::HitTest(Point point) const {

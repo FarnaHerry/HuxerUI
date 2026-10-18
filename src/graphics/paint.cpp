@@ -9,6 +9,7 @@
 
 #include <huxerui/vector.h>
 
+#include "effects_internal.h"
 #include "geometry_internal.h"
 #include "paint_internal.h"
 #include "path_internal.h"
@@ -276,6 +277,25 @@ PaintContext::PaintContext(PaintSequence& sequence, Rect bounds, std::string def
   sequence_.commands_.clear();
   sequence_.bounds_ = {};
   sequence_.has_external_texture_commands_ = false;
+  sequence_.has_backdrop_commands_ = false;
+}
+
+void PaintContext::DrawBackdrop(Rect rect, BackdropEffect effect, CornerRadii corner_radii) {
+  DrawBackdrop(std::vector<BackdropShape>{{rect, corner_radii}}, effect);
+}
+
+void PaintContext::DrawBackdrop(std::vector<BackdropShape> shapes, BackdropEffect effect) {
+  RequireOpen();
+  detail::ValidateBackdropEffect(effect);
+  detail::ValidateBackdropShapes(shapes);
+  for (auto& shape : shapes) {
+    shape.corner_radii = detail::NormalizeCornerRadii(shape.rect, shape.corner_radii);
+  }
+  DrawBackdropCommand command{std::move(shapes), effect};
+  detail::ValidateBackdropCommand(command);
+  Include(detail::BackdropBounds(command));
+  sequence_.commands_.emplace_back(std::move(command));
+  sequence_.has_backdrop_commands_ = true;
 }
 
 void PaintContext::DrawRect(Rect rect, Brush brush, CornerRadii corner_radii) {

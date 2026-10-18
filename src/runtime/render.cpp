@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "graphics/effects_internal.h"
 #include "graphics/external_texture_internal.h"
 #include "graphics/paint_internal.h"
 #include "profiling_internal.h"
@@ -55,6 +56,9 @@ void FragmentRenderGroup::Update(
     return;
   }
   for (const RenderNode* source : sources) {
+    if (RenderSceneHasBackdropEffects(source)) {
+      throw std::logic_error("HuxerUI fragment sources cannot contain backdrop effects");
+    }
     if (RenderSceneHasPlatformViews(source)) {
       throw std::logic_error("HuxerUI fragment sources cannot contain PlatformViews");
     }
@@ -113,6 +117,9 @@ void FragmentRenderGroup::Update(
 }
 
 PaintSequence FrozenScene::CopyPaintSequence(const PaintSequence& source) {
+  if (source.HasBackdropCommands()) {
+    throw std::logic_error("HuxerUI frozen scenes cannot capture live backdrop effects");
+  }
   PaintSequence copy = source;
   std::erase_if(copy.commands_, [](const PaintCommand& command) {
     return std::holds_alternative<PlacePlatformViewCommand>(command);
@@ -398,8 +405,49 @@ void SnapshotExternalTextures(const PaintSequence& sequence, const Transform2D& 
   }
 }
 
+void SnapshotBackdropDependencies(const PaintSequence& sequence, const Transform2D& world_transform,
+                                  const std::optional<Rect>& world_clip,
+                                  std::vector<BackdropDependencySnapshot>& dependencies) {
+  if (!sequence.HasBackdropCommands()) { return; }
+  Transform2D transform = world_transform;
+  std::optional<Rect> clip = world_clip;
+  std::vector<Transform2D> transforms;
+  std::vector<std::optional<Rect>> clips;
+  for (const auto& command : sequence.Commands()) {
+    std::visit([&](const auto& value) {
+      using Command = std::decay_t<decltype(value)>;
+      if constexpr (std::same_as<Command, DrawBackdropCommand>) {
+        Rect output = TransformBounds(transform, BackdropBounds(value));
+        if (clip) { output = output.Intersection(*clip); }
+        if (!output.IsEmpty()) {
+          dependencies.push_back({TransformBounds(transform, BackdropSamplingBounds(value)), output});
+        }
+      } else if constexpr (std::same_as<Command, PushTransformCommand>) {
+        transforms.push_back(transform);
+        transform = ComposeTransform(transform, value.transform);
+      } else if constexpr (std::same_as<Command, PopTransformCommand>) {
+        transform = transforms.back();
+        transforms.pop_back();
+      } else if constexpr (std::same_as<Command, PushClipCommand> || std::same_as<Command, PushPathClipCommand>) {
+        clips.push_back(clip);
+        const Rect local = [&] {
+          if constexpr (std::same_as<Command, PushClipCommand>) { return value.rect; }
+          else { return value.path.Bounds(); }
+        }();
+        const Rect bounds = TransformBounds(transform, local);
+        clip = clip ? clip->Intersection(bounds) : std::optional<Rect>{bounds};
+      } else if constexpr (std::same_as<Command, PopClipCommand>) {
+        clip = clips.back();
+        clips.pop_back();
+      }
+    }, command);
+  }
+}
+
 std::optional<Rect> SnapshotRenderNode(const RenderNode& node, const Transform2D& inherited_transform,
-                                       const std::optional<Rect>& inherited_clip, RenderDamageSnapshot& snapshot) {
+                                       const std::optional<Rect>& inherited_clip,
+                                       const std::optional<Rect>& inherited_capture_clip,
+                                       RenderDamageSnapshot& snapshot) {
   RenderNodeSnapshot node_snapshot;
   node_snapshot.content_revision = node.content.Revision();
   node_snapshot.foreground_revision = node.foreground.Revision();
@@ -423,17 +471,26 @@ std::optional<Rect> SnapshotRenderNode(const RenderNode& node, const Transform2D
     return std::nullopt;
   }
 
-  SnapshotExternalTextures(node.content, node_snapshot.world_transform, node_snapshot.world_clip,
+  // An opacity surface defers its inherited clip until composition. Pixels outside that final clip can still feed
+  // a backdrop inside the surface, so source damage follows clips recorded in the active capture group only.
+  const std::optional<Rect> capture_clip = node.opacity < 1.0F ? std::nullopt : inherited_capture_clip;
+
+  SnapshotExternalTextures(node.content, node_snapshot.world_transform, capture_clip,
                            node_snapshot.external_textures);
-  SnapshotExternalTextures(node.foreground, node_snapshot.world_transform, node_snapshot.world_clip,
+  SnapshotExternalTextures(node.foreground, node_snapshot.world_transform, capture_clip,
                            node_snapshot.external_textures);
+
+  SnapshotBackdropDependencies(node.content, node_snapshot.world_transform, capture_clip,
+                               node_snapshot.backdrops);
+  SnapshotBackdropDependencies(node.foreground, node_snapshot.world_transform, capture_clip,
+                               node_snapshot.backdrops);
 
   std::optional<Rect> own_bounds;
   own_bounds = UnionBounds(std::move(own_bounds), node.content.Bounds());
   own_bounds = UnionBounds(std::move(own_bounds), node.foreground.Bounds());
   if (own_bounds.has_value()) {
     own_bounds = TransformBounds(node_snapshot.world_transform, *own_bounds);
-    own_bounds = ClipBounds(std::move(own_bounds), node_snapshot.world_clip);
+    own_bounds = ClipBounds(std::move(own_bounds), capture_clip);
   }
   if (own_bounds.has_value()) {
     node_snapshot.own_bounds = *own_bounds;
@@ -441,13 +498,14 @@ std::optional<Rect> SnapshotRenderNode(const RenderNode& node, const Transform2D
   }
 
   node_snapshot.world_child_clip = ResolveClip(inherited_clip, node_snapshot.world_transform, node.child_clips);
+  const auto child_capture_clip = ResolveClip(capture_clip, node_snapshot.world_transform, node.child_clips);
   std::optional<Rect> subtree_bounds = own_bounds;
   for (const RenderNode* child : node.children) {
     if (child == nullptr) {
       continue;
     }
     const std::optional<Rect> child_bounds = SnapshotRenderNode(
-        *child, node_snapshot.world_children_transform, node_snapshot.world_child_clip, snapshot
+        *child, node_snapshot.world_children_transform, node_snapshot.world_child_clip, child_capture_clip, snapshot
     );
     if (child_bounds.has_value()) {
       subtree_bounds = UnionBounds(std::move(subtree_bounds), *child_bounds);
@@ -612,6 +670,12 @@ void ResolvePresentationTreeImpl(MountedNode& node, const Transform2D& inherited
   }
 }
 
+void PaintNodeExtensionBackdrops(MountedNode& node, PaintContext& context) {
+  for (const auto& entry : node.extensions) {
+    if (entry.extension) { entry.extension->PaintBackdrop(node, context); }
+  }
+}
+
 void PaintNodeExtensionsBehindContent(MountedNode& node, PaintContext& context) {
   for (const auto& entry : node.extensions) {
     if (entry.extension) {
@@ -718,6 +782,10 @@ void RecordNodePaint(MountedNode& node) {
         text_style.foreground = *node.properties.disabled_foreground;
       }
     }
+    PaintNodeExtensionBackdrops(node, content);
+    if (node.properties.backdrop_effect.has_value()) {
+      content.DrawBackdrop(bounds, *node.properties.backdrop_effect, node.resolved_corner_radii);
+    }
     if (node.properties.shadow.has_value() && node.properties.shadow->color.alpha > 0.0F) {
       const Shadow& shadow = *node.properties.shadow;
       content.DrawShadow(bounds, shadow.color, shadow.offset, shadow.blur_radius, shadow.spread,
@@ -782,7 +850,8 @@ void RecordNodePaint(MountedNode& node) {
 
 } // namespace
 
-void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, const RenderNode* extra_child) {
+void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, const Rect& capture_extent,
+                         const RenderNode* extra_child) {
   auto& node = static_cast<detail::MountedNode&>(mounted_node);
   RenderNode& render_node = node.render_node;
   const Transform2D& local_transform = node.presentation.local_transform;
@@ -790,7 +859,9 @@ void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, cons
   const Transform2D& transform = node.presentation.resolved_transform;
   const float opacity = node.presentation.resolved_opacity;
 
-  Rect child_clip = clip;
+  const Rect capture_clip = node.presentation.render_opacity < 1.0F ? capture_extent : clip;
+  Rect child_clip = capture_clip;
+  Rect child_capture_extent = capture_extent;
   std::vector<RenderClip> child_clips = ResolveChildClips(node);
   for (const RenderClip& render_clip : child_clips) {
     child_clip = child_clip.Intersection(TransformBounds(transform, RenderClipBounds(render_clip)));
@@ -798,6 +869,7 @@ void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, cons
   if (!node.presentation.children_fragments.empty()) {
     // Record complete sources: a fragment can bring previously culled content back into the viewport.
     child_clip = fragment_source_bounds;
+    child_capture_extent = fragment_source_bounds;
   }
 
   RecordNodePaint(node);
@@ -807,7 +879,8 @@ void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, cons
   own_paint_bounds = UnionBounds(std::move(own_paint_bounds), render_node.content.Bounds());
   own_paint_bounds = UnionBounds(std::move(own_paint_bounds), render_node.foreground.Bounds());
   const bool own_visible =
-      opacity > 0.0F && own_paint_bounds.has_value() && TransformBounds(transform, *own_paint_bounds).Intersects(clip);
+      opacity > 0.0F && own_paint_bounds.has_value() &&
+      TransformBounds(transform, *own_paint_bounds).Intersects(capture_clip);
 
   bool descendants_need_link_reset = false;
   std::vector<const RenderNode*> children;
@@ -815,7 +888,7 @@ void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, cons
   for (std::size_t index = 0; index < node.children.size(); ++index) {
     MountedNode& child = ChildInPaintOrder(node, index);
     if (child.participates_in_layout) {
-      PaintNodeWithinClip(child, child_clip, nullptr);
+      PaintNodeWithinClip(child, child_clip, child_capture_extent, nullptr);
     } else {
       HideRenderTree(child);
     }
@@ -940,7 +1013,8 @@ std::shared_ptr<FrozenScene> CaptureRenderSubtree(MountedNode& source, bool reco
       return nullptr;
     }
     if (record) { RecordNodePaint(node); }
-    if (node.render_node.content.HasExternalTextureCommands() || node.render_node.foreground.HasExternalTextureCommands()) {
+    if (node.render_node.content.HasExternalTextureCommands() || node.render_node.foreground.HasExternalTextureCommands() ||
+        node.render_node.content.HasBackdropCommands() || node.render_node.foreground.HasBackdropCommands()) {
       supported = false;
       return nullptr;
     }
@@ -975,7 +1049,7 @@ void ResolvePresentationTree(MountedNode& node) {
 }
 
 void UpdateRenderScene(MountedNode& node, Rect clip, const RenderNode* overlay) {
-  PaintNodeWithinClip(node, clip, overlay);
+  PaintNodeWithinClip(node, clip, clip, overlay);
 }
 
 DamageRegion ComputeDamageRegion(
@@ -992,9 +1066,10 @@ DamageRegion ComputeDamageRegion(
       viewport.width,
       viewport.height,
   };
+  ValidateBackdropScene(RenderScene{root});
   RenderDamageSnapshot current_scene;
   if (root != nullptr) {
-    SnapshotRenderNode(*root, Transform2D{}, std::nullopt, current_scene);
+    SnapshotRenderNode(*root, Transform2D{}, std::nullopt, std::nullopt, current_scene);
   }
 
   DamageRegion damage;
@@ -1042,6 +1117,27 @@ DamageRegion ComputeDamageRegion(
     }
   }
 
+  if (!damage.full && !damage.rects.empty()) {
+    std::vector<BackdropDependencySnapshot> pending;
+    for (const auto& [id, node] : current_scene) {
+      static_cast<void>(id);
+      pending.insert(pending.end(), node.backdrops.begin(), node.backdrops.end());
+    }
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      std::erase_if(pending, [&](const auto& dependency) {
+        const bool affected = std::any_of(damage.rects.begin(), damage.rects.end(), [&](Rect rect) {
+          return rect.Intersects(dependency.sampling_bounds);
+        });
+        if (affected) {
+          AddDamageRect(damage, dependency.output_bounds, viewport_bounds);
+          changed = true;
+        }
+        return affected;
+      });
+    }
+  }
   UpdateExternalTextureActivity(committed_scene, current_scene, texture_frame_requester);
   committed_scene = std::move(current_scene);
   committed_viewport = viewport;

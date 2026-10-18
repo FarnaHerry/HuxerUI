@@ -12,6 +12,7 @@
 
 #include <huxerui/animation.h>
 #include <huxerui/color.h>
+#include <huxerui/effects.h>
 #include <huxerui/geometry.h>
 #include <huxerui/indication.h>
 #include <huxerui/layer.h>
@@ -236,6 +237,8 @@ struct DialogStyle {
   /// Returns the default Flat Dialog appearance.
   static DialogStyle Default();
 
+  std::optional<BackdropEffect> backdrop_effect{};
+
   bool operator==(const DialogStyle&) const = default;
 };
 
@@ -320,6 +323,8 @@ struct MenuStyle {
 
   /// Returns the default Flat Menu appearance.
   static MenuStyle Default();
+
+  std::optional<BackdropEffect> backdrop_effect{};
 
   bool operator==(const MenuStyle&) const = default;
 };
@@ -680,6 +685,8 @@ struct TooltipStyle {
 
   /// Returns the default Flat Tooltip appearance.
   static TooltipStyle Default();
+
+  std::optional<BackdropEffect> backdrop_effect{};
 
   bool operator==(const TooltipStyle&) const = default;
 };

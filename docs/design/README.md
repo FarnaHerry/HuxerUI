@@ -42,6 +42,7 @@ They explain the current implementation and deliberately unsupported behavior, w
 - [ComboBox](combo-box.md): controlled editable suggestions, TextField reuse, popup coordination, and semantics.
 - [Date and Time Pickers](date-time-pickers.md): chrono values, localized calendar and clock presentation, retained browsing, and semantics.
 - [Canvas and Path](canvas.md): vector paths, drawing, retention, and renderer mapping.
+- [Backdrop Effects and Glass](backdrop-effects.md): background sampling, optical materials, compositing isolation, and platform boundaries.
 - [Resources, Images, and Localization](resources.md): typed resources, packages, variants, and locale.
 - [Semantics and Accessibility](semantics.md): semantic frames, actions, identity, and platform bridges.
 - [Files and Application Storage](files.md): storage, external references, pickers, and platform mapping.

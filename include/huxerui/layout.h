@@ -227,6 +227,11 @@ public:
   /// from shadows and descendants.
   [[nodiscard]] virtual Rect Bounds() const noexcept = 0;
 
+  /// Returns the normalized corner shape used by the node's surface and descendant clip.
+  [[nodiscard]] virtual CornerRadii ResolvedCornerRadii() const noexcept {
+    return {};
+  }
+
   /// Returns Bounds() inset by the node's resolved Padding, with width and height clamped to at least zero.
   ///
   /// The rectangle stays in node-local DIPs; its origin is the left/top content inset, not necessarily zero. Resolved

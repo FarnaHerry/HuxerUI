@@ -3,6 +3,7 @@
 #include <gtk/gtk.h>
 
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -13,6 +14,7 @@
 
 #include "linux_renderer.h"
 
+#include "runtime_test_support.h"
 #include "text/text_internal.h"
 
 namespace huxerui::test {
@@ -34,6 +36,32 @@ void RenderSnapshot(detail::LinuxRenderer& renderer, const RenderFrame& frame, c
   cairo_destroy(context);
   gsk_render_node_unref(node);
   cairo_surface_flush(surface);
+}
+
+std::vector<std::uint32_t> RenderPixels(detail::LinuxRenderer& renderer, const RenderFrame& frame,
+                                      int width, int height) {
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+  REQUIRE(cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS);
+  RenderSnapshot(renderer, frame, surface);
+  const auto* pixels = reinterpret_cast<const std::uint32_t*>(cairo_image_surface_get_data(surface));
+  std::vector<std::uint32_t> result(pixels, pixels + width * height);
+  cairo_surface_destroy(surface);
+  return result;
+}
+
+void PaintGlassControl(RenderNode& node, std::string label, bool separate = false) {
+  PaintContext paint(node.content, {0.0F, 0.0F, 60.0F, 40.0F});
+  if (separate) {
+    paint.PushClip({-1000.0F, -1000.0F, 2000.0F, 2000.0F});
+  }
+  paint.DrawBackdrop({0.0F, 0.0F, 60.0F, 40.0F},
+                     BackdropEffect{.blur_radius = 8.0F, .refraction = 3.0F, .highlight = 0.2F}, CornerRadii{8.0F});
+  paint.DrawRect({0.0F, 0.0F, 60.0F, 40.0F}, Color::Rgb(255, 255, 255, 0.2F), CornerRadii{8.0F});
+  paint.DrawText({8.0F, 10.0F, 44.0F, 20.0F}, std::move(label), TextStyle{Font::System(14.0F), Color::White()});
+  if (separate) {
+    paint.PopClip();
+  }
+  paint.Finish();
 }
 
 } // namespace
@@ -816,6 +844,465 @@ TEST_CASE("LinuxOversizedTextSkipsTheLayoutCacheWithoutEvictingCachedEntries") {
   REQUIRE(cached_after.size.width == cached_before.size.width);
   REQUIRE(cached_after.size.height == cached_before.size.height);
   renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropBlursOnlyTheCurrentPrefixAndLeavesForegroundSharp") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 32.0F, 16.0F});
+  paint.DrawRect({0.0F, 0.0F, 16.0F, 16.0F}, Color::White());
+  paint.DrawRect({16.0F, 0.0F, 16.0F, 16.0F}, Color::Black());
+  paint.DrawBackdrop({4.0F, 2.0F, 24.0F, 12.0F}, BackdropEffect{.blur_radius = 6.0F}, CornerRadii{3.0F});
+  paint.DrawRect({15.0F, 6.0F, 2.0F, 4.0F}, Color::Rgb(255, 0, 0));
+  paint.Finish();
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 32, 16);
+  RenderSnapshot(renderer, frame, surface);
+  const auto* pixels = reinterpret_cast<const std::uint32_t*>(cairo_image_surface_get_data(surface));
+  REQUIRE(pixels[4 * 32 + 1] == 0xFFFFFFFFU);
+  REQUIRE(pixels[4 * 32 + 30] == 0xFF000000U);
+  const unsigned int blurred = pixels[4 * 32 + 16] & 0xFFU;
+  REQUIRE(blurred > 0);
+  REQUIRE(blurred < 255);
+  REQUIRE(pixels[8 * 32 + 16] == 0xFFFF0000U);
+  cairo_surface_destroy(surface);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropPreservesTranslucentAlphaAndIsolatedGroupSources") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 24.0F, 16.0F});
+  paint.DrawRect({0.0F, 0.0F, 24.0F, 16.0F}, Color::Rgb(0, 255, 255, 0.5F));
+  paint.DrawBackdrop({2.0F, 2.0F, 8.0F, 8.0F}, BackdropEffect{.blur_radius = 0.0F});
+  paint.Finish();
+  RenderNode child;
+  child.offset = {12.0F, 2.0F};
+  child.opacity = 0.5F;
+  PaintContext child_paint(child.content, {0.0F, 0.0F, 8.0F, 8.0F});
+  child_paint.DrawBackdrop({0.0F, 0.0F, 8.0F, 8.0F}, BackdropEffect{.blur_radius = 3.0F});
+  child_paint.Finish();
+  root.children = {&child};
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 24, 16);
+  RenderSnapshot(renderer, frame, surface);
+  const auto* pixels = reinterpret_cast<const std::uint32_t*>(cairo_image_surface_get_data(surface));
+  REQUIRE(pixels[6 * 24 + 6] == pixels[6 * 24 + 1]);
+  REQUIRE((pixels[6 * 24 + 6] >> 24U) == 128U);
+  REQUIRE(pixels[6 * 24 + 16] == pixels[6 * 24 + 1]);
+  cairo_surface_destroy(surface);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropRestoresNestedClipsAndSupportsDeviceScale") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetDeviceScale(2.0F);
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 24.0F, 16.0F});
+  paint.DrawRect({0.0F, 0.0F, 24.0F, 16.0F}, Color::White());
+  paint.DrawBackdrop({2.0F, 2.0F, 20.0F, 12.0F}, BackdropEffect{.blur_radius = 0.0F});
+  paint.Finish();
+  root.child_clips = {PushClipCommand{.rect = {0.0F, 0.0F, 12.0F, 16.0F}},
+                      PushClipCommand{.rect = {0.0F, 0.0F, 24.0F, 8.0F}}};
+  RenderNode child;
+  PaintContext child_paint(child.content, {0.0F, 0.0F, 24.0F, 16.0F});
+  child_paint.DrawRect({0.0F, 0.0F, 24.0F, 16.0F}, Color::Rgb(0, 255, 0));
+  child_paint.Finish();
+  root.children = {&child};
+  PaintContext foreground(root.foreground, {0.0F, 0.0F, 24.0F, 16.0F});
+  foreground.DrawRect({18.0F, 10.0F, 3.0F, 3.0F}, Color::Rgb(255, 0, 0));
+  foreground.Finish();
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 24, 16);
+  RenderSnapshot(renderer, frame, surface);
+  const auto* pixels = reinterpret_cast<const std::uint32_t*>(cairo_image_surface_get_data(surface));
+  REQUIRE(pixels[4 * 24 + 4] == 0xFF00FF00U);
+  REQUIRE(pixels[12 * 24 + 4] == 0xFFFFFFFFU);
+  REQUIRE(pixels[4 * 24 + 16] == 0xFFFFFFFFU);
+  REQUIRE(pixels[11 * 24 + 19] == 0xFFFF0000U);
+  cairo_surface_destroy(surface);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropIsolationDefersInheritedClipUntilGroupComposition") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({32.0F, 16.0F});
+  RenderNode root;
+  PaintContext background(root.content, {0.0F, 0.0F, 32.0F, 16.0F});
+  background.DrawRect({0.0F, 0.0F, 32.0F, 16.0F}, Color::Rgb(255, 0, 0));
+  background.Finish();
+  root.child_clips = {PushClipCommand{.rect = {0.0F, 0.0F, 16.0F, 16.0F}}};
+  RenderNode child;
+  child.opacity = 0.5F;
+  PaintContext paint(child.content, {0.0F, 0.0F, 32.0F, 16.0F});
+  paint.DrawRect({0.0F, 0.0F, 16.0F, 16.0F}, Color::White());
+  paint.DrawRect({16.0F, 0.0F, 16.0F, 16.0F}, Color::Black());
+  paint.DrawBackdrop({2.0F, 2.0F, 28.0F, 12.0F}, BackdropEffect{.blur_radius = 6.0F});
+  paint.Finish();
+  root.children = {&child};
+  const RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 32, 16);
+  RenderSnapshot(renderer, frame, surface);
+  const auto* pixels = reinterpret_cast<const std::uint32_t*>(cairo_image_surface_get_data(surface));
+  const auto edge = pixels[8 * 32 + 15];
+  REQUIRE((edge >> 24U) == 255U);
+  REQUIRE((edge & 0xFFU) > 0U);
+  REQUIRE((edge & 0xFFU) < 110U);
+  REQUIRE(pixels[8 * 32 + 18] == 0xFFFF0000U);
+  cairo_surface_destroy(surface);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropCacheTracksFrameRevisionViewportAndDeviceScale") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({16.0F, 16.0F});
+  RenderNode root;
+  const auto record = [&root](Color color) {
+    root.content = PaintSequence{};
+    PaintContext paint(root.content, {0.0F, 0.0F, 16.0F, 16.0F});
+    paint.DrawRect({0.0F, 0.0F, 16.0F, 16.0F}, color);
+    paint.DrawBackdrop({2.0F, 2.0F, 12.0F, 12.0F}, BackdropEffect{.blur_radius = 0.0F});
+    paint.Finish();
+  };
+  record(Color::Rgb(255, 0, 0));
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  GskRenderNode* first = Snapshot(renderer, frame);
+  REQUIRE(gsk_render_node_get_node_type(first) == GSK_TEXTURE_NODE);
+  REQUIRE(gdk_texture_get_width(gsk_texture_node_get_texture(first)) == 16);
+  record(Color::Rgb(0, 255, 0));
+  ++frame.revision;
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 16, 16);
+  RenderSnapshot(renderer, frame, surface);
+  const auto* pixels = reinterpret_cast<const std::uint32_t*>(cairo_image_surface_get_data(surface));
+  REQUIRE(pixels[8 * 16 + 8] == 0xFF00FF00U);
+  renderer.SetDeviceScale(2.0F);
+  GskRenderNode* scaled = Snapshot(renderer, frame);
+  REQUIRE(gdk_texture_get_width(gsk_texture_node_get_texture(scaled)) == 32);
+  renderer.SetViewport({8.0F, 16.0F});
+  GskRenderNode* resized = Snapshot(renderer, frame);
+  REQUIRE(gdk_texture_get_width(gsk_texture_node_get_texture(resized)) == 16);
+  gsk_render_node_unref(resized);
+  gsk_render_node_unref(scaled);
+  gsk_render_node_unref(first);
+  cairo_surface_destroy(surface);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropViewportBoundsOffscreenContentAndCaptureBudget") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({16.0F, 16.0F});
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 16.0F, 16.0F});
+  paint.DrawRect({0.0F, 0.0F, 16.0F, 16.0F}, Color::White());
+  paint.DrawRect({100000.0F, 100000.0F, 16.0F, 16.0F}, Color::Black());
+  paint.DrawBackdrop({2.0F, 2.0F, 12.0F, 12.0F}, BackdropEffect{.blur_radius = 0.0F});
+  paint.Finish();
+  const RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  GskRenderNode* node = Snapshot(renderer, frame);
+  REQUIRE(gdk_texture_get_width(gsk_texture_node_get_texture(node)) == 16);
+  gsk_render_node_unref(node);
+  renderer.SetViewport({5000.0F, 5000.0F});
+  GtkSnapshot* snapshot = gtk_snapshot_new();
+  REQUIRE_THROWS_AS(renderer.Snapshot(snapshot, frame), std::runtime_error);
+  g_object_unref(snapshot);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropRejectsIncompletePrefixAndOverflowingCaptureGeometry") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({16.0F, 16.0F});
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 16.0F, 16.0F});
+  paint.DrawRect({0.0F, 0.0F, 16.0F, 16.0F}, Color::White());
+  paint.DrawBackdrop({2.0F, 2.0F, 12.0F, 12.0F}, BackdropEffect{.blur_radius = 0.0F});
+  paint.Finish();
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  GtkSnapshot* snapshot = gtk_snapshot_new();
+  REQUIRE_THROWS_AS(renderer.SnapshotSlice(snapshot, frame, 0, 0), std::logic_error);
+  REQUIRE_THROWS_AS(renderer.SnapshotSlice(snapshot, frame, 0, 1), std::logic_error);
+  REQUIRE_THROWS_AS(renderer.SnapshotSlice(snapshot, frame, 1, 1), std::logic_error);
+  REQUIRE_NOTHROW(renderer.SnapshotSlice(snapshot, frame, 0, 2));
+  g_object_unref(snapshot);
+  root.transform.m11 = 1.0e20F;
+  PaintContext large(root.content, {0.0F, 0.0F, 16.0F, 16.0F});
+  large.DrawBackdrop({1.0e20F, 0.0F, 1.0e20F, 8.0F}, BackdropEffect{.blur_radius = 0.0F});
+  large.Finish();
+  ++frame.revision;
+  snapshot = gtk_snapshot_new();
+  REQUIRE_THROWS_AS(renderer.Snapshot(snapshot, frame), std::invalid_argument);
+  g_object_unref(snapshot);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropBatchesRuntimeButtonsWithTheirOwnFillAndLabels") {
+  TestPlatform platform;
+  UiWindow runtime{[]() -> View {
+    const auto material = LiquidGlass{BackdropEffect{.blur_radius = 8.0F, .refraction = 3.0F, .highlight = 0.2F}};
+    return Row {
+      Button("First").With(Frame{60.0F, 40.0F}, material, Background{Color::Rgb(255, 255, 255, 0.2F)}),
+      Button("Second").With(Frame{60.0F, 40.0F}, material, Background{Color::Rgb(255, 255, 255, 0.2F)}),
+    }.With(Spacing{80.0F}, Padding{12.0F});
+  }, platform};
+  runtime.SetWindowMetrics({.viewport = {240.0F, 80.0F}});
+  const RenderFrame& frame = runtime.BuildRenderFrame();
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({240.0F, 80.0F});
+  RenderPixels(renderer, frame, 240, 80);
+  REQUIRE(renderer.BackdropStats().plane_count == 1);
+  REQUIRE(renderer.BackdropStats().command_count == 2);
+  REQUIRE(renderer.BackdropStats().gpu_plane_count == 0);
+  RenderPixels(renderer, frame, 240, 80);
+  REQUIRE(renderer.BackdropStats().plane_count == 0);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropDeferredRasterMatchesSeparateReplayAcrossSiblingTransforms") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({260.0F, 100.0F});
+  renderer.SetDeviceScale(2.0F);
+  RenderNode first;
+  first.offset = {12.0F, 12.0F};
+  RenderNode second;
+  second.offset = {170.0F, 20.0F};
+  second.transform = {.m11 = 1.1F, .m12 = 0.1F, .m21 = -0.1F, .m22 = 1.1F};
+  PaintGlassControl(first, "First");
+  PaintGlassControl(second, "Second");
+  RenderNode root;
+  PaintContext background(root.content, {0.0F, 0.0F, 260.0F, 100.0F});
+  background.DrawRect({0.0F, 0.0F, 130.0F, 100.0F}, Color::Rgb(210, 80, 40));
+  background.DrawRect({130.0F, 0.0F, 130.0F, 100.0F}, Color::Rgb(40, 80, 210));
+  background.Finish();
+  root.children = {&first, &second};
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  const auto batched = RenderPixels(renderer, frame, 520, 200);
+  REQUIRE(renderer.BackdropStats().plane_count == 1);
+  REQUIRE(renderer.BackdropStats().command_count == 2);
+  PaintGlassControl(first, "First", true);
+  PaintGlassControl(second, "Second", true);
+  ++frame.revision;
+  const auto separate = RenderPixels(renderer, frame, 520, 200);
+  REQUIRE(renderer.BackdropStats().plane_count == 2);
+  REQUIRE(batched == separate);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropSplitsWhenLaterGlassSamplesDeferredForeground") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({220.0F, 80.0F});
+  RenderNode first;
+  first.offset = {12.0F, 12.0F};
+  RenderNode second;
+  second.offset = {140.0F, 12.0F};
+  PaintGlassControl(first, "First");
+  PaintContext foreground(first.foreground, {0.0F, 0.0F, 220.0F, 80.0F});
+  foreground.DrawRect({104.0F, 0.0F, 16.0F, 40.0F}, Color::Rgb(255, 0, 0));
+  foreground.Finish();
+  PaintGlassControl(second, "Second");
+  RenderNode root;
+  PaintContext background(root.content, {0.0F, 0.0F, 220.0F, 80.0F});
+  background.DrawRect({0.0F, 0.0F, 220.0F, 80.0F}, Color::White());
+  background.Finish();
+  root.children = {&first, &second};
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  const auto pixels = RenderPixels(renderer, frame, 220, 80);
+  REQUIRE(renderer.BackdropStats().plane_count == 2);
+  REQUIRE(renderer.BackdropStats().command_count == 2);
+  PaintGlassControl(first, "First", true);
+  PaintGlassControl(second, "Second", true);
+  ++frame.revision;
+  REQUIRE(RenderPixels(renderer, frame, 220, 80) == pixels);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropFlushesDeferredContentBeforeRestoringChildClipsAndOpacity") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({240.0F, 80.0F});
+  RenderNode first;
+  first.offset = {12.0F, 12.0F};
+  PaintGlassControl(first, "First");
+  RenderNode group;
+  group.opacity = 0.5F;
+  group.child_clips = {PushClipCommand{.rect = {12.0F, 12.0F, 24.0F, 40.0F}},
+                       PushPathClipCommand{.path = Path::RoundedRect({12.0F, 12.0F, 24.0F, 40.0F}, CornerRadii{})}};
+  group.children = {&first};
+  RenderNode second;
+  second.offset = {160.0F, 12.0F};
+  PaintGlassControl(second, "Second");
+  RenderNode root;
+  root.children = {&group, &second};
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  const auto pixels = RenderPixels(renderer, frame, 240, 80);
+  REQUIRE(renderer.BackdropStats().plane_count == 2);
+  REQUIRE(pixels[32 * 240 + 30] != 0U);
+  REQUIRE(pixels[32 * 240 + 48] == 0U);
+  PaintGlassControl(first, "First", true);
+  PaintGlassControl(second, "Second", true);
+  ++frame.revision;
+  REQUIRE(RenderPixels(renderer, frame, 240, 80) == pixels);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropReplaysQueuedRasterEvenWhenTheGlassCaptureIsOffscreen") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({16.0F, 16.0F});
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 16.0F, 16.0F});
+  paint.DrawBackdrop({100.0F, 100.0F, 20.0F, 20.0F}, BackdropEffect{.blur_radius = 0.0F});
+  paint.DrawRect({2.0F, 2.0F, 12.0F, 12.0F}, Color::Rgb(255, 0, 0));
+  paint.Finish();
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 1};
+  const auto pixels = RenderPixels(renderer, frame, 16, 16);
+  REQUIRE(pixels[8 * 16 + 8] == 0xFFFF0000U);
+  REQUIRE(renderer.BackdropStats().plane_count == 0);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropPerformanceBaselineReportsStressFrameTiming") {
+  // Measures whole-frame backdrop replay for a stress scene: a colorful background plus six liquid
+  // glass surfaces with blur and refraction. The loop advances the frame revision so the renderer
+  // cache cannot absorb any frame. Timing is reported rather than asserted so hosts stay comparable
+  // across backdrop rendering refactors.
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  renderer.SetViewport({400.0F, 300.0F});
+  renderer.SetDeviceScale(2.0F);
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 400.0F, 300.0F});
+  for (int column = 0; column != 8; ++column) {
+    paint.DrawRect({column * 50.0F, 0.0F, 50.0F, 300.0F},
+                   Color::Rgb(static_cast<std::uint8_t>(column * 30), static_cast<std::uint8_t>(255 - column * 30),
+                              static_cast<std::uint8_t>(column * 16 + 60)));
+  }
+  for (int index = 0; index != 12; ++index) {
+    paint.DrawCircle({(index % 4) * 100.0F + 30.0F, (index / 4) * 100.0F + 40.0F}, 26.0F,
+                     Color::Rgb(250, 80, 40, 0.85F));
+  }
+  const BackdropEffect liquid{.blur_radius = 14.0F, .refraction = 6.0F, .edge_width = 10.0F, .highlight = 0.3F};
+  for (int index = 0; index != 6; ++index) {
+    paint.DrawBackdrop({30.0F + (index % 3) * 130.0F, 40.0F + (index / 3) * 130.0F, 100.0F, 60.0F}, liquid,
+                       CornerRadii{16.0F});
+  }
+  paint.Finish();
+  RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true}, .revision = 0};
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 800, 600);
+  REQUIRE(cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS);
+  std::vector<double> milliseconds;
+  for (int index = 0; index != 15; ++index) {
+    frame.revision = static_cast<std::uint64_t>(index) + 1;
+    const auto start = std::chrono::steady_clock::now();
+    RenderSnapshot(renderer, frame, surface);
+    milliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  }
+  std::sort(milliseconds.begin(), milliseconds.end());
+  const double median = milliseconds[milliseconds.size() / 2];
+  WARN("LinuxBackdropPerformanceBaseline median=" << median << "ms min=" << milliseconds.front()
+                                                   << "ms max=" << milliseconds.back() << "ms");
+  REQUIRE(median > 0.0);
+  cairo_surface_destroy(surface);
+  renderer.Discard();
+}
+
+TEST_CASE("LinuxBackdropControlPlaneReportsCpuAndGpuFrameTiming") {
+  const bool source_changes = GENERATE(false, true);
+  RenderNode root;
+  const auto paint_background = [&](std::uint8_t blue) {
+    PaintContext paint(root.content, {0.0F, 0.0F, 400.0F, 300.0F});
+    for (int column = 0; column != 8; ++column) {
+      paint.DrawRect({column * 50.0F, 0.0F, 50.0F, 300.0F},
+                     Color::Rgb(static_cast<std::uint8_t>(column * 30),
+                                static_cast<std::uint8_t>(255 - column * 30), blue));
+    }
+    paint.Finish();
+  };
+  std::vector<RenderNode> controls(6);
+  for (std::size_t index = 0; index != controls.size(); ++index) {
+    controls[index].offset = {30.0F + static_cast<float>(index % 3) * 130.0F,
+                             40.0F + static_cast<float>(index / 3) * 130.0F};
+    root.children.push_back(&controls[index]);
+  }
+  const auto paint_controls = [&](float highlight) {
+    for (std::size_t index = 0; index != controls.size(); ++index) {
+      PaintContext paint(controls[index].content, {0.0F, 0.0F, 100.0F, 60.0F});
+      paint.DrawBackdrop({0.0F, 0.0F, 100.0F, 60.0F},
+                         BackdropEffect{.blur_radius = 14.0F, .refraction = 6.0F, .edge_width = 10.0F,
+                                        .highlight = highlight}, CornerRadii{16.0F});
+      paint.DrawRect({0.0F, 0.0F, 100.0F, 60.0F}, Color::Rgb(255, 255, 255, 0.2F), CornerRadii{16.0F});
+      paint.DrawText({12.0F, 18.0F, 76.0F, 24.0F}, "Glass " + std::to_string(index + 1),
+                     TextStyle{Font::System(16.0F), Color::White()});
+      paint.Finish();
+    }
+  };
+  for (bool gpu : {false, true}) {
+    if (gpu && gdk_display_get_default() == nullptr) {
+      WARN("LinuxBackdropControlPlane GPU timing unavailable without a display");
+      continue;
+    }
+    detail::LinuxRenderer renderer;
+    renderer.Initialize();
+    renderer.SetViewport({400.0F, 300.0F});
+    renderer.SetDeviceScale(2.0F);
+    if (gpu) {
+      renderer.SetDisplay(gdk_display_get_default());
+    }
+    paint_background(120);
+    paint_controls(0.3F);
+    RenderFrame frame{.scene = {.root = &root}, .damage = {.full = true, .rects = {}}, .revision = 1};
+    const auto advance = [&](int index) {
+      if (source_changes) {
+        paint_background(static_cast<std::uint8_t>(120 + index % 2));
+      } else {
+        paint_controls(index % 2 == 0 ? 0.2F : 0.35F);
+      }
+      ++frame.revision;
+    };
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 800, 600);
+    REQUIRE(cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS);
+    for (int index = 0; index != 3; ++index) {
+      advance(index);
+      RenderSnapshot(renderer, frame, surface);
+    }
+    std::vector<double> milliseconds;
+    for (int index = 0; index != 20; ++index) {
+      advance(index + 3);
+      const auto start = std::chrono::steady_clock::now();
+      RenderSnapshot(renderer, frame, surface);
+      milliseconds.push_back(std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - start).count());
+      const auto stats = renderer.BackdropStats();
+      REQUIRE(stats.plane_count == 1);
+      REQUIRE(stats.command_count == controls.size());
+      if (stats.gpu_plane_count != 0) {
+        REQUIRE(stats.readback_bytes == 0);
+        REQUIRE(stats.source_capture_count == (source_changes ? 1 : 0));
+        REQUIRE(stats.blur_pass_count == (source_changes ? 6 : 0));
+        REQUIRE(stats.blur_cache_hits == (source_changes ? 0 : 1));
+      }
+    }
+    const auto stats = renderer.BackdropStats();
+    std::sort(milliseconds.begin(), milliseconds.end());
+    WARN("LinuxBackdropControlPlane backend=" << (stats.gpu_plane_count != 0 ? "gpu" : "cpu")
+         << " requested_gpu=" << gpu << " source_changes=" << source_changes
+         << " p50=" << milliseconds[10] << "ms p95=" << milliseconds[18] << "ms"
+         << " captures=" << stats.source_capture_count << " blur_passes=" << stats.blur_pass_count
+         << " cache_hits=" << stats.blur_cache_hits << " upload_bytes=" << stats.raster_upload_bytes
+         << " readback_bytes=" << stats.readback_bytes);
+    RenderSnapshot(renderer, frame, surface);
+    REQUIRE(renderer.BackdropStats().plane_count == 0);
+    cairo_surface_destroy(surface);
+    renderer.Discard();
+  }
 }
 
 } // namespace huxerui::test

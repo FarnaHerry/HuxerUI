@@ -2,6 +2,7 @@
 #include "runtime/gesture_internal.h"
 #include "graphics/geometry_internal.h"
 #include "graphics/paint_internal.h"
+#include "graphics/effects_internal.h"
 #include "resources/resource_internal.h"
 #include "text_field_internal.h"
 #include "text/text_input_internal.h"
@@ -686,6 +687,21 @@ public:
       ++revision_;
     }
     return changed;
+  }
+
+  void PaintBackdrop(const detail::MountedNode& node, PaintContext& context) const {
+    if (const auto effect = BackdropMaterial(node)) {
+      const BackdropShape shape = BackdropGeometry(node);
+      context.DrawBackdrop(shape.rect, *effect, shape.corner_radii);
+    }
+  }
+
+  std::optional<BackdropEffect> BackdropMaterial(const detail::MountedNode& node) const {
+    return node.properties.backdrop_override ? std::nullopt : variant_style_.backdrop_effect;
+  }
+
+  BackdropShape BackdropGeometry(const detail::MountedNode& node) const {
+    return {EditorFrame(node), corner_radii_};
   }
 
   void Paint(const detail::MountedNode& node, PaintContext& context, bool hovered, bool trailing_icon_hovered,
@@ -2430,6 +2446,23 @@ private:
 
 class TextFieldExtension final : public NodeExtension {
 public:
+  void PaintBackdrop(const ViewNode& node, PaintContext& context) const override {
+    client_->PaintBackdrop(static_cast<const detail::MountedNode&>(node), context);
+  }
+
+  PaintInvalidation PrepareGeometry(ViewNode& node, TextMeasurer&) override {
+    const auto& mounted = static_cast<const detail::MountedNode&>(node);
+    const auto effect = client_->BackdropMaterial(mounted);
+    const auto shape = effect ? std::optional<BackdropShape>{client_->BackdropGeometry(mounted)} : std::nullopt;
+    if (effect == backdrop_effect_ && shape == backdrop_shape_) {
+      return PaintInvalidation::None;
+    }
+    // Labels and supporting text can move the editor inside an unchanged outer frame.
+    backdrop_effect_ = effect;
+    backdrop_shape_ = shape;
+    return PaintInvalidation::Content;
+  }
+
   TextFieldExtension(ViewNode& node, const detail::TextFieldModifier& modifier)
       : client_(std::make_shared<TextFieldClient>()) {
     Update(node, modifier);
@@ -2575,6 +2608,8 @@ private:
   }
 
   std::shared_ptr<TextFieldClient> client_;
+  std::optional<BackdropEffect> backdrop_effect_;
+  std::optional<BackdropShape> backdrop_shape_;
   bool hovered_ = false;
   bool trailing_icon_hovered_ = false;
   bool trailing_icon_pressed_ = false;
@@ -2608,6 +2643,11 @@ void ApplyTextFieldDefaults(detail::ViewSpec& spec, const std::shared_ptr<const 
   const IconButtonStyle trailing_icon_action_style = detail::ResolveStyleOverride<IconButtonStyle>(environment)
                                                           .value_or(detail::DefaultIconButtonStyle(theme));
   const TextFieldVariantStyle& variant_style = detail::ResolveTextFieldVariantStyle(style, style.variant);
+  for (const TextFieldVariantStyle* variant : {&style.standard, &style.filled, &style.outlined}) {
+    if (variant->backdrop_effect) {
+      detail::ValidateBackdropEffect(*variant->backdrop_effect);
+    }
+  }
   spec.layout_values.insert_or_assign(typeid(detail::TextFieldStyleBinding), detail::MakeErasedLayoutValue(style));
   spec.layout_values.insert_or_assign(typeid(detail::TextFieldTrailingIconActionStyleBinding),
                                       detail::MakeErasedLayoutValue(trailing_icon_action_style));

@@ -24,7 +24,12 @@ if (HUXERUI_WEB_TEST_COMMAND)
                     "${CMAKE_CURRENT_SOURCE_DIR}/file_picker.js"
                     "${HUXERUI_PROJECT_DIR}/platform/web/web_file_picker.cpp"
     )
-    set_tests_properties(HuxerUIWebPlatformRegistryTests HuxerUIWebFilePickerTests
+    add_test(NAME HuxerUIWebBackdropCaptureTests
+            COMMAND ${HUXERUI_WEB_TEST_COMMAND}
+                    "${CMAKE_CURRENT_SOURCE_DIR}/backdrop_capture.js"
+                    "${HUXERUI_PROJECT_DIR}/platform/web/web_renderer.cpp"
+    )
+    set_tests_properties(HuxerUIWebPlatformRegistryTests HuxerUIWebFilePickerTests HuxerUIWebBackdropCaptureTests
             PROPERTIES LABELS "platform;web;portable"
     )
 else ()

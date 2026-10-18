@@ -48,6 +48,13 @@ The implementation remains conservative in several areas:
 - Windows and macOS invalidate conservative platform update bounds derived from DamageRegion.
 - Linux and Android still calculate shared DamageRegion output, but their current toolkit surfaces invalidate and replay the full platform surface.
 
+Backdrop commands additionally record output and sampling bounds in the committed damage snapshot.
+Source-only changes, retained scrolling or transforms and ExternalTexture publication propagate damage into dependent optical output while preserving clean glass PaintSequences.
+Capture clips reset at opacity isolation so source pixels outside an inherited final clip can still invalidate glass inside it.
+Dependencies are conservative across draw order and group ownership; a fixed-point pass covers overlapping optical output without scheduling idle animation.
+Effect frames replay the current scene to capture its complete source prefix; processing is cropped to the sampling halo and Linux reuses the completed image for an unchanged frame revision, bounds and scale.
+See [Backdrop Effects and Glass](backdrop-effects.md) for the resource and compositing contract.
+
 ## Current pipeline
 
 The implemented data flow is:

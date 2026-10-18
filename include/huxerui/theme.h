@@ -15,6 +15,7 @@
 #include <huxerui/geometry.h>
 #include <huxerui/indication.h>
 #include <huxerui/modifier.h>
+#include <huxerui/effects.h>
 #include <huxerui/paint.h>
 #include <huxerui/text.h>
 #include <huxerui/view.h>
@@ -134,6 +135,9 @@ struct ButtonStyle {
 
   static ButtonStyle Default();
 
+  /// Optional processing of the background beneath the button surface; configure a translucent fill separately.
+  std::optional<BackdropEffect> backdrop_effect{};
+
   bool operator==(const ButtonStyle&) const = default;
 };
 
@@ -173,6 +177,8 @@ struct ChipStyle {
   std::optional<Indication> selected_indication;
 
   static ChipStyle Default();
+
+  std::optional<BackdropEffect> backdrop_effect{};
 
   bool operator==(const ChipStyle&) const = default;
 };
@@ -284,6 +290,9 @@ struct SelectStyle {
 
   static SelectStyle Default();
 
+  std::optional<BackdropEffect> backdrop_effect{};
+  std::optional<BackdropEffect> popup_backdrop_effect{};
+
   bool operator==(const SelectStyle&) const = default;
 };
 
@@ -371,6 +380,9 @@ struct TextFieldVariantStyle {
   CornerRadii corner_radii{6.0F};
   float minimum_height = 36.0F;
 
+  /// Applies only to the editor surface, excluding labels and supporting text.
+  std::optional<BackdropEffect> backdrop_effect{};
+
   bool operator==(const TextFieldVariantStyle&) const = default;
 };
 
@@ -451,6 +463,8 @@ struct ComboBoxStyle {
   std::optional<Indication> item_indication;
 
   static ComboBoxStyle Default();
+
+  std::optional<BackdropEffect> popup_backdrop_effect{};
 
   bool operator==(const ComboBoxStyle&) const = default;
 };

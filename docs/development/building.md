@@ -86,7 +86,18 @@ It covers host focus highlighting, paragraph geometry, and local-notification In
 
 The separate windowless UI smoke runs with `./gradlew :ui_testing:connectedDebugAndroidTest` from the same directory.
 It builds source libraries by default; `-PhuxeruiTestingSdk=/absolute/path/to/sdk` selects installed headers, libraries, tools, and resources instead.
-The test module packages its own native dependencies and assets without changing `:HuxerUI` or an example application.
+The test module packages its own native dependencies and assets and includes the matching HuxerUI Java host for renderer checks without replacing an example application.
+Source builds additionally run Android backdrop shader and hardware Canvas fixtures at API 29 or later, including CPU pixel comparisons, opacity/clipping, immutable export lifetime, large-kernel shaders, aborted-frame/resize recovery, completed-frame reuse, plane/cache counters and warmed CPU/GPU timings.
+Installed-SDK smoke runs omit these implementation-specific fixtures.
+For optimized device measurements, select `-PhuxeruiTestingBuildType=release` and build or run `:ui_testing:assembleReleaseAndroidTest` or `:ui_testing:connectedReleaseAndroidTest`; the default remains Debug.
+After installing a source-built test APK, API 33-or-later devices can run the HWUI/Fast comparison with `adb -s SERIAL shell am instrument -w -r -e nativeFastValidation true org.huxerui.testing.test/org.huxerui.HuxerUIUiTestingTest`.
+This separate run checks source restoration, exterior pixels, foreground ink, atomic budget fallback and bounded recording lifetimes; Gaussian scene differences are diagnostic measurements rather than acceptance against the Precise box tolerance.
+It saves scene metrics and selected PNG pairs under the test package's external-files `native-fast-validation` directory; API 33/34 cover neutral blur and complete-scene optical fallback, while API 35 and later also cover optical blur.
+The SDK-path smoke checks Precise/mixed-quality isolation, zero-blur optical GL fallback, quality changes and the unset-property automatic Fast policy.
+The independent API 35 zero-blur AGSL diagnostic remains available with `-e nativeOutputMode optics` instead of `-e nativeFastValidation true`; its original maximum 3/255 and mean 0.5/255 gates remain unchanged.
+That diagnostic is separate from SDK-path acceptance because native zero-blur optics is excluded from automatic admission.
+The example runner accepts `-PhuxeruiExampleProfiling=OFF` for an optimized timing baseline; its default remains `ON`.
+Profiling-enabled Android builds expose ATrace sections for backdrop frame replay, hardware raster capture, optical planes, export and export-fence waiting.
 See [Android execution](../guide/testing.md#android-execution) for the resource and runner contract.
 
 ## Runtime profiling

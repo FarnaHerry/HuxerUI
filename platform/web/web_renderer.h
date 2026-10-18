@@ -69,6 +69,7 @@ private:
   void RenderCommand(const DrawArcCommand& command);
   void RenderCommand(const DrawBorderCommand& command);
   void RenderCommand(const DrawShadowCommand& command);
+  void RenderCommand(const DrawBackdropCommand& command);
   void RenderCommand(const FillPathCommand& command);
   void RenderCommand(const StrokePathCommand& command);
   void RenderCommand(const DrawPathShadowCommand& command);
@@ -89,6 +90,8 @@ private:
   std::uintptr_t session_id_ = 0;
   std::uint64_t external_texture_draw_epoch_ = 0;
   bool force_redraw_ = true;
+  bool backdrop_drawing_ = false;
+  std::size_t backdrop_bytes_ = 0;
 };
 
 } // namespace huxerui::detail

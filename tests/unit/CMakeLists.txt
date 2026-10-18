@@ -4,8 +4,10 @@ huxerui_add_test_suite(huxerui_unit_tests HuxerUIUnitTests
         SOURCES
             animation.cpp
             application.cpp
+            backdrop_plane.cpp
             buffer_reference_example.cpp
             data.cpp
+            effects.cpp
             external_texture.cpp
             file.cpp
             geometry.cpp

@@ -101,6 +101,12 @@ Lines begin at their `start`, arcs begin at `start_angle` and advance with the s
 
 Blurred Path shadows exclude the shifted caster interior, matching rectangular shadow semantics and avoiding a second solid shape.
 
+`PaintContext::DrawBackdrop()` records one immutable `DrawBackdropCommand` with rounded shape geometry and a `BackdropEffect`.
+It consumes the already-painted prefix of the current compositing group at that exact command position, leaving later Canvas drawing sharp.
+The command is independent of Brush, which remains a filling source.
+Its recorded bounds describe optical output, while source dependencies additionally include the blur and refraction halo.
+See [Backdrop Effects and Glass](backdrop-effects.md) for replacement composition, source isolation, capture limits and renderer handling.
+
 Canvas uses the same text vocabulary as built-in controls.
 `DrawText()` lays out a paragraph inside a rectangle, while `DrawTextRun()` and `DrawTextRuns()` replay baseline-positioned runs whose bounds were produced by `TextMeasurer`.
 `TextLayoutOptions` controls horizontal alignment, vertical placement, and wrapping independently for paragraph drawing.

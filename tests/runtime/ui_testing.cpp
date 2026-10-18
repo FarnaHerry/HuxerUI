@@ -859,4 +859,33 @@ TEST_CASE("Windowless snapshot reports omission only beyond the difference limit
   REQUIRE(std::count(diff.begin(), diff.end(), '\n') == std::min(differences, 64) + (differences > 64 ? 1 : 0));
 }
 
+TEST_CASE("Windowless snapshots retain backdrop shape and optical configuration", "[ui-testing][glass]") {
+  Application application([] {
+    count = UseState(0);
+    return Canvas([changed = count.Get()](PaintContext& paint, Size) {
+      paint.DrawBackdrop({0, 0, 40, 20}, BackdropEffect{
+          .blur_radius = changed == 1 ? 12.0F : 8.0F,
+          .blur_quality = changed == 2 ? BackdropBlurQuality::Fast : BackdropBlurQuality::Precise},
+                         CornerRadii{4, 5, 6, 7});
+    }).With(Frame{40.0F, 20.0F});
+  }, {.show_debug_overlay = false});
+  UiTest ui(application);
+  const auto before = ui.CaptureSnapshot();
+  REQUIRE(before.ToString().find("blur_radius=8.000000") != std::string::npos);
+  REQUIRE(before.ToString().find("bottom_left=7.000000") != std::string::npos);
+  count = 1;
+  ui.Pump();
+  const auto after = ui.CaptureSnapshot();
+  REQUIRE(after.Diff(before).find("/blur_radius: 8.000000 -> 12.000000") != std::string::npos);
+  REQUIRE(before.ToString().find("blur_radius=8.000000") != std::string::npos);
+  count = 2;
+  ui.Pump();
+  const auto fast = ui.CaptureSnapshot();
+  REQUIRE(fast != before);
+  REQUIRE(fast.Diff(before).find("/blur_quality: 0 -> 1") != std::string::npos);
+  count = 0;
+  ui.Pump();
+  REQUIRE(ui.CaptureSnapshot() == before);
+}
+
 } // namespace huxerui::test

@@ -26,3 +26,10 @@ endif ()
 
 get_target_property(HUXERUI_BUILTIN_RESOURCE_PACKAGE HuxerUI::huxerui HUXERUI_RESOURCE_PACKAGE)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../testing" smoke)
+
+if (NOT HUXERUI_TESTING_SDK)
+    target_sources(huxerui_ui_testing_smoke PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../backdrop_renderer.cpp")
+    target_include_directories(huxerui_ui_testing_smoke PRIVATE
+            "${CMAKE_CURRENT_LIST_DIR}/../../../../src"
+            "${CMAKE_CURRENT_LIST_DIR}/../../../../platform/android/huxerui/src/main/cpp")
+endif ()

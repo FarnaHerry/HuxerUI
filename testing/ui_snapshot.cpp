@@ -204,6 +204,24 @@ public:
   SnapshotNode Command(const DrawRectCommand& c) {
     return Fields("rect", {"bounds", "brush", "corner_radius"}, c.rect, c.brush, c.corner_radius);
   }
+  SnapshotNode Command(const DrawBackdropCommand& c) {
+    const auto& effect = c.effect;
+    auto result = Fields("backdrop", {"blur_radius", "refraction", "edge_width", "highlight", "light_direction",
+                                      "saturation", "brightness", "fusion_radius", "blur_quality"},
+                         effect.blur_radius, effect.refraction, effect.edge_width, effect.highlight,
+                         effect.light_direction, effect.saturation, effect.brightness, effect.fusion_radius,
+                         effect.blur_quality);
+    SnapshotNode shapes{"shapes"};
+    shapes.sequence = true;
+    for (const auto& shape : c.shapes) {
+      const auto& radii = shape.corner_radii;
+      shapes.children.push_back(Fields("shape", {"bounds", "top_left", "top_right", "bottom_right", "bottom_left"},
+                                       shape.rect, radii.top_left, radii.top_right, radii.bottom_right,
+                                       radii.bottom_left));
+    }
+    result.children.push_back(std::move(shapes));
+    return result;
+  }
   SnapshotNode Command(const DrawTextCommand& c) {
     return Fields("text", {"bounds", "content", "style", "options", "paragraph_offset"}, c.rect, c.text, c.style,
                   c.options, c.paragraph_offset);

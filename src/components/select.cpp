@@ -23,6 +23,7 @@
 #include "huxerui_builtin_resources.h"
 #include "runtime/mounted_node_internal.h"
 #include "indication_internal.h"
+#include "graphics/effects_internal.h"
 
 namespace huxerui {
 
@@ -116,6 +117,11 @@ void ValidateSelectStyle(const SelectStyle& style) {
     throw std::invalid_argument(
         "HuxerUI Select geometry and shadow must be finite with positive popup height and non-negative extents"
     );
+  }
+  for (const auto* effect : {&style.backdrop_effect, &style.popup_backdrop_effect}) {
+    if (*effect) {
+      detail::ValidateBackdropEffect(**effect);
+    }
   }
 }
 
@@ -502,7 +508,7 @@ View SelectPopupContent(detail::ViewItemSource source, SelectStyle style,
   Semantics semantics;
   semantics.role = SemanticRole::List;
   semantics.collection = SemanticCollection{.item_count = source.size};
-  return ScrollView(Column {std::move(items)}.With(CrossAlign{CrossAxisAlignment::Stretch}))
+  View result = ScrollView(Column {std::move(items)}.With(CrossAlign{CrossAxisAlignment::Stretch}))
       .ScrollAxis(Axis::Vertical)
       .Controller(scroll_controller)
       .With(
@@ -519,6 +525,10 @@ View SelectPopupContent(detail::ViewItemSource source, SelectStyle style,
           detail::BuiltInSemantics{std::move(semantics)},
           SelectPopupBehavior{.state = state, .scroll_controller = scroll_controller}
       );
+  if (style.popup_backdrop_effect) {
+    result = std::move(result).With(BackdropFilter{*style.popup_backdrop_effect});
+  }
+  return result;
 }
 
 struct SelectTriggerBehavior {
@@ -820,6 +830,9 @@ std::function<View()> MakeSelectScopeFactory(SelectConfiguration configuration) 
         Foreground{style.foreground}
     );
     trigger = std::move(trigger).With(detail::DefaultIndication{style.indication});
+    if (style.backdrop_effect) {
+      trigger = std::move(trigger).With(BackdropFilter{*style.backdrop_effect});
+    }
     trigger = std::move(trigger).With(
         Focusable{},
         popup.Anchor(),

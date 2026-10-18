@@ -789,6 +789,7 @@ TextField is a leaf node. A single-line field has the intrinsic height provided 
 The content pipeline is:
 
 ```text
+optional editor backdrop material
 variant background
 selection rectangles
 text, placeholder, or expanded label
@@ -842,6 +843,7 @@ struct TextFieldVariantStyle {
   Color disabled_border;
   CornerRadii corner_radii;
   float minimum_height = 0.0F;
+  std::optional<BackdropEffect> backdrop_effect;
 };
 
 struct TextFieldStyle {
@@ -900,6 +902,12 @@ Standard uses a transparent container and bottom state indicator. Filled adds a 
 Each `TextFieldVariantStyle` owns one variant's `VisualFill` background, optional disabled fill, stateful indicator or outline colors, `CornerRadii`, and minimum height. An absent disabled background falls back to the ordinary background. `TextFieldStyle::variant` selects the Theme default, while an explicit component variant selects the corresponding bundle without duplicating active aliases. TextField draws its hover, focus, validation, and disabled states from these style values, so the common node indication and focus ring do not surround supporting text. Hover changes only the variant's indicator or outline, and disabled colors are resolved per element instead of reducing the opacity of the complete field subtree.
 
 `TextFieldStyle::show_label` controls only visual label layout and painting. When it is `false`, `TextField::Label()` still supplies the accessibility label, while the placeholder remains in the editing line and Outlined paints a continuous border without a cutout. `label_spacing` defines the gap between a floating label and editable text for Standard and Filled fields.
+
+An optional variant `backdrop_effect` paints before the editor background and uses only the rounded editor rectangle, excluding labels and supporting text.
+The TextField extension prepares and compares the selected material and editor geometry before painting, so compatible Theme changes or a changed editor rectangle invalidate content without resetting the input client.
+Selection-only changes retain that content sequence.
+An explicit generic View backdrop modifier covers the complete field bounds and suppresses its inherited editor material; input, selection, composition and controlled revision semantics remain unchanged.
+See [Backdrop Effects and Glass](backdrop-effects.md) for source isolation and capture limits.
 
 `TextFieldStyle` belongs in `theme.h` with the existing built-in component styles. Its type is also its Theme override identity.
 

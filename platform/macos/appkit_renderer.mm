@@ -24,6 +24,8 @@
 #include "macos_external_texture_internal.h"
 #include "graphics/path_internal.h"
 #include "graphics/paint_internal.h"
+#include "graphics/effects_internal.h"
+#include "graphics/geometry_internal.h"
 #include "resources/resource_internal.h"
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
@@ -64,6 +66,54 @@ public:
 private:
   T value_ = nullptr;
 };
+
+constexpr CGBitmapInfo backdrop_bitmap_info = static_cast<CGBitmapInfo>(
+    static_cast<std::uint32_t>(kCGImageAlphaPremultipliedFirst) |
+    static_cast<std::uint32_t>(kCGBitmapByteOrder32Little)
+);
+
+CFRef<CGContextRef> CreateBackdropBitmap(std::size_t width, std::size_t height) {
+  if (height == 0 || width == 0 || width > maximum_backdrop_capture_pixels / height) {
+    throw std::runtime_error("HuxerUI Apple backdrop capture exceeds its pixel budget");
+  }
+  CFRef<CGColorSpaceRef> color_space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+  if (color_space.Get() == nullptr) {
+    throw std::runtime_error("HuxerUI could not create an Apple backdrop color space");
+  }
+  CFRef<CGContextRef> context(CGBitmapContextCreate(nullptr, width, height, 8, width * 4, color_space.Get(),
+      backdrop_bitmap_info));
+  if (context.Get() == nullptr) {
+    throw std::runtime_error("HuxerUI could not allocate an Apple backdrop bitmap");
+  }
+  return context;
+}
+
+CGRect ResolveBackdropViewport(CGContextRef context, CGRect viewport) {
+  if (!CGRectIsNull(viewport)) {
+    return viewport;
+  }
+  const std::size_t width = CGBitmapContextGetWidth(context);
+  const std::size_t height = CGBitmapContextGetHeight(context);
+  if (width > 0 && height > 0) {
+    return CGContextConvertRectToUserSpace(context, CGRectMake(0.0, 0.0, width, height));
+  }
+  throw std::logic_error("HuxerUI Apple backdrop drawing requires the complete viewport");
+}
+
+void DrawBackdropDeviceImage(CGContextRef context, CGImageRef image, CGFloat opacity, CGBlendMode blend_mode,
+    CGPoint origin = CGPointZero) {
+  const CGAffineTransform transform = CGContextGetCTM(context);
+  if (std::abs(transform.a * transform.d - transform.b * transform.c) <= 0.000001) {
+    return;
+  }
+  CGContextSaveGState(context);
+  CGContextConcatCTM(context, CGAffineTransformInvert(transform));
+  CGContextSetAlpha(context, opacity);
+  CGContextSetBlendMode(context, blend_mode);
+  CGContextSetInterpolationQuality(context, kCGInterpolationNone);
+  CGContextDrawImage(context, CGRectMake(origin.x, origin.y, CGImageGetWidth(image), CGImageGetHeight(image)), image);
+  CGContextRestoreGState(context);
+}
 
 CFRef<CGGradientRef> CreateGradient(const std::vector<GradientStop>& stops) {
   std::vector<CGFloat> components;
@@ -637,6 +687,9 @@ void ClipCurrentPath(CGContextRef context, PathFillRule fill_rule) {
 } // namespace
 
 struct AppKitRenderer::State {
+  bool backdrop_frame = false;
+  std::size_t backdrop_group_bytes = 0;
+
   struct CachedImage {
     std::uint64_t identity = 0;
     std::size_t byte_size = 0;
@@ -1468,7 +1521,19 @@ void AppKitRenderer::RenderSceneNode(const RenderNode& node, CGContextRef contex
   }
 
   const bool translucent = opacity < 1.0F;
-  if (translucent) {
+  CFRef<CGContextRef> isolated_group;
+  CGContextRef group_parent_context = nullptr;
+  if (translucent && state_->backdrop_frame) {
+    const std::size_t bytes = CGBitmapContextGetBytesPerRow(context) * CGBitmapContextGetHeight(context);
+    if (bytes > maximum_backdrop_group_bytes - state_->backdrop_group_bytes) {
+      throw std::runtime_error("HuxerUI Apple backdrop groups exceed their memory budget");
+    }
+    isolated_group = CreateBackdropBitmap(CGBitmapContextGetWidth(context), CGBitmapContextGetHeight(context));
+    state_->backdrop_group_bytes += bytes;
+    CGContextConcatCTM(isolated_group.Get(), CGContextGetCTM(context));
+    group_parent_context = context;
+    context = isolated_group.Get();
+  } else if (translucent) {
     CGContextSaveGState(context);
     CGContextSetAlpha(context, opacity);
     CGContextBeginTransparencyLayer(context, nullptr);
@@ -1494,13 +1559,98 @@ void AppKitRenderer::RenderSceneNode(const RenderNode& node, CGContextRef contex
     RenderCommand(context, PopClipCommand{});
   }
   RenderSequence(node.foreground, context, range);
-  if (translucent) {
+  if (group_parent_context != nullptr) {
+    CFRef<CGImageRef> image(CGBitmapContextCreateImage(context));
+    if (image.Get() == nullptr) {
+      throw std::runtime_error("HuxerUI could not snapshot an Apple backdrop opacity group");
+    }
+    context = group_parent_context;
+    DrawBackdropDeviceImage(context, image.Get(), opacity, kCGBlendModeNormal);
+    CGContextFlush(context);
+    state_->backdrop_group_bytes -= CGBitmapContextGetBytesPerRow(isolated_group.Get()) *
+                                   CGBitmapContextGetHeight(isolated_group.Get());
+  } else if (translucent) {
     CGContextEndTransparencyLayer(context);
     CGContextRestoreGState(context);
   }
   if (transformed) {
     RenderCommand(context, PopTransformCommand{});
   }
+}
+
+void AppKitRenderer::RenderCommand(CGContextRef context, const DrawBackdropCommand& command) {
+  const std::size_t width = CGBitmapContextGetWidth(context);
+  const std::size_t height = CGBitmapContextGetHeight(context);
+  const std::size_t stride = CGBitmapContextGetBytesPerRow(context);
+  const auto* data = static_cast<const std::uint8_t*>(CGBitmapContextGetData(context));
+  if (data == nullptr || width == 0 || height == 0) {
+    throw std::logic_error("HuxerUI Apple backdrop replay requires a bitmap target");
+  }
+  const CGAffineTransform transform = CGContextGetCTM(context);
+  if (std::abs(transform.a * transform.d - transform.b * transform.c) <= 0.000001) {
+    return;
+  }
+  CGContextFlush(context);
+  // Bitmap rows start at the image top, while the Core Graphics device origin is at the bottom.
+  const Transform2D local_to_pixel{
+      static_cast<float>(transform.a), static_cast<float>(-transform.b),
+      static_cast<float>(transform.c), static_cast<float>(-transform.d),
+      static_cast<float>(transform.tx), static_cast<float>(height - transform.ty)
+  };
+  const auto inverse = InverseTransform(local_to_pixel);
+  if (!inverse) {
+    return;
+  }
+  const Rect sampling = TransformBounds(local_to_pixel, BackdropSamplingBounds(command));
+  if (!std::isfinite(sampling.x) || !std::isfinite(sampling.y) || !std::isfinite(sampling.width) ||
+      !std::isfinite(sampling.height) || !std::isfinite(sampling.x + sampling.width) ||
+      !std::isfinite(sampling.y + sampling.height)) {
+    throw std::invalid_argument("HuxerUI Apple backdrop sampling bounds must remain finite");
+  }
+  const auto lower = [](float value, std::size_t extent) {
+    return static_cast<std::size_t>(std::clamp(std::floor(static_cast<double>(value) - 3.0), 0.0,
+        static_cast<double>(extent)));
+  };
+  const auto upper = [](float value, std::size_t extent) {
+    return static_cast<std::size_t>(std::clamp(std::ceil(static_cast<double>(value) + 3.0), 0.0,
+        static_cast<double>(extent)));
+  };
+  const std::size_t left = lower(sampling.x, width);
+  const std::size_t top = lower(sampling.y, height);
+  const std::size_t right = upper(sampling.x + sampling.width, width);
+  const std::size_t bottom = upper(sampling.y + sampling.height, height);
+  if (right <= left || bottom <= top) {
+    return;
+  }
+  const std::size_t capture_width = right - left;
+  const std::size_t capture_height = bottom - top;
+  const std::size_t capture_stride = capture_width * 4;
+  std::vector<std::uint8_t> capture(capture_stride * capture_height);
+  for (std::size_t row = top; row < bottom; ++row) {
+    std::copy_n(data + row * stride + left * 4, capture_stride,
+        capture.data() + (row - top) * capture_stride);
+  }
+  const Transform2D pixel_to_local = ComposeTransform(*inverse, TranslationTransform(
+      {static_cast<float>(left), static_cast<float>(top)}));
+  const BackdropPixels pixels = ApplyBackdropEffect(
+      capture, capture_width, capture_height, capture_stride, pixel_to_local, command
+  );
+  CFRef<CFDataRef> image_data(CFDataCreate(kCFAllocatorDefault, pixels.bgra.data(), pixels.bgra.size()));
+  if (image_data.Get() == nullptr) {
+    throw std::runtime_error("HuxerUI could not allocate Apple backdrop image data");
+  }
+  CFRef<CGDataProviderRef> provider(CGDataProviderCreateWithCFData(image_data.Get()));
+  CFRef<CGColorSpaceRef> color_space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+  if (provider.Get() == nullptr || color_space.Get() == nullptr) {
+    throw std::runtime_error("HuxerUI could not create the Apple backdrop image source");
+  }
+  CFRef<CGImageRef> image(CGImageCreate(capture_width, capture_height, 8, 32, pixels.stride, color_space.Get(),
+      backdrop_bitmap_info, provider.Get(), nullptr, false,
+      kCGRenderingIntentDefault));
+  if (image.Get() == nullptr) {
+    throw std::runtime_error("HuxerUI could not create an Apple backdrop effect image");
+  }
+  DrawBackdropDeviceImage(context, image.Get(), 1.0, kCGBlendModeCopy, CGPointMake(left, height - bottom));
 }
 
 void AppKitRenderer::RenderCommand(CGContextRef context, const DrawRectCommand& command) {
@@ -1858,10 +2008,23 @@ void AppKitRenderer::RenderCommand(CGContextRef context, const PlacePlatformView
   static_cast<void>(command);
 }
 
-void AppKitRenderer::Draw(CGContextRef context, CGRect dirty_rect, const RenderFrame* frame) {
+void AppKitRenderer::Draw(CGContextRef context, CGRect dirty_rect, const RenderFrame* frame, CGRect viewport) {
   state_->PruneExternalTextures();
+  if (frame != nullptr) {
+    ValidateBackdropScene(frame->scene);
+  }
   CGContextSaveGState(context);
   CGContextClipToRect(context, dirty_rect);
+  if (frame != nullptr && RenderSceneHasBackdropEffects(frame->scene.root)) {
+    try {
+      DrawBackdropFrame(context, viewport, *frame, nullptr, true);
+    } catch (...) {
+      CGContextRestoreGState(context);
+      throw;
+    }
+    CGContextRestoreGState(context);
+    return;
+  }
   SetFillColor(context, Color::Rgb(247, 248, 250));
   CGContextFillRect(context, dirty_rect);
   if (frame != nullptr && frame->scene.root != nullptr) {
@@ -1870,17 +2033,78 @@ void AppKitRenderer::Draw(CGContextRef context, CGRect dirty_rect, const RenderF
   CGContextRestoreGState(context);
 }
 
+void AppKitRenderer::DrawBackdropFrame(CGContextRef context, CGRect viewport, const RenderFrame& frame,
+    CommandRange* range, bool draw_background) {
+  viewport = ResolveBackdropViewport(context, viewport);
+  const CGAffineTransform native_transform = CGContextGetCTM(context);
+  const CGFloat scale_x = std::hypot(native_transform.a, native_transform.b);
+  const CGFloat scale_y = std::hypot(native_transform.c, native_transform.d);
+  const double pixel_width = std::ceil(viewport.size.width * scale_x);
+  const double pixel_height = std::ceil(viewport.size.height * scale_y);
+  if (!std::isfinite(pixel_width) || !std::isfinite(pixel_height) || pixel_width <= 0.0 || pixel_height <= 0.0 ||
+      pixel_width > maximum_backdrop_capture_pixels || pixel_height > maximum_backdrop_capture_pixels ||
+      pixel_width * pixel_height > maximum_backdrop_capture_pixels) {
+    throw std::runtime_error("HuxerUI Apple backdrop viewport exceeds its pixel budget");
+  }
+  const auto width = static_cast<std::size_t>(pixel_width);
+  const auto height = static_cast<std::size_t>(pixel_height);
+  CFRef<CGContextRef> bitmap = CreateBackdropBitmap(width, height);
+  CGContextConcatCTM(bitmap.Get(), CGAffineTransformMake(scale_x, 0.0, 0.0, -scale_y,
+      -viewport.origin.x * scale_x, height + viewport.origin.y * scale_y));
+  const Rect bitmap_rect{static_cast<float>(viewport.origin.x), static_cast<float>(viewport.origin.y),
+      static_cast<float>(width / scale_x), static_cast<float>(height / scale_y)};
+  if (draw_background) {
+    SetFillColor(bitmap.Get(), Color::Rgb(247, 248, 250));
+    CGContextFillRect(bitmap.Get(), CGRectMake(bitmap_rect.x, bitmap_rect.y, bitmap_rect.width, bitmap_rect.height));
+  }
+  state_->backdrop_frame = true;
+  state_->backdrop_group_bytes = CGBitmapContextGetBytesPerRow(bitmap.Get()) * height;
+  try {
+    if (frame.scene.root != nullptr) {
+      RenderSceneNode(*frame.scene.root, bitmap.Get(), range);
+    }
+  } catch (...) {
+    state_->backdrop_frame = false;
+    state_->backdrop_group_bytes = 0;
+    throw;
+  }
+  state_->backdrop_frame = false;
+  state_->backdrop_group_bytes = 0;
+  CFRef<CGImageRef> image(CGBitmapContextCreateImage(bitmap.Get()));
+  if (image.Get() == nullptr) {
+    throw std::runtime_error("HuxerUI could not snapshot the Apple backdrop frame");
+  }
+  const Size intrinsic_size{static_cast<float>(width), static_cast<float>(height)};
+  DrawCGImage(context, image.Get(), intrinsic_size, {0.0F, 0.0F, intrinsic_size.width, intrinsic_size.height},
+      bitmap_rect, ImageSampling::Nearest, 1.0F);
+}
+
 void AppKitRenderer::DrawSlice(
     CGContextRef context,
     CGRect dirty_rect,
     const RenderFrame* frame,
     std::size_t first_command,
     std::size_t command_count,
-    bool draw_background
+    bool draw_background,
+    CGRect viewport
 ) {
   state_->PruneExternalTextures();
+  if (frame != nullptr) {
+    ValidateBackdropSceneSlice(frame->scene, first_command, command_count);
+  }
   CGContextSaveGState(context);
   CGContextClipToRect(context, dirty_rect);
+  if (frame != nullptr && RenderSceneHasBackdropEffects(frame->scene.root)) {
+    CommandRange range{first_command, first_command + command_count, 0};
+    try {
+      DrawBackdropFrame(context, viewport, *frame, &range, draw_background);
+    } catch (...) {
+      CGContextRestoreGState(context);
+      throw;
+    }
+    CGContextRestoreGState(context);
+    return;
+  }
   if (draw_background) {
     SetFillColor(context, Color::Rgb(247, 248, 250));
     CGContextFillRect(context, dirty_rect);

@@ -12,6 +12,7 @@
 
 #include "runtime/view_internal.h"
 #include "indication_internal.h"
+#include "graphics/effects_internal.h"
 #include "resources/resource_internal.h"
 
 namespace huxerui {
@@ -24,9 +25,13 @@ using detail::ResolveComponentLabel;
 void ApplyButtonDefaults(detail::ViewSpec& spec, const std::shared_ptr<const Environment>& environment) {
   const ThemeSpec& theme = detail::ResolveThemeSpec(environment);
   const ButtonStyle style = ResolveStyleOverride<ButtonStyle>(environment).value_or(detail::DefaultButtonStyle(theme));
+  if (style.backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.backdrop_effect);
+  }
   spec.properties.padding = style.padding;
   spec.properties.background = style.background;
   spec.properties.disabled_background = style.disabled_background;
+  spec.properties.backdrop_effect = style.backdrop_effect;
   spec.properties.text_style = style.label_style;
   spec.properties.text_layout_options.align = TextAlign::Center;
   spec.properties.text_layout_options.vertical_align = TextVerticalAlign::Center;
@@ -76,10 +81,14 @@ void ApplyIconButtonDefaults(detail::ViewSpec& spec, const std::shared_ptr<const
 void ApplyChipDefaults(detail::ViewSpec& spec, const std::shared_ptr<const Environment>& environment) {
   const ThemeSpec& theme = detail::ResolveThemeSpec(environment);
   const ChipStyle style = ResolveStyleOverride<ChipStyle>(environment).value_or(detail::DefaultChipStyle(theme));
+  if (style.backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.backdrop_effect);
+  }
   const bool selected = spec.chip_selection.value_or(false);
   spec.properties.padding = style.padding;
   spec.properties.background = selected ? style.selected_background : style.background;
   spec.properties.disabled_background = selected ? style.disabled_selected_background : style.disabled_background;
+  spec.properties.backdrop_effect = style.backdrop_effect;
   spec.properties.border = selected ? style.selected_border : std::optional<Border>{style.border};
   spec.properties.disabled_border =
       selected ? style.disabled_selected_border : std::optional<Border>{style.disabled_border};

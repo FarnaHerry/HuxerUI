@@ -1052,6 +1052,10 @@ private:
     }
     frame_state_.BeginPaint();
     try {
+      renderer_.SetDeviceScale(static_cast<float>(gtk_widget_get_scale_factor(drawing_area_)));
+      renderer_.SetDisplay(gtk_widget_get_display(drawing_area_));
+      renderer_.SetViewport({static_cast<float>(gtk_widget_get_width(drawing_area_)),
+                             static_cast<float>(gtk_widget_get_height(drawing_area_))});
       if (platform_views_) {
         platform_views_->Snapshot(snapshot, *committed_frame_);
       } else {

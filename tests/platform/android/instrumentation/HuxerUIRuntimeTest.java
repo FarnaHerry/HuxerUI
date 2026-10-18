@@ -5,6 +5,8 @@ import android.app.Instrumentation;
 import android.os.Bundle;
 import android.os.Build;
 import android.graphics.Paint;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Typeface;
 import android.text.Layout;
 import android.text.TextPaint;
@@ -31,6 +33,8 @@ public final class HuxerUIRuntimeTest extends Instrumentation {
         Bundle result = new Bundle();
         try {
             verifyHostFocusHighlight();
+            verifyBackdropCanvases();
+            verifyGradientBrushes();
             verifyGeometry();
             int notificationAssertions = HuxerUILocalNotificationTest.verify(getTargetContext());
             sendStatus(0, status);
@@ -74,6 +78,114 @@ public final class HuxerUIRuntimeTest extends Instrumentation {
         ++assertions;
         if (!value) {
             throw new AssertionError(message);
+        }
+    }
+
+    private static Method hostMethod(String name, Class<?>... parameters) throws Exception {
+        Method method = HuxerUIView.class.getDeclaredMethod(name, parameters);
+        method.setAccessible(true);
+        return method;
+    }
+
+    private void verifyGradientBrushes() {
+        final Throwable[] failure = new Throwable[1];
+        runOnMainSync(() -> {
+            Bitmap target = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888);
+            try {
+                HuxerUIView host = new HuxerUIView(getTargetContext());
+                Method draw = hostMethod("drawBrushRect", Canvas.class, float.class, float.class, float.class,
+                        float.class, int.class, int.class, float[].class, float[].class, int[].class, float.class);
+                Canvas canvas = new Canvas(target);
+                float[] geometry = {0.0F, 0.0F, 1.0F, 0.0F, 8.0F, 0.0F, 0.0F, 8.0F, 0.0F, 0.0F};
+                float[] stops = {0.0F, 1.0F};
+                draw.invoke(host, canvas, 0.0F, 0.0F, 8.0F, 8.0F, 2, 0, geometry, stops,
+                        new int[] {0xFFFF0000, 0xFF0000FF}, 0.0F);
+                check((target.getPixel(4, 4) >>> 24) == 255, "Gradient alpha comes from its stops");
+                check(((target.getPixel(0, 4) >>> 16) & 255) > (target.getPixel(0, 4) & 255),
+                        "Linear gradient retains its starting color");
+                check((target.getPixel(7, 4) & 255) > ((target.getPixel(7, 4) >>> 16) & 255),
+                        "Linear gradient retains its ending color");
+                target.eraseColor(0);
+                geometry[0] = 0.5F;
+                geometry[1] = 0.5F;
+                geometry[2] = 0.5F;
+                geometry[3] = 0.5F;
+                draw.invoke(host, canvas, 0.0F, 0.0F, 8.0F, 8.0F, 3, 0, geometry, stops,
+                        new int[] {0x40FF0000, 0x400000FF}, 0.0F);
+                check((target.getPixel(4, 4) >>> 24) == 64, "Radial gradient preserves translucent stop alpha");
+            } catch (Throwable error) {
+                failure[0] = error;
+            } finally {
+                target.recycle();
+            }
+        });
+        if (failure[0] != null) {
+            throw new AssertionError("Android gradient brush checks failed", failure[0]);
+        }
+    }
+
+    private void verifyBackdropCanvases() {
+        final Throwable[] failure = new Throwable[1];
+        runOnMainSync(() -> {
+            Bitmap target = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888);
+            HuxerUIView host = new HuxerUIView(getTargetContext());
+            try {
+                Method begin = hostMethod("beginBackdropCanvas", Canvas.class);
+                Method end = hostMethod("endBackdropCanvas", Canvas.class, Canvas.class, float.class);
+                Method capture = hostMethod("backdropPixels", Canvas.class, int.class, int.class, int.class, int.class);
+                Method replace = hostMethod(
+                        "drawBackdropPixels", Canvas.class, int[].class, int.class, int.class, int.class, int.class);
+                Canvas parent = new Canvas(target);
+                Canvas root = (Canvas) begin.invoke(host, parent);
+                check(((int[]) capture.invoke(host, root, 0, 0, 8, 8))[0] == 0xFFF7F8FA,
+                        "Glass capture starts with this frame's background");
+                hostMethod("pushClip", Canvas.class, float.class, float.class, float.class, float.class, float.class)
+                        .invoke(host, root, 0.0F, 0.0F, 8.0F, 8.0F, 4.0F);
+                Canvas group = (Canvas) begin.invoke(host, root);
+                check(((int[]) capture.invoke(host, group, 0, 0, 8, 8))[4 * 8 + 4] == 0,
+                        "An opacity group captures its own transparent prefix");
+                int[] translucent = new int[64];
+                java.util.Arrays.fill(translucent, 0x40FF0000);
+                replace.invoke(host, group, translucent, 8, 8, 0, 0);
+                replace.invoke(host, group, translucent, 8, 8, 0, 0);
+                int[] pixels = (int[]) capture.invoke(host, group, 0, 0, 8, 8);
+                check((pixels[4 * 8 + 4] >>> 24) == 64, "Replacing the optical prefix preserves its alpha");
+                check((pixels[0] >>> 24) == 64, "An isolated prefix defers inherited clips until composition");
+                end.invoke(host, root, group, 0.5F);
+                int composed = ((int[]) capture.invoke(host, root, 0, 0, 8, 8))[4 * 8 + 4];
+                check((composed >>> 24) == 255, "Group opacity composites into the opaque background once");
+                check(((composed >>> 8) & 255) > 200 && ((composed >>> 8) & 255) < 225,
+                        "Glass alpha and group opacity multiply only at group composition");
+                hostMethod("popClip", Canvas.class).invoke(host, root);
+                end.invoke(host, parent, root, 1.0F);
+                check(target.getPixel(0, 0) == 0xFFF7F8FA,
+                        "The glass clip leaves the surrounding background unchanged");
+                Canvas next = (Canvas) begin.invoke(host, parent);
+                check(((int[]) capture.invoke(host, next, 0, 0, 8, 8))[4 * 8 + 4] == 0xFFF7F8FA,
+                        "A new glass frame excludes the previous frame's optical output");
+                int[] crop = {0xFF0000FF, 0xFF0000FF, 0xFF0000FF, 0xFF0000FF};
+                replace.invoke(host, next, crop, 2, 2, 3, 3);
+                check(((int[]) capture.invoke(host, next, 3, 3, 2, 2))[3] == 0xFF0000FF,
+                        "A cropped optical output uses its capture origin");
+                check(((int[]) capture.invoke(host, next, 0, 0, 8, 8))[0] == 0xFFF7F8FA,
+                        "Replacing a crop preserves pixels outside its bounds");
+                next.scale(2.0F, 2.0F);
+                float[] inverse = (float[]) hostMethod("backdropTransform", Canvas.class).invoke(host, next);
+                check(inverse[2] == 0.5F && inverse[5] == 0.5F,
+                        "Capture converts pixel edges into local logical coordinates");
+            } catch (Throwable error) {
+                failure[0] = error;
+            } finally {
+                try {
+                    hostMethod("releaseBackdropCanvases").invoke(host);
+                } catch (Throwable error) {
+                    failure[0] = error;
+                }
+                target.recycle();
+            }
+        });
+        if (failure[0] != null) {
+            throw new AssertionError("Android backdrop Canvas checks failed", failure[0]);
         }
     }
 

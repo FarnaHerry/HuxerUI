@@ -48,7 +48,7 @@
     return;
   }
   huxeruiRenderer->DrawSlice(
-      UIGraphicsGetCurrentContext(), rect, huxeruiFrame, huxeruiFirstCommand, huxeruiCommandCount, false
+      UIGraphicsGetCurrentContext(), rect, huxeruiFrame, huxeruiFirstCommand, huxeruiCommandCount, false, self.bounds
   );
 }
 
@@ -497,10 +497,11 @@ bool UIKitPlatformViews::Commit(UIView* root, const RenderFrame& frame) {
 void UIKitPlatformViews::DrawBase(CGContextRef context, CGRect dirty_rect) {
   if (state_->base_slice.has_value()) {
     const RenderSlice& slice = *state_->base_slice;
-    state_->renderer->DrawSlice(context, dirty_rect, state_->frame, slice.first_command, slice.command_count, true);
+    state_->renderer->DrawSlice(context, dirty_rect, state_->frame, slice.first_command, slice.command_count, true,
+        state_->root.bounds);
     return;
   }
-  state_->renderer->DrawSlice(context, dirty_rect, state_->frame, 0, 0, true);
+  state_->renderer->DrawSlice(context, dirty_rect, state_->frame, 0, 0, true, state_->root.bounds);
 }
 
 UIView* UIKitPlatformViews::HitTest(Point point, UIEvent* event) {
