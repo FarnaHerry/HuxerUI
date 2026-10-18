@@ -5,6 +5,7 @@ set(HUXERUI_PUBLIC_HEADERS
         clipboard.h
         color.h
         data.h
+        effects.h
         environment.h
         event.h
         external_texture.h

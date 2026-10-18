@@ -19,6 +19,7 @@
 #include <emscripten.h>
 
 #include "graphics/path_internal.h"
+#include "graphics/effects_internal.h"
 #include "graphics/paint_internal.h"
 #include "resources/resource_internal.h"
 #include "graphics/shadow_internal.h"
@@ -137,6 +138,19 @@ EM_JS(emscripten::EM_VAL, GetWebImage, (std::uintptr_t session_id, std::uint64_t
     session.images.set(image_id, image);
   }
   return Emval.toHandle(image || null);
+});
+
+EM_JS(emscripten::EM_VAL, CaptureWebBackdrop,
+      (emscripten::EM_VAL context_handle, int left, int top, int width, int height), {
+  const context = Emval.toValue(context_handle);
+  try {
+    if (context.isContextLost && context.isContextLost()) {
+      return Emval.toHandle({error: "HuxerUI Web backdrop Canvas context is lost"});
+    }
+    return Emval.toHandle({image: context.getImageData(left, top, width, height)});
+  } catch (error) {
+    return Emval.toHandle({error: "HuxerUI Web backdrop capture failed: " + String(error.message || error)});
+  }
 });
 // clang-format on
 
@@ -984,33 +998,75 @@ void WebRenderer::RenderSceneNode(const RenderNode& node, CommandRange* range) {
     return;
   }
 
+  val parent_context = context_;
   context_.call<void>("save");
   Transform2D transform = node.transform;
   transform.translate_x += node.offset.x;
   transform.translate_y += node.offset.y;
   ApplyTransform(context_, transform);
-  context_.set("globalAlpha", context_["globalAlpha"].as<double>() * opacity);
-
-  RenderSequence(node.content, range);
-  for (const RenderClip& clip : node.child_clips) {
-    std::visit([this](const auto& command) { RenderCommand(command); }, clip);
-  }
-  if (!node.children_transform.IsIdentity()) {
-    RenderCommand(PushTransformCommand{node.children_transform});
-  }
-  for (const RenderNode* child : node.children) {
-    if (child != nullptr) {
-      RenderSceneNode(*child, range);
+  const bool isolated = backdrop_drawing_ && opacity < 1.0F;
+  val group_canvas = val::undefined();
+  std::size_t group_bytes = 0;
+  try {
+    if (isolated) {
+      const std::size_t width = context_["canvas"]["width"].as<std::size_t>();
+      const std::size_t height = context_["canvas"]["height"].as<std::size_t>();
+      if (height == 0 || width > maximum_backdrop_capture_pixels / height) {
+        throw std::runtime_error("HuxerUI Web backdrop Canvas budget exceeded");
+      }
+      group_bytes = width * height * 4;
+      if (backdrop_bytes_ > maximum_backdrop_group_bytes - group_bytes) {
+        group_bytes = 0;
+        throw std::runtime_error("HuxerUI Web backdrop Canvas budget exceeded");
+      }
+      backdrop_bytes_ += group_bytes;
+      group_canvas = val::global("document").call<val>("createElement", std::string("canvas"));
+      group_canvas.set("width", width);
+      group_canvas.set("height", height);
+      context_ = group_canvas.call<val>("getContext", std::string("2d"));
+      if (context_.isNull() || context_.isUndefined()) {
+        throw std::runtime_error("HuxerUI Web backdrop group Canvas 2D context is unavailable");
+      }
+      // The parent applies inherited clips after filtering the complete isolated prefix.
+      context_.call<void>("setTransform", parent_context.call<val>("getTransform"));
+    } else {
+      context_.set("globalAlpha", context_["globalAlpha"].as<double>() * opacity);
     }
+    RenderSequence(node.content, range);
+    for (const RenderClip& clip : node.child_clips) {
+      std::visit([this](const auto& command) { RenderCommand(command); }, clip);
+    }
+    if (!node.children_transform.IsIdentity()) {
+      RenderCommand(PushTransformCommand{node.children_transform});
+    }
+    for (const RenderNode* child : node.children) {
+      if (child != nullptr) {
+        RenderSceneNode(*child, range);
+      }
+    }
+    if (!node.children_transform.IsIdentity()) {
+      RenderCommand(PopTransformCommand{});
+    }
+    for (std::size_t index = 0; index < node.child_clips.size(); ++index) {
+      RenderCommand(PopClipCommand{});
+    }
+    RenderSequence(node.foreground, range);
+    if (isolated) {
+      context_ = parent_context;
+      context_.call<void>("save");
+      context_.call<void>("setTransform", 1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+      context_.set("globalAlpha", context_["globalAlpha"].as<double>() * opacity);
+      context_.call<void>("drawImage", group_canvas, 0.0, 0.0);
+      context_.call<void>("restore");
+    }
+    context_.call<void>("restore");
+    backdrop_bytes_ -= group_bytes;
+  } catch (...) {
+    context_ = parent_context;
+    context_.call<void>("restore");
+    backdrop_bytes_ -= group_bytes;
+    throw;
   }
-  if (!node.children_transform.IsIdentity()) {
-    RenderCommand(PopTransformCommand{});
-  }
-  for (std::size_t index = 0; index < node.child_clips.size(); ++index) {
-    RenderCommand(PopClipCommand{});
-  }
-  RenderSequence(node.foreground, range);
-  context_.call<void>("restore");
 }
 
 void WebRenderer::RenderCommand(const DrawRectCommand& command) {
@@ -1331,6 +1387,102 @@ void WebRenderer::RenderCommand(const PopClipCommand& command) {
   context_.call<void>("restore");
 }
 
+void WebRenderer::RenderCommand(const DrawBackdropCommand& command) {
+  const std::size_t target_width = context_["canvas"]["width"].as<std::size_t>();
+  const std::size_t target_height = context_["canvas"]["height"].as<std::size_t>();
+  if (target_width == 0 || target_height == 0) {
+    return;
+  }
+  if (target_width > maximum_backdrop_capture_pixels / target_height) {
+    throw std::runtime_error("HuxerUI Web backdrop capture budget exceeded");
+  }
+  const val transform = context_.call<val>("getTransform");
+  const Transform2D local_to_pixel{transform["a"].as<float>(), transform["b"].as<float>(), transform["c"].as<float>(),
+                                   transform["d"].as<float>(), transform["e"].as<float>(), transform["f"].as<float>()};
+  const auto origin = local_to_pixel.Inverse({0.0F, 0.0F});
+  const auto x = local_to_pixel.Inverse({1.0F, 0.0F});
+  const auto y = local_to_pixel.Inverse({0.0F, 1.0F});
+  if (!origin || !x || !y) {
+    return;
+  }
+  Transform2D pixel_to_local{x->x - origin->x, x->y - origin->y, y->x - origin->x,
+                             y->y - origin->y, origin->x,        origin->y};
+  const Rect sampling = BackdropSamplingBounds(command);
+  const Point corners[] = {{sampling.x, sampling.y},
+                           {sampling.x + sampling.width, sampling.y},
+                           {sampling.x, sampling.y + sampling.height},
+                           {sampling.x + sampling.width, sampling.y + sampling.height}};
+  float left = static_cast<float>(target_width);
+  float top = static_cast<float>(target_height);
+  float right = 0.0F;
+  float bottom = 0.0F;
+  for (const Point corner : corners) {
+    const Point pixel = local_to_pixel.Apply(corner);
+    left = std::min(left, pixel.x);
+    top = std::min(top, pixel.y);
+    right = std::max(right, pixel.x);
+    bottom = std::max(bottom, pixel.y);
+  }
+  const int capture_left =
+      static_cast<int>(std::floor(std::clamp(left - 3.0F, 0.0F, static_cast<float>(target_width))));
+  const int capture_top = static_cast<int>(std::floor(std::clamp(top - 3.0F, 0.0F, static_cast<float>(target_height))));
+  const int capture_right =
+      static_cast<int>(std::ceil(std::clamp(right + 3.0F, 0.0F, static_cast<float>(target_width))));
+  const int capture_bottom =
+      static_cast<int>(std::ceil(std::clamp(bottom + 3.0F, 0.0F, static_cast<float>(target_height))));
+  if (capture_right <= capture_left || capture_bottom <= capture_top) {
+    return;
+  }
+  const std::size_t width = static_cast<std::size_t>(capture_right - capture_left);
+  const std::size_t height = static_cast<std::size_t>(capture_bottom - capture_top);
+  const Point capture_origin =
+      pixel_to_local.Apply({static_cast<float>(capture_left), static_cast<float>(capture_top)});
+  pixel_to_local.translate_x = capture_origin.x;
+  pixel_to_local.translate_y = capture_origin.y;
+  const val captured = val::take_ownership(CaptureWebBackdrop(context_.as_handle(), capture_left, capture_top,
+                                                              static_cast<int>(width), static_cast<int>(height)));
+  if (!captured["error"].isUndefined()) {
+    throw std::runtime_error(captured["error"].as<std::string>());
+  }
+  const val image = captured["image"];
+  std::vector<std::uint8_t> bytes(width * height * 4);
+  val(emscripten::typed_memory_view(bytes.size(), bytes.data())).call<void>("set", image["data"]);
+  for (std::size_t index = 0; index < bytes.size(); index += 4) {
+    const unsigned alpha = bytes[index + 3];
+    std::swap(bytes[index], bytes[index + 2]);
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+      bytes[index + channel] = static_cast<std::uint8_t>(bytes[index + channel] * alpha / 255U);
+    }
+  }
+  BackdropPixels filtered = ApplyBackdropEffect(bytes, width, height, width * 4, pixel_to_local, command);
+  for (std::size_t index = 0; index < filtered.bgra.size(); index += 4) {
+    const unsigned alpha = filtered.bgra[index + 3];
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+      filtered.bgra[index + channel] =
+          static_cast<std::uint8_t>(alpha == 0 ? 0 : std::min(255U, filtered.bgra[index + channel] * 255U / alpha));
+    }
+    std::swap(filtered.bgra[index], filtered.bgra[index + 2]);
+  }
+  image["data"].call<void>("set", val(emscripten::typed_memory_view(filtered.bgra.size(), filtered.bgra.data())));
+  val optical_canvas = val::global("document").call<val>("createElement", std::string("canvas"));
+  optical_canvas.set("width", width);
+  optical_canvas.set("height", height);
+  val optical_context = optical_canvas.call<val>("getContext", std::string("2d"));
+  if (optical_context.isNull() || optical_context.isUndefined()) {
+    throw std::runtime_error("HuxerUI Web backdrop output Canvas 2D context is unavailable");
+  }
+  optical_context.call<void>("putImageData", image, 0, 0);
+  context_.call<void>("save");
+  context_.call<void>("setTransform", 1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+  context_.call<void>("beginPath");
+  context_.call<void>("rect", capture_left, capture_top, width, height);
+  context_.call<void>("clip");
+  context_.set("globalAlpha", 1.0);
+  context_.set("globalCompositeOperation", std::string("copy"));
+  context_.call<void>("drawImage", optical_canvas, capture_left, capture_top);
+  context_.call<void>("restore");
+}
+
 void WebRenderer::RenderCommand(const PushTransformCommand& command) {
   context_.call<void>("save");
   ApplyTransform(context_, command.transform);
@@ -1358,6 +1510,7 @@ void WebRenderer::DrawSlice(
     bool draw_background,
     bool force_redraw
 ) {
+  ValidateBackdropSceneSlice(frame.scene, first_command, command_count);
   const std::size_t end = command_count > std::numeric_limits<std::size_t>::max() - first_command
                               ? std::numeric_limits<std::size_t>::max()
                               : first_command + command_count;
@@ -1368,6 +1521,8 @@ void WebRenderer::DrawSlice(
 void WebRenderer::DrawTarget(
     const val& canvas, const RenderFrame& frame, CommandRange* range, bool draw_background, bool force_redraw
 ) {
+  ValidateBackdropScene(frame.scene);
+  const bool has_backdrop = RenderSceneHasBackdropEffects(frame.scene.root);
   val previous_context = context_;
   context_ = canvas.call<val>("getContext", std::string("2d"));
   if (context_.isNull() || context_.isUndefined()) {
@@ -1375,7 +1530,7 @@ void WebRenderer::DrawTarget(
     throw std::runtime_error("HuxerUI Web Canvas 2D context is unavailable");
   }
 
-  const bool full_redraw = force_redraw || frame.damage.full;
+  const bool full_redraw = force_redraw || frame.damage.full || has_backdrop;
   if (!full_redraw && frame.damage.rects.empty()) {
     context_ = std::move(previous_context);
     return;
@@ -1391,7 +1546,17 @@ void WebRenderer::DrawTarget(
   }
 
   try {
+    backdrop_drawing_ = has_backdrop;
+    backdrop_bytes_ = 0;
     context_.call<void>("save");
+    if (has_backdrop) {
+      const std::size_t width = canvas["width"].as<std::size_t>();
+      const std::size_t height = canvas["height"].as<std::size_t>();
+      if (height != 0 && width > maximum_backdrop_capture_pixels / height) {
+        throw std::runtime_error("HuxerUI Web backdrop Canvas budget exceeded");
+      }
+      backdrop_bytes_ = width * height * 4;
+    }
     context_.call<void>("setTransform", 1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
     context_.call<void>("beginPath");
     const double display_scale = display_scale_;
@@ -1425,9 +1590,13 @@ void WebRenderer::DrawTarget(
     } catch (...) {
     }
     context_ = std::move(previous_context);
+    backdrop_drawing_ = false;
+    backdrop_bytes_ = 0;
     throw;
   }
   context_ = std::move(previous_context);
+  backdrop_drawing_ = false;
+  backdrop_bytes_ = 0;
 }
 
 } // namespace huxerui::detail

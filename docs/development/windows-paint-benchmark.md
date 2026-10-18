@@ -17,7 +17,8 @@ cmake --build build/check --config Release --target huxerui_static --parallel 4
 
 `-CleanCheck` additionally configures and builds a fresh benchmark project, then checks the incremental build.
 It does not delete existing build output.
-The default baseline is commit `fa04cb45bd1f405e0c6a06073b2be1db539b8661`; pass `-BaselineRef` to select another compatible baseline explicitly.
+The default baseline is commit `c1cce090f7fc59f88c8b7087e7a81e47ae68657a`, which handles backdrop commands but predates the Windows paint-resource caches; pass `-BaselineRef` to select another compatible baseline explicitly.
+The baseline renderer must handle the current PaintCommand variant; older renderers cannot compile against newly added commands.
 The runner extracts that commit's renderer as exact bytes, snapshots the working-tree renderer, and compiles the two snapshots separately using the same harness and Release flags.
 The private renderer and text-layout classes are renamed in these executables to avoid collisions with the imported archive.
 The framework's public API and normal renderer compilation are unchanged.
@@ -78,6 +79,7 @@ Treat these results as a local paint-replay baseline; they exclude composition, 
 ## Local reference: 2026-10-18
 
 The [saved summary](../../tests/platform/windows/paint_benchmark/baseline_2026_10_18.csv) and [machine/source metadata](../../tests/platform/windows/paint_benchmark/baseline_2026_10_18.json) establish the first reference for this change.
+That historical run used `fa04cb45bd1f405e0c6a06073b2be1db539b8661` before backdrop commands were introduced; its saved results are separate from subsequent runs using the current compatible default.
 The host used an i5-13500H, Intel Iris Xe Graphics driver `32.0.101.5972`, Windows 11 build 26300, and MSVC 19.51.36252.0 x64 Release `/O2 /Ob2 /DNDEBUG`, with the Balanced power scheme and no affinity or clock lock.
 Both variants selected the Intel adapter rather than WARP.
 Five rounds produced 800 measured samples per variant/scenario/DPI, 25600 samples in total, 80 matching end-of-run pixel pairs, and zero rejected GPU timing samples.

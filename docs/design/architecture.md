@@ -377,6 +377,10 @@ public:
       ViewNode& node,
       const PointerEvent& event);
 
+  virtual void PaintBackdrop(
+      const ViewNode& node,
+      PaintContext& context) const;
+
   virtual void PaintBehindContent(
       const ViewNode& node,
       PaintContext& context) const;
@@ -395,6 +399,7 @@ protected:
 };
 ```
 
+`PaintBackdrop()` records before the owner's shadow and normal background, providing the source position for optical material without component-specific UiWindow dispatch.
 `PaintBehindContent()` records after the normal background and before the resolved border and node content.
 `PaintAboveContent()` records after node content and descendants, before the framework-owned focus ring.
 `NodeExtension` does not wrap measure, layout, or paint, and it has no `Next` continuations.
@@ -424,7 +429,7 @@ It receives the active `TextMeasurer` as a callback-scoped borrowed reference so
 It reports exactly which retained paint sequence changed.
 This phase lets geometry-dependent extensions retain value snapshots without storing raw mounted-node references or forcing unrelated clean PaintSequences to rerecord.
 
-During either paint callback, extensions append node-local PaintCommands through `PaintContext`.
+During a paint callback, extensions append node-local PaintCommands through `PaintContext`.
 UiWindow stores the resulting content or foreground PaintSequence on the node's RenderNode, and platform renderers apply the inherited layout and presentation transform while traversing RenderScene.
 Corner radii remain declaration values until a concrete paint, clip, path, shadow caster, or hit-test rectangle is known.
 The shared geometry boundary scales overconstrained radii proportionally, so fills, borders, descendant clips, and pointer containment apply the same circular-corner normalization on every renderer.
@@ -467,6 +472,7 @@ public:
   virtual std::optional<Point> WindowToLocal(Point point) const noexcept = 0;
   virtual Rect LocalToWindowBounds(Rect bounds) const noexcept = 0;
   virtual float PresentationOpacity() const noexcept = 0;
+  virtual CornerRadii ResolvedCornerRadii() const noexcept;
   virtual bool IsEnabled() const noexcept = 0;
   virtual bool IsFocused() const noexcept = 0;
 
@@ -483,6 +489,8 @@ public:
 ```
 
 `Bounds()` has a zero origin and the node's complete layout size, including Padding. `ContentBounds()` deflates that rectangle by the resolved Padding and clamps its dimensions to at least zero. `LayoutOffset()` is parent-relative. `PresentationBounds()` and the local/window conversion operations derive from the resolved ancestor transform chain for platform-boundary queries and diagnostics. Rectangle conversion returns a window-space axis-aligned bound, and inverse point conversion returns no value for a non-invertible transform. `PrepareGeometry()` observes the final resolved transform for the current frame; earlier extension callbacks may observe the previous resolution.
+`ResolvedCornerRadii()` supplies the declaration's resolved surface corners and defaults to zero for custom ViewNode implementations.
+Optical drawing and direct-child decorative fusion use these geometry values without changing layout, hit testing or semantic identity; see [Backdrop Effects and Glass](backdrop-effects.md).
 
 It does not expose UiWindow ownership, Environment storage, reconciliation internals, or direct child insertion and removal. A `NodeExtension` requests a continuing frame or a delayed wake-up through the `FrameResult` returned from `OnFrame()` and uses its protected paint invalidation operation when retained visual state changes. General application-facing measure and layout invalidation APIs are deferred.
 

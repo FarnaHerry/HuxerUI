@@ -31,6 +31,8 @@
 
 #include "graphics/path_internal.h"
 #include "graphics/paint_internal.h"
+#include "graphics/effects_internal.h"
+#include "graphics/geometry_internal.h"
 #include "resources/resource_internal.h"
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
@@ -52,6 +54,15 @@ void ThrowIfFailed(HRESULT result, const char* message) {
   if (FAILED(result)) {
     throw std::runtime_error(message);
   }
+}
+
+struct BackdropDeviceLost {};
+
+void CheckBackdropResult(HRESULT result, const char* message) {
+  if (result == D2DERR_RECREATE_TARGET || result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET) {
+    throw BackdropDeviceLost{};
+  }
+  ThrowIfFailed(result, message);
 }
 
 D2D1_COLOR_F ToD2DColor(Color color) {
@@ -265,6 +276,8 @@ struct Win32Renderer::State {
     bool uses_layer = false;
     ComPtr<ID2D1Layer> layer;
     ComPtr<ID2D1Geometry> geometry;
+    D2D1_RECT_F rect{};
+    D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
   };
 
   struct ShadowMask {
@@ -1127,6 +1140,7 @@ struct Win32Renderer::State {
       device_context_->SetTarget(nullptr);
     }
     scene_target_.Reset();
+    active_target_.Reset();
     swap_chain_target_.Reset();
   }
 
@@ -1193,6 +1207,9 @@ struct Win32Renderer::State {
     paragraph_bytes_ = 0;
     clip_stack_.clear();
     transform_stack_.clear();
+    active_target_.Reset();
+    backdrop_live_targets_ = 0;
+    backdrop_target_bytes_ = 0;
     DiscardSizeDependentResources();
     DiscardShadowResources();
     ResetExternalTextureResources();
@@ -1250,13 +1267,29 @@ struct Win32Renderer::State {
     if (paint_rect.left >= paint_rect.right || paint_rect.top >= paint_rect.bottom) {
       return Win32RenderResult::Skipped;
     }
+
+    RECT client{};
+    GetClientRect(window_, &client);
+    ValidateBackdropScene(frame.scene);
+    backdrop_frame_ = RenderSceneHasBackdropEffects(frame.scene.root);
+    const auto client_width = static_cast<std::size_t>(std::max(0L, client.right - client.left));
+    const auto client_height = static_cast<std::size_t>(std::max(0L, client.bottom - client.top));
+    if (backdrop_frame_ && client_height != 0 &&
+        client_width > maximum_backdrop_capture_pixels / client_height) {
+      throw std::runtime_error("HuxerUI Windows backdrop viewport exceeds its pixel budget");
+    }
     if (!EnsureSizeDependentResources()) {
       return Win32RenderResult::Skipped;
     }
 
-    RECT client{};
-    GetClientRect(window_, &client);
-    RECT render_rect = force_full_repaint_ ? client : paint_rect;
+    const D2D1_SIZE_U scene_size = scene_target_->GetPixelSize();
+    backdrop_target_bytes_ = static_cast<std::uint64_t>(scene_size.width) * scene_size.height * 4;
+    backdrop_live_targets_ = 1;
+    if (backdrop_frame_ && scene_size.height != 0 &&
+        scene_size.width > maximum_backdrop_capture_pixels / scene_size.height) {
+      throw std::runtime_error("HuxerUI Windows backdrop frame exceeds its pixel budget");
+    }
+    RECT render_rect = force_full_repaint_ || backdrop_frame_ ? client : paint_rect;
     const Rect paint_bounds = Win32PixelRectToDips(render_rect, DpiScale());
     const Rect client_bounds = Win32PixelRectToDips(client, DpiScale());
     clip_stack_.clear();
@@ -1266,11 +1299,14 @@ struct Win32Renderer::State {
       return Win32RenderResult::Retry;
     }
     device_context_->SetTarget(scene_target_.Get());
+    active_target_ = scene_target_;
     device_context_->BeginDraw();
     HRESULT result = S_OK;
     try {
       device_context_->SetTransform(D2D1::Matrix3x2F::Identity());
-      device_context_->PushAxisAlignedClip(ToD2DRect(paint_bounds), D2D1_ANTIALIAS_MODE_ALIASED);
+      if (!backdrop_frame_) {
+        device_context_->PushAxisAlignedClip(ToD2DRect(paint_bounds), D2D1_ANTIALIAS_MODE_ALIASED);
+      }
       SetBrushColor(Color::Rgb(247, 248, 250));
       device_context_->FillRectangle(ToD2DRect(client_bounds), brush_.Get());
 
@@ -1284,11 +1320,19 @@ struct Win32Renderer::State {
         PopClip();
       }
       device_context_->SetTransform(D2D1::Matrix3x2F::Identity());
-      device_context_->PopAxisAlignedClip();
+      if (!backdrop_frame_) {
+        device_context_->PopAxisAlignedClip();
+      }
       result = device_context_->EndDraw();
+    } catch (const BackdropDeviceLost&) {
+      static_cast<void>(device_context_->EndDraw());
+      static_cast<void>(ReleaseD3D11Textures());
+      DiscardDeviceResources();
+      return Win32RenderResult::Recreate;
     } catch (...) {
       static_cast<void>(device_context_->EndDraw());
       static_cast<void>(ReleaseD3D11Textures());
+      DiscardDeviceResources();
       throw;
     }
     const HRESULT release_result = ReleaseD3D11Textures();
@@ -1337,6 +1381,51 @@ struct Win32Renderer::State {
     }
   }
 
+  void SuspendClips() {
+    for (auto entry = clip_stack_.rbegin(); entry != clip_stack_.rend(); ++entry) {
+      if (entry->uses_layer) {
+        device_context_->PopLayer();
+      } else {
+        device_context_->PopAxisAlignedClip();
+      }
+    }
+  }
+
+  void ResumeClips() {
+    D2D1_MATRIX_3X2_F transform;
+    device_context_->GetTransform(&transform);
+    for (const ClipState& entry : clip_stack_) {
+      device_context_->SetTransform(entry.transform);
+      if (entry.uses_layer) {
+        device_context_->PushLayer(
+            D2D1::LayerParameters(D2D1::InfiniteRect(), entry.geometry.Get()), entry.layer.Get()
+        );
+      } else {
+        device_context_->PushAxisAlignedClip(entry.rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+      }
+    }
+    device_context_->SetTransform(transform);
+  }
+
+  ComPtr<ID2D1Bitmap1> CreateBackdropTarget() {
+    const D2D1_SIZE_U size = scene_target_->GetPixelSize();
+    if (size.height == 0 || size.width == 0 || size.width > maximum_backdrop_capture_pixels / size.height) {
+      throw std::runtime_error("HuxerUI Windows backdrop group exceeds its pixel budget");
+    }
+    if (backdrop_target_bytes_ > maximum_backdrop_group_bytes / (backdrop_live_targets_ + 1)) {
+      throw std::runtime_error("HuxerUI Windows backdrop groups exceed their memory budget");
+    }
+    ComPtr<ID2D1Bitmap1> target;
+    const auto properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), dpi_, dpi_
+    );
+    CheckBackdropResult(device_context_->CreateBitmap(size, nullptr, 0, &properties, target.GetAddressOf()),
+        "HuxerUI could not create a Windows backdrop group target");
+    ++backdrop_live_targets_;
+    return target;
+  }
+
   void RenderSceneNode(const RenderNode& node) {
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (!node.visible || opacity <= 0.0F) {
@@ -1352,7 +1441,19 @@ struct Win32Renderer::State {
     }
 
     ComPtr<ID2D1Layer> opacity_layer;
-    if (opacity < 1.0F) {
+    ComPtr<ID2D1Bitmap1> parent_target;
+    ComPtr<ID2D1Bitmap1> group_target;
+    std::vector<ClipState> parent_clips;
+    if (opacity < 1.0F && backdrop_frame_) {
+      group_target = CreateBackdropTarget();
+      parent_target = active_target_;
+      SuspendClips();
+      parent_clips = std::move(clip_stack_);
+      clip_stack_.clear();
+      device_context_->SetTarget(group_target.Get());
+      active_target_ = group_target;
+      device_context_->Clear(D2D1::ColorF(0.0F, 0.0F));
+    } else if (opacity < 1.0F) {
       ThrowIfFailed(
           device_context_->CreateLayer(nullptr, opacity_layer.GetAddressOf()),
           "HuxerUI could not create a Direct2D opacity layer"
@@ -1392,6 +1493,21 @@ struct Win32Renderer::State {
     if (opacity_layer != nullptr) {
       device_context_->PopLayer();
     }
+    if (group_target != nullptr) {
+      SuspendClips();
+      CheckBackdropResult(device_context_->Flush(), "HuxerUI could not finish a Windows backdrop group");
+      device_context_->SetTarget(parent_target.Get());
+      active_target_ = parent_target;
+      clip_stack_ = std::move(parent_clips);
+      ResumeClips();
+      D2D1_MATRIX_3X2_F current;
+      device_context_->GetTransform(&current);
+      device_context_->SetTransform(D2D1::Matrix3x2F::Identity());
+      device_context_->DrawBitmap(group_target.Get(), nullptr, opacity);
+      device_context_->SetTransform(current);
+      CheckBackdropResult(device_context_->Flush(), "HuxerUI could not composite a Windows backdrop group");
+      --backdrop_live_targets_;
+    }
     if (transformed) {
       RenderCommand(PopTransformCommand{});
     }
@@ -1409,6 +1525,140 @@ struct Win32Renderer::State {
     if (brush) {
       FillBrushRect(command.rect, command.corner_radius, brush.Get());
     }
+  }
+
+  void RenderCommand(const DrawBackdropCommand& command) {
+    const D2D1_SIZE_U size = active_target_->GetPixelSize();
+    if (size.width == 0 || size.height == 0 || command.shapes.empty()) {
+      return;
+    }
+    D2D1::Matrix3x2F local_to_world;
+    device_context_->GetTransform(&local_to_world);
+    const float dip_to_pixel = DpiScale();
+    const Transform2D local_to_pixel{
+        local_to_world._11 * dip_to_pixel, local_to_world._12 * dip_to_pixel,
+        local_to_world._21 * dip_to_pixel, local_to_world._22 * dip_to_pixel,
+        local_to_world._31 * dip_to_pixel, local_to_world._32 * dip_to_pixel
+    };
+    const auto inverse = InverseTransform(local_to_pixel);
+    if (!inverse) {
+      return;
+    }
+    const Rect sampling = TransformBounds(local_to_pixel, BackdropSamplingBounds(command));
+    if (!std::isfinite(sampling.x) || !std::isfinite(sampling.y) || !std::isfinite(sampling.width) ||
+        !std::isfinite(sampling.height) || !std::isfinite(sampling.x + sampling.width) ||
+        !std::isfinite(sampling.y + sampling.height)) {
+      throw std::invalid_argument("HuxerUI Windows backdrop sampling bounds must remain finite");
+    }
+    const auto lower = [](float value, UINT32 extent) {
+      return static_cast<UINT32>(std::clamp(std::floor(static_cast<double>(value) - 3.0), 0.0,
+          static_cast<double>(extent)));
+    };
+    const auto upper = [](float value, UINT32 extent) {
+      return static_cast<UINT32>(std::clamp(std::ceil(static_cast<double>(value) + 3.0), 0.0,
+          static_cast<double>(extent)));
+    };
+    const D2D1_RECT_U capture_rect{lower(sampling.x, size.width), lower(sampling.y, size.height),
+        upper(sampling.x + sampling.width, size.width), upper(sampling.y + sampling.height, size.height)};
+    const D2D1_SIZE_U capture_size{
+        capture_rect.right - capture_rect.left, capture_rect.bottom - capture_rect.top
+    };
+    if (capture_size.width == 0 || capture_size.height == 0) {
+      return;
+    }
+    if (capture_size.width > maximum_backdrop_capture_pixels / capture_size.height) {
+      throw std::runtime_error("HuxerUI Windows backdrop capture exceeds its pixel budget");
+    }
+    const float pixel_to_dip = 1.0F / DpiScale();
+    const Transform2D pixel_to_local = ComposeTransform(*inverse, TranslationTransform(
+        {static_cast<float>(capture_rect.left), static_cast<float>(capture_rect.top)}));
+    ComPtr<ID2D1Bitmap1> readback;
+    const auto readback_properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), dpi_, dpi_
+    );
+    CheckBackdropResult(device_context_->CreateBitmap(capture_size, nullptr, 0, &readback_properties,
+                            readback.GetAddressOf()),
+        "HuxerUI could not allocate Windows backdrop capture");
+    // Submit clipping layers before capturing the prefix. A separate mask preserves clip coverage during replacement.
+    SuspendClips();
+    const HRESULT flush_result = device_context_->Flush();
+    const HRESULT copy_result = SUCCEEDED(flush_result)
+        ? readback->CopyFromBitmap(nullptr, active_target_.Get(), &capture_rect) : flush_result;
+    CheckBackdropResult(copy_result, "HuxerUI could not capture the Windows backdrop prefix");
+    ComPtr<ID2D1Bitmap1> clip_readback;
+    if (!clip_stack_.empty()) {
+      const ComPtr<ID2D1Bitmap1> mask_target = CreateBackdropTarget();
+      device_context_->SetTarget(mask_target.Get());
+      device_context_->Clear(D2D1::ColorF(0.0F, 0.0F));
+      ResumeClips();
+      D2D1_MATRIX_3X2_F current;
+      device_context_->GetTransform(&current);
+      device_context_->SetTransform(D2D1::Matrix3x2F::Identity());
+      SetBrushColor(Color::White());
+      device_context_->FillRectangle(ToD2DRect({0.0F, 0.0F, size.width * pixel_to_dip, size.height * pixel_to_dip}),
+          brush_.Get());
+      device_context_->SetTransform(current);
+      SuspendClips();
+      CheckBackdropResult(device_context_->Flush(), "HuxerUI could not render Windows backdrop clip coverage");
+      CheckBackdropResult(device_context_->CreateBitmap(capture_size, nullptr, 0, &readback_properties,
+                              clip_readback.GetAddressOf()),
+          "HuxerUI could not allocate Windows backdrop clip capture");
+      CheckBackdropResult(clip_readback->CopyFromBitmap(nullptr, mask_target.Get(), &capture_rect),
+          "HuxerUI could not capture Windows backdrop clip coverage");
+      device_context_->SetTarget(active_target_.Get());
+      --backdrop_live_targets_;
+    }
+    D2D1_MAPPED_RECT mapped{};
+    CheckBackdropResult(readback->Map(D2D1_MAP_OPTIONS_READ, &mapped), "HuxerUI could not map the Windows backdrop");
+    BackdropPixels pixels;
+    try {
+      pixels = ApplyBackdropEffect(
+          std::span<const std::uint8_t>(mapped.bits, static_cast<std::size_t>(mapped.pitch) * capture_size.height),
+          capture_size.width, capture_size.height, mapped.pitch, pixel_to_local, command
+      );
+      if (clip_readback != nullptr) {
+        D2D1_MAPPED_RECT mask{};
+        CheckBackdropResult(clip_readback->Map(D2D1_MAP_OPTIONS_READ, &mask),
+            "HuxerUI could not map Windows backdrop clip coverage");
+        for (std::size_t y = 0; y < capture_size.height; ++y) {
+          for (std::size_t x = 0; x < capture_size.width; ++x) {
+            const unsigned coverage = mask.bits[y * mask.pitch + x * 4 + 3];
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+              const unsigned original = mapped.bits[y * mapped.pitch + x * 4 + channel];
+              auto& output = pixels.bgra[y * pixels.stride + x * 4 + channel];
+              output = static_cast<std::uint8_t>((original * (255 - coverage) + output * coverage + 127) / 255);
+            }
+          }
+        }
+        CheckBackdropResult(clip_readback->Unmap(), "HuxerUI could not unmap Windows backdrop clip coverage");
+      }
+    } catch (...) {
+      static_cast<void>(readback->Unmap());
+      throw;
+    }
+    CheckBackdropResult(readback->Unmap(), "HuxerUI could not unmap the Windows backdrop");
+    ComPtr<ID2D1Bitmap1> filtered;
+    const auto properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), dpi_, dpi_
+    );
+    CheckBackdropResult(device_context_->CreateBitmap(capture_size, pixels.bgra.data(),
+                            static_cast<UINT32>(pixels.stride),
+                      &properties, filtered.GetAddressOf()),
+        "HuxerUI could not upload the Windows backdrop effect");
+    D2D1_MATRIX_3X2_F current;
+    device_context_->GetTransform(&current);
+    device_context_->SetTransform(D2D1::Matrix3x2F::Identity());
+    const D2D1_POINT_2F origin{capture_rect.left * pixel_to_dip, capture_rect.top * pixel_to_dip};
+    device_context_->PushAxisAlignedClip(
+        D2D1::RectF(origin.x, origin.y, capture_rect.right * pixel_to_dip, capture_rect.bottom * pixel_to_dip),
+        D2D1_ANTIALIAS_MODE_ALIASED);
+    device_context_->DrawImage(filtered.Get(), &origin, nullptr, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        D2D1_COMPOSITE_MODE_SOURCE_COPY);
+    device_context_->PopAxisAlignedClip();
+    device_context_->SetTransform(current);
+    ResumeClips();
   }
 
   void RenderCommand(const DrawTextCommand& command) {
@@ -2470,9 +2720,12 @@ struct Win32Renderer::State {
   }
 
   void RenderCommand(const PushClipCommand& command) {
+    ClipState state;
+    state.rect = ToD2DRect(command.rect);
+    device_context_->GetTransform(&state.transform);
     if (command.corner_radius <= 0.0F) {
       device_context_->PushAxisAlignedClip(ToD2DRect(command.rect), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-      clip_stack_.push_back({});
+      clip_stack_.push_back(std::move(state));
       return;
     }
 
@@ -2484,18 +2737,17 @@ struct Win32Renderer::State {
             geometry.GetAddressOf()
         ))) {
       device_context_->PushAxisAlignedClip(ToD2DRect(command.rect), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-      clip_stack_.push_back({});
+      clip_stack_.push_back(std::move(state));
       return;
     }
     ComPtr<ID2D1Layer> layer;
     if (FAILED(device_context_->CreateLayer(nullptr, layer.GetAddressOf()))) {
       device_context_->PushAxisAlignedClip(ToD2DRect(command.rect), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-      clip_stack_.push_back({});
+      clip_stack_.push_back(std::move(state));
       return;
     }
 
     device_context_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), geometry.Get()), layer.Get());
-    ClipState state;
     state.uses_layer = true;
     state.layer = std::move(layer);
     state.geometry = std::move(geometry);
@@ -2503,15 +2755,16 @@ struct Win32Renderer::State {
   }
 
   void RenderCommand(const PushPathClipCommand& command) {
+    ClipState state;
+    device_context_->GetTransform(&state.transform);
     ComPtr<ID2D1PathGeometry> geometry = PathGeometryFor(command.path, command.fill_rule);
     ComPtr<ID2D1Layer> layer;
     if (!geometry || FAILED(device_context_->CreateLayer(nullptr, layer.GetAddressOf()))) {
       device_context_->PushAxisAlignedClip(D2D1::RectF(0.0F, 0.0F, 0.0F, 0.0F), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-      clip_stack_.push_back({});
+      clip_stack_.push_back(std::move(state));
       return;
     }
     device_context_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), geometry.Get()), layer.Get());
-    ClipState state;
     state.uses_layer = true;
     state.layer = std::move(layer);
     state.geometry = std::move(geometry);
@@ -2578,6 +2831,9 @@ struct Win32Renderer::State {
   bool force_full_repaint_ = true;
   bool supports_dirty_present_ = false;
   bool platform_composition_ = false;
+  bool backdrop_frame_ = false;
+  std::size_t backdrop_live_targets_ = 0;
+  std::uint64_t backdrop_target_bytes_ = 0;
   ComPtr<ID2D1Factory1> d2d_factory_;
   ComPtr<IDWriteFactory> write_factory_;
   ComPtr<IWICImagingFactory> wic_factory_;
@@ -2591,6 +2847,7 @@ struct Win32Renderer::State {
   ComPtr<IDCompositionVisual> composition_visual_;
   ComPtr<ID2D1Bitmap1> swap_chain_target_;
   ComPtr<ID2D1Bitmap1> scene_target_;
+  ComPtr<ID2D1Bitmap1> active_target_;
   ComPtr<ID2D1SolidColorBrush> brush_;
   ComPtr<ID2D1SolidColorBrush> shadow_brush_;
   ComPtr<ID2D1Effect> shadow_effect_;

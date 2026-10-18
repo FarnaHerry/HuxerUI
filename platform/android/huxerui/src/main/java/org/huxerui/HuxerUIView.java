@@ -8,9 +8,13 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.ColorSpace;
+import android.hardware.HardwareBuffer;
 import android.graphics.DashPathEffect;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -20,6 +24,7 @@ import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.SystemClock;
 import android.os.Build;
+import android.os.Trace;
 import android.text.Layout;
 import android.text.SpannableString;
 import android.text.Spanned;
@@ -114,6 +119,8 @@ public final class HuxerUIView extends ViewGroup {
     private static final int PATH_QUADRATIC_TO = 2;
     private static final int PATH_CUBIC_TO = 3;
     private static final int PATH_CLOSE = 4;
+    private HuxerUINativeBlur nativeBlur;
+
     private static final int IMAGE_CACHE_BUDGET = 64 * 1024 * 1024;
     private static final long[] EMPTY_PLATFORM_COMPOSITION = new long[0];
 
@@ -227,6 +234,17 @@ public final class HuxerUIView extends ViewGroup {
     private long presentationIdentity = 1;
     private long[] platformComposition = EMPTY_PLATFORM_COMPOSITION;
     private boolean nativeDrawing;
+    private final ArrayList<BackdropSurface> backdropSurfaces = new ArrayList<>();
+    private final ArrayList<BackdropSurface> backdropSurfacePool = new ArrayList<>();
+    private long backdropPoolBytes;
+    private long backdropBitmapBytes;
+    private boolean backdropGpuDrawing;
+    private HuxerUIBackdropRaster backdropRaster;
+    private final ArrayList<HuxerUIBackdropRaster> backdropRasterPool = new ArrayList<>();
+    private long backdropRasterPoolBytes;
+    private int backdropRasterWidth;
+    private int backdropRasterHeight;
+    private Bitmap presentedBackdropBitmap;
     private boolean applyingPlatformViewFocus;
     private boolean platformAccessibilityStructureChanged;
     private long touchPlatformViewIdentity;
@@ -554,6 +572,8 @@ public final class HuxerUIView extends ViewGroup {
         pathCache.evictAll();
         paragraphCache.evictAll();
         imageCache.evictAll();
+        releaseBackdropCanvases();
+        presentedBackdropBitmap = null;
         frameScheduled = false;
         frameTime = 0L;
         if (inputConnection != null) {
@@ -1765,6 +1785,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawBrushRect(Canvas canvas, float x, float y, float width, float height, int brushKind, int color,
             float[] geometry, float[] stops, int[] colors, float cornerRadius) {
+        canvas = backdropDrawingCanvas(canvas);
         if (width <= 0.0F || height <= 0.0F) {
             return;
         }
@@ -1780,6 +1801,7 @@ public final class HuxerUIView extends ViewGroup {
             float paragraphOffsetX, float paragraphOffsetY, int color, float fontSize, int familyKind,
             byte[] familyName, int weight, int slant, int decoration, int alignment, int verticalAlignment, int wrap,
             int direction, byte[] utf8Locale, byte[] attributes) {
+        canvas = backdropDrawingCanvas(canvas);
         if (width <= 0.0F || height <= 0.0F) {
             return;
         }
@@ -1819,6 +1841,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawTextRuns(Canvas canvas, byte[] textData, int[] textRanges, float[] baselines, int[] colors,
             float[] fontSizes, int[] styles, byte[] metadata, int[] metadataRanges) {
+        canvas = backdropDrawingCanvas(canvas);
         int count = colors.length;
         if (textRanges.length != count * 2 || baselines.length != count * 2 || fontSizes.length != count
                 || styles.length != count * 5 || metadataRanges.length != count * 4) {
@@ -1843,6 +1866,7 @@ public final class HuxerUIView extends ViewGroup {
     }
 
     private void drawCircle(Canvas canvas, float centerX, float centerY, float radius, int color) {
+        canvas = backdropDrawingCanvas(canvas);
         if (radius <= 0.0F) {
             return;
         }
@@ -1852,6 +1876,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawLine(Canvas canvas, float startX, float startY, float endX, float endY, int color, float width,
             int cap, int join, float miterLimit, float[] dashPattern, float dashOffset) {
+        canvas = backdropDrawingCanvas(canvas);
         if ((startX == endX && startY == endY) || width <= 0.0F) {
             return;
         }
@@ -1861,6 +1886,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawArc(Canvas canvas, float centerX, float centerY, float radius, float startAngle, float sweepAngle,
             int color, float width, int cap, int join, float miterLimit, float[] dashPattern, float dashOffset) {
+        canvas = backdropDrawingCanvas(canvas);
         if (radius <= 0.0F || width <= 0.0F) {
             return;
         }
@@ -1878,6 +1904,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawBorder(Canvas canvas, float x, float y, float width, float height, int color, float strokeWidth,
             float cornerRadius) {
+        canvas = backdropDrawingCanvas(canvas);
         if (width <= 0.0F || height <= 0.0F || strokeWidth <= 0.0F) {
             return;
         }
@@ -1890,6 +1917,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawShadow(Canvas canvas, float x, float y, float width, float height, int color, float blurRadius,
             float cornerRadius) {
+        canvas = backdropDrawingCanvas(canvas);
         if (shadowRenderer == null) {
             shadowRenderer = new HuxerUIShadowRenderer(density);
         }
@@ -1898,6 +1926,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void fillBrushPath(Canvas canvas, float[] elements, int fillRule, int brushKind, int color,
             float[] geometry, float[] stops, int[] colors) {
+        canvas = backdropDrawingCanvas(canvas);
         if (!prepareBrush(brushKind, color, geometry, stops, colors, Paint.Style.FILL, 0.0F)) {
             return;
         }
@@ -1908,7 +1937,8 @@ public final class HuxerUIView extends ViewGroup {
 
     private boolean prepareBrush(int brushKind, int color, float[] geometry, float[] stops, int[] colors,
             Paint.Style style, float strokeWidth) {
-        preparePaint(color, style, strokeWidth);
+        // Gradient stops own their alpha; the unused solid-color argument must not make the shader transparent.
+        preparePaint(brushKind == BRUSH_COLOR ? color : 0xFFFFFFFF, style, strokeWidth);
         if (brushKind == BRUSH_COLOR) {
             return true;
         }
@@ -1948,6 +1978,7 @@ public final class HuxerUIView extends ViewGroup {
     private void strokeBrushPath(Canvas canvas, float[] elements, int brushKind, int color, float[] geometry,
             float[] stops, int[] colors, float width, int cap, int join, float miterLimit, float[] dashPattern,
             float dashOffset) {
+        canvas = backdropDrawingCanvas(canvas);
         if (width <= 0.0F) {
             return;
         }
@@ -1985,6 +2016,7 @@ public final class HuxerUIView extends ViewGroup {
 
     private void drawPathShadow(Canvas canvas, float[] elements, float x, float y, float width, float height, int color,
             float offsetX, float offsetY, float blurRadius, int fillRule) {
+        canvas = backdropDrawingCanvas(canvas);
         Path drawPath = preparePath(elements, fillRule);
         if (shadowRenderer == null) {
             shadowRenderer = new HuxerUIShadowRenderer(density);
@@ -1994,25 +2026,454 @@ public final class HuxerUIView extends ViewGroup {
     }
 
     private void pushClip(Canvas canvas, float x, float y, float width, float height, float cornerRadius) {
+        if (nativeBlur != null && nativeBlur.active()) {
+            Path clip = new Path();
+            float radius = Math.max(0.0F, Math.min(cornerRadius, Math.min(width, height) * 0.5F));
+            clip.addRoundRect(new RectF(x, y, x + width, y + height), radius, radius, Path.Direction.CW);
+            nativeBlur.pushClip(canvas, clip);
+        }
         canvas.save();
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface != null && surface.maskCanvas != null) surface.maskCanvas.save();
         rect.set(x, y, x + width, y + height);
+        if (surface != null && surface.maskCanvas != null) {
+            Path clip = new Path();
+            float radius = Math.max(0.0F, Math.min(cornerRadius, Math.min(width, height) * 0.5F));
+            clip.addRoundRect(rect, radius, radius, Path.Direction.CW);
+            if (surface.recording != null) surface.recording.pushClip(clip);
+            ++surface.clipDepth;
+            surface.maskDirty = true;
+        }
         if (cornerRadius <= 0.0F) {
             canvas.clipRect(rect);
+            if (surface != null && surface.maskCanvas != null) surface.maskCanvas.clipRect(rect);
             return;
         }
         float radius = Math.min(cornerRadius, Math.min(width, height) * 0.5F);
         scratchPath.reset();
         scratchPath.addRoundRect(rect, radius, radius, Path.Direction.CW);
         canvas.clipPath(scratchPath);
+        if (surface != null && surface.maskCanvas != null) surface.maskCanvas.clipPath(scratchPath);
     }
 
     private void pushPathClip(Canvas canvas, float[] elements, int fillRule) {
         canvas.save();
-        canvas.clipPath(preparePath(elements, fillRule));
+        Path path = preparePath(elements, fillRule);
+        if (nativeBlur != null && nativeBlur.active()) nativeBlur.pushClip(canvas, path);
+        canvas.clipPath(path);
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface != null && surface.maskCanvas != null) {
+            surface.maskCanvas.save();
+            surface.maskCanvas.clipPath(path);
+            if (surface.recording != null) surface.recording.pushClip(path);
+            ++surface.clipDepth;
+            surface.maskDirty = true;
+        }
     }
 
     private void popClip(Canvas canvas) {
+        if (nativeBlur != null && nativeBlur.active()) nativeBlur.pop(canvas);
         canvas.restore();
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface != null && surface.maskCanvas != null) {
+            surface.maskCanvas.restore();
+            if (surface.recording != null) surface.recording.pop();
+            --surface.clipDepth;
+            surface.maskDirty = true;
+        }
+    }
+
+    private static final class BackdropSurface {
+        final Bitmap bitmap;
+        final Canvas canvas;
+        final Bitmap maskBitmap;
+        final Canvas maskCanvas;
+        final int width;
+        final int height;
+        final HuxerUIBackdropRaster.Recording recording;
+        int clipDepth;
+        boolean maskDirty = true;
+        float[] maskClipKey;
+
+        BackdropSurface(Bitmap bitmap, boolean gpu, int width, int height) {
+            this.bitmap = bitmap;
+            this.width = width;
+            this.height = height;
+            canvas = new Canvas(bitmap);
+            recording = gpu && Build.VERSION.SDK_INT >= 33 ? new HuxerUIBackdropRaster.Recording(width, height) : null;
+            maskBitmap = gpu ? Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) : null;
+            if (maskBitmap != null) maskBitmap.setDensity(Bitmap.DENSITY_NONE);
+            maskCanvas = gpu ? new Canvas(maskBitmap) : null;
+        }
+    }
+
+    private BackdropSurface backdropSurface(Canvas canvas) {
+        for (BackdropSurface surface : backdropSurfaces) {
+            if (surface.canvas == canvas) {
+                return surface;
+            }
+        }
+        return null;
+    }
+
+    private int nativeBackdropAvailable(Canvas canvas) {
+        return Build.VERSION.SDK_INT >= 33 && canvas.isHardwareAccelerated()
+                && !System.getProperty("org.huxerui.experimental.nativeBlur", "auto").equals("off")
+                ? Build.VERSION.SDK_INT : 0;
+    }
+
+    private Canvas beginNativeBackdropCanvas(Canvas parent) {
+        android.os.Trace.setCounter("HuxerUI Native Blur Fallback", 0);
+        if (nativeBlur == null) nativeBlur = new HuxerUINativeBlur();
+        nativeBlur.beginFrame(parent.getWidth(), parent.getHeight());
+        return nativeBlur.begin(parent);
+    }
+
+    private int nativeBackdropFallback(Throwable failure) {
+        if (!(failure instanceof HuxerUINativeBlur.Unavailable)) return 0;
+        int reason = ((HuxerUINativeBlur.Unavailable) failure).reason;
+        android.os.Trace.setCounter("HuxerUI Native Blur Fallback", reason);
+        return reason;
+    }
+
+    private void drawNativeBackdrop(Canvas canvas, float[] effect, float[] shapes) {
+        nativeBlur.filter(canvas, effect, shapes);
+    }
+
+    private Canvas beginBackdropCanvas(Canvas parent) {
+        if (nativeBlur != null && nativeBlur.active()) return nativeBlur.begin(parent);
+        BackdropSurface parentSurface = backdropSurface(parent);
+        int width = parentSurface == null ? parent.getWidth() : parentSurface.width;
+        int height = parentSurface == null ? parent.getHeight() : parentSurface.height;
+        long pixels = (long) width * height;
+        if (width <= 0 || height <= 0 || pixels > 16L * 1024L * 1024L) {
+            throw new IllegalStateException("HuxerUI Android backdrop bitmap budget exceeded");
+        }
+        long bytes = pixels * 4L * (backdropGpuDrawing ? 2L : 1L);
+        if (backdropBitmapBytes + bytes > 256L * 1024L * 1024L) {
+            throw new IllegalStateException("HuxerUI Android backdrop bitmap budget exceeded");
+        }
+        BackdropSurface surface = null;
+        if (backdropGpuDrawing) {
+            for (int index = backdropSurfacePool.size() - 1; index >= 0; --index) {
+                BackdropSurface candidate = backdropSurfacePool.get(index);
+                if (candidate.width == width && candidate.height == height) {
+                    surface = candidate;
+                    backdropSurfacePool.remove(index);
+                    backdropPoolBytes -= pixels * 4L + (long) candidate.bitmap.getWidth() * candidate.bitmap.getHeight() * 4L;
+                    break;
+                }
+            }
+            if (surface == null) clearBackdropPool();
+        }
+        if (surface == null) {
+            boolean hardwareRaster = backdropGpuDrawing && Build.VERSION.SDK_INT >= 33;
+            surface = new BackdropSurface(Bitmap.createBitmap(hardwareRaster ? 1 : width,
+                    hardwareRaster ? 1 : height, Bitmap.Config.ARGB_8888), backdropGpuDrawing, width, height);
+        }
+        surface.canvas.restoreToCount(1);
+        surface.canvas.setMatrix(new Matrix());
+        surface.bitmap.eraseColor(0);
+        if (surface.maskCanvas != null) {
+            surface.maskCanvas.restoreToCount(1);
+            surface.maskCanvas.setMatrix(new Matrix());
+        }
+        surface.bitmap.setDensity(Bitmap.DENSITY_NONE);
+        backdropSurfaces.add(surface);
+        backdropBitmapBytes += bytes;
+
+        Matrix matrix = new Matrix();
+        parent.getMatrix(matrix);
+        // Inherited clips apply at composition so the isolated prefix retains its complete sampling support.
+        surface.canvas.setMatrix(matrix);
+        if (surface.maskCanvas != null) surface.maskCanvas.setMatrix(matrix);
+        surface.clipDepth = 0;
+        surface.maskDirty = true;
+        if (surface.recording != null) surface.recording.begin(matrix);
+        if (parentSurface == null) backdropDrawingCanvas(surface.canvas).drawColor(0xFFF7F8FA);
+        return surface.canvas;
+    }
+
+    private void endBackdropCanvas(Canvas parent, Canvas canvas, float opacity) {
+        if (nativeBlur != null && nativeBlur.active()) {
+            nativeBlur.end(parent, canvas, opacity);
+            return;
+        }
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface == null) {
+            throw new IllegalStateException("HuxerUI Android backdrop Canvas is not retained");
+        }
+        Paint composite = new Paint();
+        composite.setAlpha(Math.round(Math.max(0.0F, Math.min(opacity, 1.0F)) * 255.0F));
+        int saved = parent.save();
+        try {
+            parent.setMatrix(new Matrix());
+            parent.drawBitmap(surface.bitmap, 0.0F, 0.0F, composite);
+        } finally {
+            parent.restoreToCount(saved);
+            backdropSurfaces.remove(surface);
+            backdropBitmapBytes -= (long) surface.bitmap.getWidth() * surface.bitmap.getHeight() * 4L;
+            if (backdropSurface(parent) == null) {
+                // A hardware Canvas retains this bitmap until its deferred drawing completes.
+                presentedBackdropBitmap = surface.bitmap;
+            } else {
+                surface.bitmap.recycle();
+            }
+        }
+    }
+
+    private void releaseBackdropCanvases() {
+        if (nativeBlur != null) nativeBlur.endFrame();
+        for (BackdropSurface surface : backdropSurfaces) {
+            retireBackdropSurface(surface);
+        }
+        backdropSurfaces.clear();
+        backdropBitmapBytes = 0;
+        if (!backdropGpuDrawing) {
+            clearBackdropPool();
+            clearBackdropRasters();
+        }
+        backdropGpuDrawing = false;
+    }
+
+    private void retireBackdropSurface(BackdropSurface surface) {
+        long bytes = (long) surface.width * surface.height * 4L
+                + (long) surface.bitmap.getWidth() * surface.bitmap.getHeight() * 4L;
+        if (surface.recording != null) surface.recording.discard();
+        if (surface.maskBitmap != null && backdropSurfacePool.size() < 4
+                && bytes <= 64L * 1024L * 1024L - backdropPoolBytes) {
+            // Only unpublished raster targets enter this pool; hardware exports remain immutable.
+            backdropSurfacePool.add(surface);
+            backdropPoolBytes += bytes;
+        } else {
+            surface.bitmap.recycle();
+            if (surface.maskBitmap != null) surface.maskBitmap.recycle();
+        }
+    }
+
+    private void clearBackdropPool() {
+        for (BackdropSurface surface : backdropSurfacePool) {
+            if (surface.recording != null) surface.recording.discard();
+            surface.bitmap.recycle();
+            surface.maskBitmap.recycle();
+        }
+        backdropSurfacePool.clear();
+        backdropPoolBytes = 0;
+    }
+
+    private void setBackdropRasterTransform(Canvas canvas, float m11, float m12, float m21, float m22,
+            float translateX, float translateY) {
+        Matrix matrix = new Matrix();
+        matrix.setValues(new float[] {m11, m21, translateX, m12, m22, translateY, 0.0F, 0.0F, 1.0F});
+        canvas.setMatrix(matrix);
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface != null && surface.recording != null) surface.recording.canvas.setMatrix(matrix);
+    }
+
+    private String backdropRasterEnvironment() {
+        return getResources().getConfiguration().toString() + ";nativeBlur="
+                + System.getProperty("org.huxerui.experimental.nativeBlur", "auto");
+    }
+
+    private void redrawBackdropHardware(Canvas canvas) {
+        if (presentedBackdropBitmap == null || presentedBackdropBitmap.getConfig() != Bitmap.Config.HARDWARE) {
+            throw new IllegalStateException("HuxerUI Android completed backdrop frame is missing");
+        }
+        int saved = canvas.save();
+        try {
+            canvas.setMatrix(new Matrix());
+            canvas.drawBitmap(presentedBackdropBitmap, 0.0F, 0.0F, null);
+        } finally {
+            canvas.restoreToCount(saved);
+        }
+    }
+
+    private boolean backdropGpuAvailable(Canvas canvas) {
+        if (Build.VERSION.SDK_INT < 29 || !canvas.isHardwareAccelerated()) return false;
+        if (Build.VERSION.SDK_INT < 33) return true;
+        if (backdropRaster == null || backdropRasterWidth != canvas.getWidth() || backdropRasterHeight != canvas.getHeight()) {
+            clearBackdropRasters();
+            backdropRaster = new HuxerUIBackdropRaster(canvas.getWidth(), canvas.getHeight());
+            backdropRasterPoolBytes = (long) canvas.getWidth() * canvas.getHeight() * 4;
+            backdropRasterWidth = canvas.getWidth();
+            backdropRasterHeight = canvas.getHeight();
+        }
+        return true;
+    }
+
+    private Canvas beginBackdropGpuCanvas(Canvas parent) {
+        backdropGpuDrawing = true;
+        return beginBackdropCanvas(parent);
+    }
+
+    private Canvas backdropDrawingCanvas(Canvas canvas) {
+        if (nativeBlur != null && nativeBlur.active()) return nativeBlur.drawing(canvas);
+        BackdropSurface surface = backdropSurface(canvas);
+        return surface == null || surface.recording == null ? canvas : surface.recording.canvas;
+    }
+
+    private void clearBackdropRasters() {
+        if (backdropRaster != null) { backdropRaster.close(); backdropRaster = null; }
+        for (HuxerUIBackdropRaster raster : backdropRasterPool) raster.close();
+        backdropRasterPool.clear();
+        backdropRasterPoolBytes = 0;
+    }
+
+    private Object backdropHardwareRaster(Canvas canvas, int left, int top, int width, int height) {
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface == null) {
+            throw new IllegalStateException("HuxerUI Android hardware raster recording is missing");
+        }
+        if (surface.recording == null) return surface.bitmap;
+        surface.recording.finish();
+        HuxerUIBackdropRaster raster = backdropRaster;
+        String selection = "viewport";
+        if (width != backdropRasterWidth || height != backdropRasterHeight) {
+            raster = null;
+            for (HuxerUIBackdropRaster candidate : backdropRasterPool) {
+                if (candidate.width == width && candidate.height == height) { raster = candidate; break; }
+            }
+            selection = "reuse";
+            long bytes = (long) width * height * 4;
+            if (raster == null && backdropRasterPool.size() < 3
+                    && bytes <= 64L * 1024L * 1024L - backdropRasterPoolBytes) {
+                raster = new HuxerUIBackdropRaster(width, height);
+                backdropRasterPool.add(raster);
+                backdropRasterPoolBytes += bytes;
+                selection = "allocate";
+            }
+            // Readers with acquired images cannot be evicted until native sampling has retired.
+            if (raster == null) { raster = backdropRaster; left = 0; top = 0; selection = "fallback"; }
+        }
+        boolean tracing = Trace.isEnabled();
+        if (tracing) {
+            Trace.beginSection("HuxerUI Raster Target " + width + "x" + height + " "
+                    + raster.width + "x" + raster.height + " " + selection);
+        }
+        try {
+            return raster.draw(surface.recording.node, left, top);
+        } finally {
+            if (tracing) Trace.endSection();
+        }
+    }
+
+    private Bitmap backdropBitmap(Canvas canvas) {
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface == null) throw new IllegalStateException("HuxerUI Android backdrop raster target is missing");
+        return surface.bitmap;
+    }
+
+    private Bitmap backdropMask(Canvas canvas, float[] clipKey) {
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface == null || surface.maskCanvas == null) {
+            throw new IllegalStateException("HuxerUI Android backdrop clip target is missing");
+        }
+        if (surface.clipDepth == 0) return null;
+        if (surface.maskDirty) {
+            // The key contains every rectangular clip and its device transform, never a hash or a frame revision.
+            if (clipKey == null || !Arrays.equals(surface.maskClipKey, clipKey)) {
+                surface.maskBitmap.eraseColor(0);
+                surface.maskCanvas.drawColor(0xFFFFFFFF);
+                surface.maskClipKey = clipKey;
+            }
+            surface.maskDirty = false;
+        }
+        return surface.maskBitmap;
+    }
+
+    private void clearBackdropRaster(Canvas canvas) {
+        BackdropSurface surface = backdropSurface(canvas);
+        Matrix matrix = new Matrix();
+        canvas.getMatrix(matrix);
+        if (surface.recording != null) {
+            if (surface.recording.canvas != null) surface.recording.finish();
+            surface.recording.restart(matrix);
+        } else {
+            surface.bitmap.eraseColor(0);
+        }
+    }
+
+    private void discardBackdropCanvas(Canvas canvas) {
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface == null) throw new IllegalStateException("HuxerUI Android backdrop group is missing");
+        backdropSurfaces.remove(surface);
+        backdropBitmapBytes -= (long) surface.width * surface.height * 8L;
+        retireBackdropSurface(surface);
+    }
+
+    private void presentBackdropHardware(Canvas canvas, Object hardwareBuffer) {
+        if (Build.VERSION.SDK_INT < 29 || !canvas.isHardwareAccelerated()) {
+            throw new IllegalStateException("HuxerUI Android backdrop publication requires a hardware Canvas");
+        }
+        Bitmap bitmap = BackdropHardwareApi29.wrap(hardwareBuffer);
+        if (bitmap == null) throw new IllegalStateException("HuxerUI Android backdrop hardware Bitmap is unavailable");
+        bitmap.setDensity(Bitmap.DENSITY_NONE);
+        int saved = canvas.save();
+        try {
+            canvas.setMatrix(new Matrix());
+            canvas.drawBitmap(bitmap, 0.0F, 0.0F, null);
+            presentedBackdropBitmap = bitmap;
+        } finally {
+            canvas.restoreToCount(saved);
+        }
+    }
+
+    private static final class BackdropHardwareApi29 {
+        static Bitmap wrap(Object hardwareBuffer) {
+            HardwareBuffer buffer = (HardwareBuffer) hardwareBuffer;
+            try {
+                return Bitmap.wrapHardwareBuffer(buffer, ColorSpace.get(ColorSpace.Named.SRGB));
+            } finally {
+                buffer.close();
+            }
+        }
+    }
+
+    private int[] backdropPixels(Canvas canvas, int left, int top, int width, int height) {
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface == null) {
+            throw new IllegalStateException("HuxerUI Android backdrop capture requires a software Canvas");
+        }
+        if (left < 0 || top < 0 || width <= 0 || height <= 0 || left > surface.bitmap.getWidth() - width
+                || top > surface.bitmap.getHeight() - height || (long) width * height > 16L * 1024L * 1024L) {
+            throw new IllegalArgumentException("HuxerUI Android backdrop capture bounds are invalid");
+        }
+        int[] pixels = new int[width * height];
+        surface.bitmap.getPixels(pixels, 0, width, left, top, width, height);
+        return pixels;
+    }
+
+    private float[] backdropTransform(Canvas canvas) {
+        Matrix matrix = new Matrix();
+        Matrix inverse = new Matrix();
+        canvas.getMatrix(matrix);
+        if (!matrix.invert(inverse)) {
+            return new float[8];
+        }
+        float[] values = new float[9];
+        inverse.getValues(values);
+        BackdropSurface surface = backdropSurface(canvas);
+        return new float[] {nativeBlur != null && nativeBlur.active() ? nativeBlur.width :
+                    surface == null ? canvas.getWidth() : surface.width,
+                nativeBlur != null && nativeBlur.active() ? nativeBlur.height :
+                    surface == null ? canvas.getHeight() : surface.height,
+                values[Matrix.MSCALE_X], values[Matrix.MSKEW_Y],
+                values[Matrix.MSKEW_X], values[Matrix.MSCALE_Y], values[Matrix.MTRANS_X], values[Matrix.MTRANS_Y]};
+    }
+
+    private void drawBackdropPixels(Canvas canvas, int[] pixels, int width, int height, int left, int top) {
+        Bitmap bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888);
+        bitmap.setDensity(Bitmap.DENSITY_NONE);
+        Paint replace = new Paint();
+        replace.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
+        int saved = canvas.save();
+        try {
+            canvas.setMatrix(new Matrix());
+            canvas.drawBitmap(bitmap, left, top, replace);
+        } finally {
+            canvas.restoreToCount(saved);
+            bitmap.recycle();
+        }
     }
 
     private void pushOpacity(Canvas canvas, float opacity) {
@@ -2038,10 +2499,23 @@ public final class HuxerUIView extends ViewGroup {
         transformValues[Matrix.MPERSP_2] = 1.0F;
         transform.setValues(transformValues);
         canvas.concat(transform);
+        if (nativeBlur != null && nativeBlur.active()) nativeBlur.pushTransform(canvas, transform);
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface != null && surface.maskCanvas != null) {
+            surface.maskCanvas.save();
+            surface.maskCanvas.concat(transform);
+            if (surface.recording != null) surface.recording.pushTransform(transform);
+        }
     }
 
     private void popTransform(Canvas canvas) {
+        if (nativeBlur != null && nativeBlur.active()) nativeBlur.pop(canvas);
         canvas.restore();
+        BackdropSurface surface = backdropSurface(canvas);
+        if (surface != null && surface.maskCanvas != null) {
+            surface.maskCanvas.restore();
+            if (surface.recording != null) surface.recording.pop();
+        }
     }
 
     private void preparePaint(int color, Paint.Style style, float strokeWidth) {
@@ -2302,6 +2776,7 @@ public final class HuxerUIView extends ViewGroup {
     private void drawBitmap(Canvas canvas, Bitmap bitmap, float sourceX, float sourceY, float sourceWidth,
             float sourceHeight, float destinationX, float destinationY, float destinationWidth,
             float destinationHeight, float opacity, int sampling) {
+        canvas = backdropDrawingCanvas(canvas);
         Rect source = new Rect(Math.round(sourceX), Math.round(sourceY), Math.round(sourceX + sourceWidth),
                 Math.round(sourceY + sourceHeight));
         rect.set(destinationX, destinationY, destinationX + destinationWidth, destinationY + destinationHeight);
@@ -2321,6 +2796,10 @@ public final class HuxerUIView extends ViewGroup {
             nativeDestroy(nativeHandle);
             nativeHandle = 0L;
         }
+        releaseBackdropCanvases();
+        if (nativeBlur != null) { nativeBlur.close(); nativeBlur = null; }
+        clearBackdropPool();
+        presentedBackdropBitmap = null;
     }
 
     private void handleNativeApplicationActivation(HuxerUIApplicationActivation activation) {

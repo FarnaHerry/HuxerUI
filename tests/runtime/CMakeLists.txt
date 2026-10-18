@@ -11,6 +11,7 @@ huxerui_add_test_suite(huxerui_runtime_tests HuxerUIRuntimeTests
             file_picker.cpp
             file_drop.cpp
             gestures.cpp
+            glass_components.cpp
             http.cpp
             interaction.cpp
             layers.cpp
@@ -27,6 +28,7 @@ huxerui_add_test_suite(huxerui_runtime_tests HuxerUIRuntimeTests
             presentation_semantics.cpp
             semantics.cpp
             profiling.cpp
+            effects.cpp
             render_scene.cpp
             resources.cpp
             scrolling.cpp

@@ -43,6 +43,11 @@ export namespace huxerui {
     using huxerui::Axis;
     using huxerui::BackEvent;
     using huxerui::BackPhase;
+    using huxerui::BackdropBlur;
+    using huxerui::BackdropBlurQuality;
+    using huxerui::BackdropEffect;
+    using huxerui::BackdropFilter;
+    using huxerui::BackdropShape;
     using huxerui::Background;
     using huxerui::Border;
     using huxerui::BottomSheetContext;
@@ -99,6 +104,7 @@ export namespace huxerui {
     using huxerui::DragSource;
     using huxerui::DragSourceEvents;
     using huxerui::DrawArcCommand;
+    using huxerui::DrawBackdropCommand;
     using huxerui::DrawBorderCommand;
     using huxerui::DrawCircleCommand;
     using huxerui::DrawExternalTextureCommand;
@@ -163,6 +169,7 @@ export namespace huxerui {
     using huxerui::FrameCommit;
     using huxerui::FrameInfo;
     using huxerui::GestureSettings;
+    using huxerui::GlassGroup;
     using huxerui::GradientStop;
     using huxerui::GridColumns;
     using huxerui::Grow;
@@ -221,6 +228,7 @@ export namespace huxerui {
     using huxerui::LayoutResult;
     using huxerui::Lifecycle;
     using huxerui::LinearGradient;
+    using huxerui::LiquidGlass;
     using huxerui::LocalNotification;
     using huxerui::LocalNotificationCapabilities;
     using huxerui::LocalNotificationHandle;

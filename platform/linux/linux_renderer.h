@@ -13,6 +13,21 @@ namespace huxerui::detail {
 
 class TextLayout;
 
+struct LinuxBackdropStats {
+  std::size_t plane_count = 0;
+  std::size_t command_count = 0;
+  std::size_t gpu_plane_count = 0;
+  std::size_t source_capture_count = 0;
+  std::size_t blur_pass_count = 0;
+  std::size_t blur_cache_hits = 0;
+  std::size_t raster_upload_bytes = 0;
+  std::size_t readback_bytes = 0;
+  std::size_t mask_upload_bytes = 0;
+  std::size_t mask_rasterizations = 0;
+  std::size_t external_texture_imports = 0;
+  std::size_t texture_download_bytes = 0;
+};
+
 // Records the platform-neutral scene into GTK Snapshot nodes, using Cairo nodes
 // for ordinary drawing and texture nodes for GPU-backed external frames.
 class LinuxRenderer final {
@@ -25,6 +40,9 @@ public:
 
   void Initialize();
   void Discard() noexcept;
+  void SetDeviceScale(float scale);
+  void SetDisplay(::GdkDisplay* display);
+  void SetViewport(Size viewport);
 
   [[nodiscard]] FontMetrics Metrics(const Font& font);
   [[nodiscard]] TextRunMetrics
@@ -41,6 +59,7 @@ public:
   void Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame);
   void SnapshotSlice(GtkSnapshot* snapshot, const RenderFrame& frame, std::size_t first_command,
                      std::size_t command_count);
+  [[nodiscard]] LinuxBackdropStats BackdropStats() const noexcept;
 
 public:
   struct State;

@@ -12,6 +12,7 @@ User guides describe the current public SDK, development guides cover this repos
 - [Components and Input](guide/components.md): controls, navigation, gestures, and text editing.
 - [Windowless UI Testing](guide/testing.md): real-Runtime queries, input, virtual frames, and structural captures.
 - [Themes and Presentation](guide/themes-and-presentation.md): themes, indication, animation, and layers.
+- [Frosted and Liquid Glass](guide/glass.md): backdrop blur, optical materials, themed controls, fusion, and capture boundaries.
 - [Files and Storage](guide/files.md): application storage, external files, and pickers.
 - [HTTP Client](guide/http.md): buffered and streaming responses, transfer progress, Tasks, and errors.
 - [Extending HuxerUI](guide/extending.md): custom components, layouts, modifiers, and platform services.
@@ -25,11 +26,13 @@ User guides describe the current public SDK, development guides cover this repos
 - [Windows Paint Benchmark](development/windows-paint-benchmark.md): reproduce native renderer A/B timing, pixel checks, and memory measurements.
 - [Downstream integration](development/farna-integration.md): the `farna/main` patch inventory, validation, and adoption.
 - [Developing Multi-Window](development/multi-window.md): the multi-window extension status, validation, behavioral notes, and desktop porting checklist.
+- [Farna graphics TODO](development/farna-graphics-todo.md): downstream-only future work for compositing, glass primitives, and backend qualification; not an upstream roadmap.
 - [SDK Packaging](development/sdk-packaging.md): produce and validate release-ready SDK archives.
 
 ## Design reference
 
 [Design Documents](design/README.md) indexes the internal contracts by subsystem.
+[Backdrop Effects and Glass](design/backdrop-effects.md) specifies background sampling, optical materials, and compositing boundaries.
 [Scrolling](design/scrolling.md) defines input normalization, nested consumption, offset ownership, momentum, and overscroll.
 [External File Drop](design/file-drop.md) defines host file reception, hover lifecycle, and asynchronous reference delivery.
 [Date and Time Pickers](design/date-time-pickers.md) defines localized chrono-based calendar and clock controls.

@@ -12,6 +12,7 @@
 
 #include "runtime/gesture_internal.h"
 #include "internal_access.h"
+#include "graphics/effects_internal.h"
 #include "runtime/ui_window_internal.h"
 #include "resources/resource_internal.h"
 #include "tooltip_internal.h"
@@ -128,6 +129,9 @@ void ValidateTooltipStyle(const TooltipStyle& style) {
         "extents"
     );
   }
+  if (style.backdrop_effect) {
+    ValidateBackdropEffect(*style.backdrop_effect);
+  }
 }
 
 TooltipStyle ResolveTooltipStyle(const std::shared_ptr<const Environment>& environment) {
@@ -187,7 +191,7 @@ ViewFactory TooltipContent(std::weak_ptr<TooltipTargetState> target, std::string
     Semantics semantics;
     semantics.descendants = SemanticDescendantPolicy::Exclude;
     semantics.hidden = true;
-    return Text(std::move(message))
+    View result = Text(std::move(message))
         .Style(style.text_style)
         .With(
             Frame{.max_width = style.maximum_width, .min_height = style.minimum_height},
@@ -198,6 +202,10 @@ ViewFactory TooltipContent(std::weak_ptr<TooltipTargetState> target, std::string
             TooltipSurfaceHover{target},
             std::move(semantics)
         );
+    if (style.backdrop_effect) {
+      result = std::move(result).With(BackdropFilter{*style.backdrop_effect});
+    }
+    return result;
   };
 }
 

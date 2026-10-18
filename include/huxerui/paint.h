@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <huxerui/color.h>
+#include <huxerui/effects.h>
 #include <huxerui/external_texture.h>
 #include <huxerui/geometry.h>
 #include <huxerui/layout.h>
@@ -189,6 +190,16 @@ struct DrawRectCommand {
   float corner_radius = 0.0F;
 
   bool operator==(const DrawRectCommand&) const = default;
+};
+
+/// Samples and filters the already-painted prefix of the active compositing group into a union of rounded surfaces.
+///
+/// The command excludes its own later shadow, fill, and foreground. Capture never crosses an opacity-isolation group.
+struct DrawBackdropCommand {
+  std::vector<BackdropShape> shapes;
+  BackdropEffect effect;
+
+  bool operator==(const DrawBackdropCommand&) const = default;
 };
 
 /// Draws a complete paragraph using platform text layout inside rect.
@@ -484,6 +495,7 @@ private:
 /// Commands retain all data required for later renderer replay and contain no operating-system drawing objects.
 using PaintCommand = std::variant<
     DrawRectCommand,
+    DrawBackdropCommand,
     DrawTextCommand,
     DrawTextRunsCommand,
     DrawImageCommand,
@@ -529,11 +541,17 @@ public:
     return has_external_texture_commands_;
   }
 
+  /// Returns whether replay depends on the previously-painted background.
+  [[nodiscard]] bool HasBackdropCommands() const noexcept {
+    return has_backdrop_commands_;
+  }
+
 private:
   std::vector<PaintCommand> commands_;
   Rect bounds_;
   std::uint64_t revision_ = 0;
   bool has_external_texture_commands_ = false;
+  bool has_backdrop_commands_ = false;
 
   friend class PaintContext;
   friend struct detail::FrozenScene;
@@ -565,6 +583,11 @@ public:
   [[nodiscard]] Rect Bounds() const noexcept {
     return bounds_;
   }
+
+  /// Records an optical surface before its fill and content, using the active group's current background.
+  void DrawBackdrop(Rect rect, BackdropEffect effect, CornerRadii corner_radii = {});
+  /// Records a fused optical surface; shapes use the active logical coordinate space.
+  void DrawBackdrop(std::vector<BackdropShape> shapes, BackdropEffect effect);
 
   /// Fills rect with a Brush evaluated relative to rect and optional outer corner radii.
   void DrawRect(Rect rect, Brush brush, CornerRadii corner_radii = {});

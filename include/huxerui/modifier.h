@@ -280,6 +280,12 @@ public:
     return false;
   }
 
+  /// Records a background-dependent surface before the node's own shadow, fill, border, and content.
+  virtual void PaintBackdrop(const ViewNode& node, PaintContext& context) const {
+    static_cast<void>(node);
+    static_cast<void>(context);
+  }
+
   /// Records node-local paint commands after the background and before the border, content, and descendants.
   virtual void PaintBehindContent(const ViewNode& node, PaintContext& context) const {
     static_cast<void>(node);

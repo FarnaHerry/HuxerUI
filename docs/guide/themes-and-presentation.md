@@ -48,6 +48,9 @@ definition.Set(style);
 Foregrounds, indicators, dividers, scrims, tracks, and colors used by retained animation or opacity calculations remain `Color`.
 `Indication` owns only transient focus, hover, press, and ripple presentation; normal backgrounds, borders, and surface geometry remain in the component style.
 
+Background-owning styles can opt into an independent `BackdropEffect` while retaining their ordinary translucent fill and indication.
+See [Frosted and Liquid Glass](glass.md) for the material fields, editor-specific TextField surface, fusion and source boundaries.
+
 Flat and Material are independent systems, not a shared style with a few color substitutions.
 For example, a Flat `TextFieldStyle` can use an outlined surface without a visible floating label while keeping the label in semantics.
 Flat pickers use compact geometry, restrained outlines, and rounded-square date selections; Material pickers use larger tonal surfaces, circular date selections, and separate time-field, period-group, and dial selection colors.
@@ -151,6 +154,7 @@ Decoration is clipped to the transition container, has no input or semantic targ
 Use fixed seeds and trajectories calculated directly from progress for reproducible particles and reversible effects; do not start a second clock or integrate particle positions across calls.
 
 Fragmentation replays retained render content rather than guaranteeing a cached bitmap or GPU texture.
+Live backdrop effects are rejected as fragmented sources because they require the original complete drawing prefix.
 There are no fixed count limits or automatic effect changes based on fragment count or recorded output; additional fragments increase copying and rendering costs.
 Native PlatformViews cannot be replicated as fragments. When a fragmented page contains one, Navigation uses a fade without decoration for the remainder of that operation, including predictive cancellation.
 External textures retain their existing producer-backed pixel behavior.
@@ -184,6 +188,7 @@ Select immediate page motion when only the Scene effect is desired.
 Scene requests replace active visual work, reject recursive requests from mutations or effect evaluation, and preserve already-performed state writes when a mutation throws.
 Reduced motion skips visual retention while still executing the mutation.
 Native PlatformView content uses the frozen-scene fade fallback; retaining an external texture does not freeze its producer's pixels.
+Whole-scene freezing rejects live backdrop effects; use ordinary retained View motion for a glass scene.
 Repeated scene replacement captures the committed composite and can increase retained memory; it has no count-based cutoff, so assess interruption frequency and effect cost on the intended devices.
 
 ### Shared elements and local changes
@@ -254,6 +259,7 @@ SharedElement keeps one visual (the source for a local operation, destination fo
 Text scales or crossfades with retained paint rather than reflowing at intermediate sizes.
 
 Prepare images and scroll positions before starting: missing, unrealized, partially ancestor-clipped, native PlatformView, and ExternalTexture content skip shared pairing.
+Subtrees containing live backdrop effects also skip pairing because copying their commands would sample a different background.
 Rotation/skew mappings and fragment-rendered marked subtrees also use ordinary drawing.
 A change to captured target geometry/content ends that pair; explicit Run is how to request animated local retargeting.
 Scope visibility, viewport, or coordinate-space changes release the shared operation.

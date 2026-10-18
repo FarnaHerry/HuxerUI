@@ -360,6 +360,10 @@ struct MountedNode final : public huxerui::ViewNode {
     return bounds;
   }
 
+  [[nodiscard]] CornerRadii ResolvedCornerRadii() const noexcept override {
+    return resolved_corner_radii;
+  }
+
   [[nodiscard]] Rect ContentBounds() const noexcept override {
     return {
         bounds.x + resolved_padding.left,
@@ -519,6 +523,11 @@ struct ExternalTextureUseSnapshot {
   Rect bounds;
 };
 
+struct BackdropDependencySnapshot {
+  Rect sampling_bounds;
+  Rect output_bounds;
+};
+
 struct RenderNodeSnapshot {
   std::uint64_t content_revision = 0;
   std::uint64_t foreground_revision = 0;
@@ -531,6 +540,7 @@ struct RenderNodeSnapshot {
   Rect subtree_bounds;
   std::vector<std::uint64_t> children;
   std::vector<ExternalTextureUseSnapshot> external_textures;
+  std::vector<BackdropDependencySnapshot> backdrops;
   float opacity = 1.0F;
   bool has_own_bounds = false;
   bool has_subtree_bounds = false;

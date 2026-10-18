@@ -118,6 +118,8 @@ Use its borrowed measurer only for synchronous text-dependent retained geometry,
 Return the exact `PaintInvalidation` phases whose recorded inputs changed; text that affects measurement belongs in `Layout` because this callback does not provide another layout pass.
 This is also the phase for `ViewNode` local-to-window conversion when retained behavior must publish geometry to a window-owned service such as Popup placement.
 Paint callbacks continue to record node-local commands and do not use window coordinates to draw.
+`PaintBackdrop()` runs before the owner's shadow and background; `PaintBehindContent()` runs after the background, and `PaintAboveContent()` follows content and descendants.
+Use `PaintContext::DrawBackdrop()` for an optical material with the source and isolation rules in [Frosted and Liquid Glass](glass.md).
 Use `ViewNode::Bounds()` for the complete node rectangle and `ContentBounds()` when custom content should respect the node's resolved Padding.
 
 For self-drawn controls, `BuildSemantics(SemanticBuilder&)` can publish virtual children with `AddChild(local_id, bounds, semantics, enabled)` and declare their actions through `AddAction` or `AddCustomAction`.

@@ -34,6 +34,10 @@ abstract class StageHuxerUIAssets extends DefaultTask {
 
 def huxeruiRoot = rootProject.projectDir.parentFile.parentFile
 def huxeruiExample = providers.gradleProperty("huxeruiExample").orElse("ui_gallery").get()
+def huxeruiNativeBlur = providers.gradleProperty("huxeruiNativeBlur").orElse("auto").get()
+if (!(huxeruiNativeBlur in ["auto", "off", "matched", "nominal"])) {
+    throw new GradleException("HuxerUI native blur benchmark mode must be auto, off, matched or nominal")
+}
 def huxeruiApplicationActivationEnabled = huxeruiExample == "application"
 def huxeruiExampleAndroid = new File(huxeruiRoot, "examples/${huxeruiExample}/android/src/main")
 def huxeruiExampleManifest = new File(huxeruiExampleAndroid, "AndroidManifest.xml")
@@ -59,13 +63,15 @@ android {
         targetSdk = huxeruiTargetSdk
         versionCode = 1
         versionName = "1.0"
+        buildConfigField "String", "HUXERUI_NATIVE_BLUR", JsonOutput.toJson(huxeruiNativeBlur)
         manifestPlaceholders = [huxeruiApplicationActivationEnabled: huxeruiApplicationActivationEnabled]
 
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_STL=${huxeruiStl}",
                         "-DHUXERUI_ROOT_DIR=${huxeruiRoot.absolutePath}",
-                        "-DHUXERUI_EXAMPLE=${huxeruiExample}"
+                        "-DHUXERUI_EXAMPLE=${huxeruiExample}",
+                        "-DHUXERUI_ENABLE_PROFILING=${providers.gradleProperty('huxeruiExampleProfiling').orElse('ON').get()}"
             }
         }
 

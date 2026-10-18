@@ -34,10 +34,13 @@ def huxeruiTestingSdk = providers.gradleProperty("huxeruiTestingSdk").orElse("")
 
 android {
     namespace = "org.huxerui.testing"
+    buildFeatures { buildConfig = true }
+    testBuildType providers.gradleProperty("huxeruiTestingBuildType").orElse("debug").get()
     compileSdk = providers.gradleProperty("huxeruiCompileSdk").get().toInteger()
     ndkVersion = providers.gradleProperty("huxeruiNdkVersion").get()
 
     defaultConfig {
+        buildConfigField "boolean", "HUXERUI_BACKDROP_TESTS", huxeruiTestingSdk.isEmpty().toString()
         minSdk = providers.gradleProperty("huxeruiMinSdk").get().toInteger()
         testInstrumentationRunner "org.huxerui.HuxerUIUiTestingTest"
         externalNativeBuild {
@@ -54,6 +57,8 @@ android {
 
     sourceSets {
         androidTest.java.srcDir "../../../tests/platform/android/ui_testing"
+        // Compile the matching Java host without importing a second native library artifact.
+        androidTest.java.srcDir "../huxerui/src/main/java"
     }
 
     compileOptions {

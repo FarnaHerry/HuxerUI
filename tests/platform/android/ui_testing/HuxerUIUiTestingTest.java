@@ -12,9 +12,14 @@ import java.io.InputStream;
 
 /** Runs the native windowless smoke with resources owned by the test APK. */
 public final class HuxerUIUiTestingTest extends Instrumentation {
+    private String nativeOutputMode;
+    private boolean nativeFastValidation;
+
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        nativeOutputMode = arguments == null ? null : arguments.getString("nativeOutputMode");
+        nativeFastValidation = arguments != null && "true".equals(arguments.getString("nativeFastValidation"));
         start();
     }
 
@@ -22,23 +27,67 @@ public final class HuxerUIUiTestingTest extends Instrumentation {
     public void onStart() {
         Bundle result = new Bundle();
         result.putString("class", getClass().getName());
-        result.putString("test", "testWindowlessRuntime");
+        result.putString("test", nativeFastValidation ? "testNativeFast"
+                : nativeOutputMode == null ? "testWindowlessRuntime" : "testNativeOutput");
         result.putInt("numtests", 1);
         result.putInt("current", 1);
         sendStatus(1, result);
         File packageRoot = null;
         try {
-            packageRoot = File.createTempFile("ui-testing-", "", getContext().getCacheDir());
-            if (!packageRoot.delete() || !packageRoot.mkdir()) {
-                throw new IOException("HuxerUI test package directory cannot be created");
+            if (nativeFastValidation && (nativeOutputMode != null
+                    || !org.huxerui.testing.BuildConfig.HUXERUI_BACKDROP_TESTS)) {
+                throw new IllegalArgumentException(
+                        "HuxerUI native Fast validation requires an exclusive source test run");
             }
-            copyAssets(getContext().getAssets(), "package", packageRoot);
-            System.loadLibrary("huxerui_ui_testing_smoke");
-            String packagePath = packageRoot.getAbsolutePath();
-            runOnMainSync(() -> result.putString("error", runNative(packagePath)));
+            if (nativeOutputMode != null) {
+                boolean optics = nativeOutputMode.equals("optics");
+                if (optics) {
+                    if (android.os.Build.VERSION.SDK_INT < 35
+                            || !org.huxerui.testing.BuildConfig.HUXERUI_BACKDROP_TESTS) {
+                        throw new IllegalArgumentException("HuxerUI optical validation requires API 35 and source tests");
+                    }
+                    System.loadLibrary("huxerui_ui_testing_smoke");
+                }
+                Throwable[] failure = new Throwable[1];
+                runOnMainSync(() -> {
+                    try {
+                        if (optics) HuxerUINativeOpticsTest.verify();
+                        else HuxerUINativeOutputTest.verify(this, nativeOutputMode);
+                    } catch (Throwable error) {
+                        failure[0] = error;
+                    }
+                });
+                if (failure[0] != null) throw new AssertionError("HuxerUI native output comparison failed", failure[0]);
+                result.putString("error", "");
+            } else if (nativeFastValidation) {
+                System.loadLibrary("huxerui_ui_testing_smoke");
+                Throwable[] failure = new Throwable[1];
+                runOnMainSync(() -> {
+                    try {
+                        HuxerUIBackdropTest.verifyNativeFast(this);
+                    } catch (Throwable error) {
+                        failure[0] = error;
+                    }
+                });
+                if (failure[0] != null) throw new AssertionError("HuxerUI native Fast validation failed", failure[0]);
+                result.putString("error", "");
+            } else {
+                packageRoot = File.createTempFile("ui-testing-", "", getContext().getCacheDir());
+                if (!packageRoot.delete() || !packageRoot.mkdir()) {
+                    throw new IOException("HuxerUI test package directory cannot be created");
+                }
+                copyAssets(getContext().getAssets(), "package", packageRoot);
+                System.loadLibrary("huxerui_ui_testing_smoke");
+                String packagePath = packageRoot.getAbsolutePath();
+                runOnMainSync(() -> result.putString("error", runNative(packagePath)));
+                if (org.huxerui.testing.BuildConfig.HUXERUI_BACKDROP_TESTS) HuxerUIBackdropTest.verify(this);
+            }
             String error = result.getString("error");
             boolean passed = error != null && error.isEmpty();
-            result.putString("stream", passed ? "HuxerUI UI testing smoke: PASS\n" : "FAIL: " + error);
+            String success = nativeFastValidation ? "HuxerUI native Fast validation: PASS\n"
+                    : nativeOutputMode == null ? "HuxerUI UI testing smoke: PASS\n"
+                    : "HuxerUI native output " + nativeOutputMode + ": PASS\n";
+            result.putString("stream", passed ? success : "FAIL: " + error);
             if (!passed) result.putString("stack", error == null ? "HuxerUI native result is missing" : error);
             sendStatus(passed ? 0 : -2, result);
             finish(passed ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);

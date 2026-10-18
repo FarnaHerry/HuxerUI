@@ -15,6 +15,7 @@ target_sources(huxerui_macos_tests PRIVATE
         platform_bridge.mm
         platform_view.mm
         external_texture.mm
+        renderer.mm
         file_picker.mm
         text_input.mm
         window_chrome.cpp

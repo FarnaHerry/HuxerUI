@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <utility>
 #include <vector>
@@ -13,12 +14,20 @@ namespace huxerui::detail {
 
 [[nodiscard]] bool SupportsLinuxGlVersion(GdkGLAPI api, int major, int minor) noexcept;
 
+// Borrowed immutable snapshot metadata; the enclosing GDK texture owns the GL resources and context.
+struct LinuxGlSnapshot {
+  ::GdkGLContext* context = nullptr;
+  std::uint32_t texture = 0;
+  bool premultiplied = false;
+};
+
 class LinuxGdkTextureFrame final {
 public:
   explicit LinuxGdkTextureFrame(
-      ::GdkTexture* texture, linux::GlTexture::Origin origin = linux::GlTexture::Origin::TopLeft
+      ::GdkTexture* texture, linux::GlTexture::Origin origin = linux::GlTexture::Origin::TopLeft,
+      LinuxGlSnapshot snapshot = {}
   )
-      : texture_(GDK_TEXTURE(g_object_ref(texture))), origin_(origin) {}
+      : texture_(GDK_TEXTURE(g_object_ref(texture))), origin_(origin), snapshot_(snapshot) {}
 
   ~LinuxGdkTextureFrame() {
     g_object_unref(texture_);
@@ -35,9 +44,12 @@ public:
     return origin_;
   }
 
+  [[nodiscard]] const LinuxGlSnapshot& GlSnapshot() const noexcept { return snapshot_; }
+
 private:
   ::GdkTexture* texture_ = nullptr;
   linux::GlTexture::Origin origin_ = linux::GlTexture::Origin::TopLeft;
+  LinuxGlSnapshot snapshot_;
 };
 
 class LinuxPixelFrame final {

@@ -174,6 +174,8 @@ struct ViewProperties {
   std::optional<PointerCursorKind> pointer_cursor;
   Frame frame;
   std::optional<VisualFill> background;
+  std::optional<BackdropEffect> backdrop_effect;
+  bool backdrop_override = false;
   std::optional<VisualFill> disabled_background;
   std::optional<Border> border;
   std::optional<Border> disabled_border;
@@ -208,6 +210,7 @@ struct ViewProperties {
 
   [[nodiscard]] bool ContentPaintEquals(const ViewProperties& other) const {
     return padding == other.padding && safe_area_padding == other.safe_area_padding && background == other.background &&
+           backdrop_effect == other.backdrop_effect && backdrop_override == other.backdrop_override &&
            disabled_background == other.disabled_background && border == other.border &&
            disabled_border == other.disabled_border && shadow == other.shadow && text_style == other.text_style &&
            text_layout_options == other.text_layout_options &&

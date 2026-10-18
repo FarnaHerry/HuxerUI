@@ -22,6 +22,7 @@
 
 #include "huxerui_builtin_resources.h"
 #include "indication_internal.h"
+#include "graphics/effects_internal.h"
 #include "runtime/mounted_node_internal.h"
 #include "resources/resource_internal.h"
 #include "runtime/semantics_internal.h"
@@ -105,6 +106,9 @@ void ValidateComboBoxStyle(const ComboBoxStyle& style) {
     throw std::invalid_argument(
         "HuxerUI ComboBox geometry and shadow must be finite with positive popup height and non-negative extents"
     );
+  }
+  if (style.popup_backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.popup_backdrop_effect);
   }
 }
 
@@ -471,7 +475,7 @@ View ComboBoxPopupContent(detail::ComboBoxSuggestionSource source, ComboBoxStyle
   Semantics semantics;
   semantics.role = SemanticRole::List;
   semantics.collection = SemanticCollection{.item_count = source.size};
-  return ScrollView(std::move(content))
+  View result = ScrollView(std::move(content))
       .ScrollAxis(Axis::Vertical)
       .Controller(scroll_controller)
       .With(
@@ -485,6 +489,10 @@ View ComboBoxPopupContent(detail::ComboBoxSuggestionSource source, ComboBoxStyle
           detail::BuiltInSemantics{std::move(semantics)},
           ComboBoxPopupBehavior{.state = state, .scroll_controller = scroll_controller}
       );
+  if (style.popup_backdrop_effect) {
+    result = std::move(result).With(BackdropFilter{*style.popup_backdrop_effect});
+  }
+  return result;
 }
 
 PopupFactory ComboBoxPopupContentFactory(const std::shared_ptr<ComboBoxSession>& session) {

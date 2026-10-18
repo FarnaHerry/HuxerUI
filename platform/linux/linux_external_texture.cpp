@@ -333,10 +333,12 @@ CopyGlFrame(const linux::GlTexture::Frame& frame, std::shared_ptr<LinuxGlRelease
   if (texture == nullptr) {
     throw std::runtime_error("HuxerUI could not build the Linux GL texture snapshot");
   }
+  const LinuxGlSnapshot snapshot{release_context->context, objects.texture,
+                                 frame.alpha != linux::GlTexture::Alpha::Straight};
   static_cast<void>(resources.release());
   objects.texture = 0;
   objects.sync = nullptr;
-  auto result = std::make_shared<const LinuxGdkTextureFrame>(texture, frame.origin);
+  auto result = std::make_shared<const LinuxGdkTextureFrame>(texture, frame.origin, snapshot);
   g_object_unref(texture);
   return result;
 }

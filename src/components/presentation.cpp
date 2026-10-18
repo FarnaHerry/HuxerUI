@@ -15,6 +15,7 @@
 
 #include "huxerui_builtin_resources.h"
 #include "internal_access.h"
+#include "graphics/effects_internal.h"
 #include "runtime/ui_window_internal.h"
 #include "resources/resource_internal.h"
 #include "tooltip_internal.h"
@@ -800,6 +801,9 @@ void ValidateDialogStyle(const DialogStyle& style) {
         "extents"
     );
   }
+  if (style.backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.backdrop_effect);
+  }
 }
 
 std::shared_ptr<detail::LayerTransitionState> BottomSheetTransition(const BottomSheetStyle& style) {
@@ -1217,6 +1221,9 @@ void ValidateMenuStyle(const MenuStyle& style) {
       !ValidInsets(style.content_padding) || !ValidInsets(style.item_padding) || !ValidShadow(style.shadow) ||
       (style.motion.has_value() && !ValidMotion(*style.motion))) {
     throw std::invalid_argument("HuxerUI menu geometry, shadow, and motion must be finite and non-negative");
+  }
+  if (style.backdrop_effect) {
+    detail::ValidateBackdropEffect(*style.backdrop_effect);
   }
 }
 
@@ -2075,6 +2082,9 @@ View MenuService::Surface(
       style.shadow,
       detail::BuiltInSemantics{MenuContainerSemantics(item_count)}
   );
+  if (style.backdrop_effect) {
+    result = std::move(result).With(BackdropFilter{*style.backdrop_effect});
+  }
   if (request_dismiss) {
     result = std::move(result).With(DismissAction{std::move(request_dismiss)});
   }
@@ -2183,7 +2193,7 @@ View DialogService::StandardContent(
   Frame surface_frame;
   surface_frame.min_width = style.minimum_width;
   surface_frame.max_width = style.maximum_width;
-  return Column {
+  View result = Column {
     std::move(body),
     std::move(actions),
   }.With(
@@ -2195,6 +2205,10 @@ View DialogService::StandardContent(
       CornerRadius{style.corner_radii},
       style.shadow
   );
+  if (style.backdrop_effect) {
+    result = std::move(result).With(BackdropFilter{*style.backdrop_effect});
+  }
+  return result;
 }
 
 class LayerAnchorExtension final : public NodeExtension {

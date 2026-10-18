@@ -6,6 +6,7 @@ set(HUXERUI_PLATFORM_SOURCE_FILES
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_file.cpp"
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_file_picker.cpp"
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_gpu_texture.cpp"
+        "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_gl_effects.cpp"
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_http.cpp"
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_jni.cpp"
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_platform_view.cpp"
@@ -13,4 +14,4 @@ set(HUXERUI_PLATFORM_SOURCE_FILES
         "${HUXERUI_PROJECT_DIR}/platform/android/huxerui/src/main/cpp/android_text_layout.cpp"
 )
 
-set(HUXERUI_PLATFORM_LINK_LIBRARIES android EGL GLESv2 log)
+set(HUXERUI_PLATFORM_LINK_LIBRARIES android EGL GLESv3 jnigraphics dl log)

@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "graphics/effects_internal.h"
 #include "graphics/geometry_internal.h"
 #include "internal_access.h"
 #include "runtime/mounted_node_internal.h"
@@ -186,6 +187,7 @@ void VisitNode(const RenderNode& node, const TraversalState& parent, Composition
 } // namespace
 
 RenderComposition BuildRenderComposition(const RenderScene& scene) {
+  ValidateBackdropScene(scene);
   CompositionState state;
   if (scene.root != nullptr) {
     VisitNode(*scene.root, TraversalState{}, state);

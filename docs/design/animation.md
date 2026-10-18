@@ -160,6 +160,10 @@ Whole-scene transitions are one-shot. Their public descriptions expose an option
 
 `RenderDamageSnapshot` remains lightweight metadata for comparing committed render revisions and is not a visual snapshot.
 
+FrozenScene rejects live backdrop effects with a HuxerUI logic error, because copying their commands would read a different prefix when replayed.
+Fragment sources reject the same command; shared subtree capture conservatively skips affected pairs.
+Ordinary retained View motion remains available without immutable scene capture; see [Backdrop Effects and Glass](backdrop-effects.md).
+
 ### Scene composition
 
 SceneTransitionService owns the active snapshot, motion controller, and synthetic render wrappers as one optional active transition, without a separate implementation-state allocation. It reads the committed render frame and window through the shared UiWindow::State context. UiWindow advances the service at the scene-composition boundary and combines its scheduling result with the rest of the frame. Disconnecting the service clears its context pointer, releases active transition data, and rejects subsequent requests from retained handles.
@@ -536,7 +540,7 @@ Navigation page content remains non-interactive during its operation; a local sc
 | Condition | Behavior |
 | --- | --- |
 | Missing counterpart, empty or unavailable paint, unrealized virtual item | Skip that pair and retain ordinary drawing |
-| PlatformView, ExternalTexture, or nested fragment rendering inside the marked subtree | Skip that pair; a resource reference does not freeze native content or producer pixels |
+| PlatformView, ExternalTexture, backdrop effects, or nested fragment rendering inside the marked subtree | Skip that pair; a resource reference or live background command is not an immutable capture |
 | Rotation, skew, mirrored mapping, or partial ancestor clipping | Conservatively skip that pair; rectangular ancestor clips must contain the complete region |
 | Rounded ancestor clip | Use a conservative inner rectangle; path ancestor clips make descendants ineligible |
 | Own node clip | Retain it with the captured content |
