@@ -64,6 +64,14 @@ bool IsInteractive(NSWindow* window) {
   return window != nil && !window.ignoresMouseEvents && window.canBecomeKeyWindow && window.canBecomeMainWindow;
 }
 
+NSUInteger CountTestWindows() {
+  NSUInteger count = 0;
+  for (NSWindow* window in NSApplication.sharedApplication.windows) {
+    if ([window.title hasPrefix:@"HuxerUI native"]) ++count;
+  }
+  return count;
+}
+
 struct NativeScenario {
   std::map<std::uint32_t, WindowRecord> records;
   std::optional<ApplicationHandle> application;
@@ -269,17 +277,17 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
       extra.handle->Close();
       scenario.Check(primary.unmounts == 0, "Closing an extra window retired the primary");
       {
-        const NSUInteger baseline = NSApplication.sharedApplication.windows.count;
+        const NSUInteger baseline = CountTestWindows();
         bool rejected = false;
         @autoreleasepool {
           try {
-            static_cast<void>(scenario.application->OpenWindow({.title = "Invalid", .title_bar_height = -1.0F}));
+            static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native invalid", .title_bar_height = -1.0F}));
           } catch (const std::invalid_argument&) {
             rejected = true;
           }
         }
         scenario.Check(rejected, "Invalid window options were accepted");
-        scenario.Check(NSApplication.sharedApplication.windows.count == baseline,
+        scenario.Check(CountTestWindows() == baseline,
                        "Failed window creation retained an AppKit window");
         // Failed creation consumes an ordinal; successful windows must not depend on contiguous identities.
         ++cycle_ordinal;
