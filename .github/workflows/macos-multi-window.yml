@@ -57,7 +57,7 @@ jobs:
       - name: Diagnose native failure
         if: failure()
         run: |
-          lldb --batch -o run -o 'thread backtrace all' -- \
+          lldb --batch -o run -k 'thread backtrace all' -k 'register read' -- \
             build/bin/huxerui_macos_native_tests.app/Contents/MacOS/huxerui_macos_native_tests \
             'MacNativeWindowCloseWaitsForKeyDispatchToReturn'
       - name: Build framework, suites, examples, and standalone headers
@@ -80,4 +80,6 @@ jobs:
           name: macos-multi-window-${{ matrix.runner }}-${{ matrix.linkage }}
           path: |
             build/Testing/Temporary/
+            build/bin/huxerui_macos_native_tests.app/
+            build/bin/huxerui_macos_native_tests.app.dSYM/
             ~/Library/Logs/DiagnosticReports/huxerui_macos_native_tests*
