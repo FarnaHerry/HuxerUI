@@ -2,8 +2,10 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include <huxerui/geometry.h>
 #include <huxerui/render_scene.h>
@@ -46,6 +48,8 @@ public:
   [[nodiscard]] Win32RenderResult Render(HWND window, float dpi, const RenderFrame& frame, const RECT& paint_rect);
 
 private:
+  friend struct Win32RendererTestAccess;
+  [[nodiscard]] std::vector<std::uint32_t> ReadPixels();
   struct State;
   std::unique_ptr<State> state_;
 };
