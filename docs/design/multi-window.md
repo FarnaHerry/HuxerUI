@@ -16,7 +16,7 @@ It extends the [Application Activation and Lifecycle](application.md) ownership 
 - Multiple UI threads or per-window threads; all attached UIs stay on the one application thread.
 - Window geometry, placement, dragging, or platform handle APIs beyond the existing `WindowHandle` commands.
 - Cross-window layers, shared `NavigationStack` state, or cross-window focus transfer.
-- Window relationships such as owner, transient parent, or modality.
+- Window relationships such as owner, transient parent, or modality are specified separately in [Window Relationship Design](window-relationship.md).
 - Mobile multi-window: Android and iOS windows remain platform-driven attachments, and this document does not add runtime window creation there.
 - Saveable or restorable window layout.
 
@@ -71,13 +71,14 @@ The root factory selects content by reading `UseEnvironment<WindowIdentity>()` d
 ## Platform mapping
 
 - Windows creates one top-level HWND per `WindowsUiWindow` through one shared message loop owned by `WindowsRuntime`; the window procedure routes by per-window instance data. The initial window requests application shutdown when closed, matching historical single-window behavior; windows opened later retire independently.
-- Linux, macOS, Web, Android, and iOS do not override `CreateNativeWindow` in this revision, so `OpenWindow` reports that the host does not support runtime window creation; their platform-driven attachments are unchanged.
-- Desktop follow-up ports move the Linux `GMainContext` iteration and the macOS application-delegate routing to their Runtime owners and override `CreateNativeWindow` there, using the same ownership contract as Windows.
+- The macOS preview creates one NSWindow per `MacUiWindow` through a single `NSApplication` loop owned by `MacRuntime`; window delegate callbacks resolve the originating NSWindow, while application lifecycle changes fan out to all live attachments. Closing the initial window requests application shutdown; later windows retire independently.
+- Linux, Web, Android, and iOS do not override `CreateNativeWindow` in this revision, so `OpenWindow` reports that the host does not support runtime window creation; their platform-driven attachments are unchanged.
+- The Linux follow-up port moves `GMainContext` iteration to its Runtime owner and overrides `CreateNativeWindow` there, using the same ownership contract as Windows.
 - Android and iOS keep platform-driven attachments permanently; their multi-window surface remains scene- and activity-based.
 
 ## Shutdown and failure
 
-Closing the last visible window does not terminate the application; `WindowHandle::Close()` retires one window, and `Runtime::RequestShutdown()` remains the only whole-application stop.
+Closing the initial window requests application shutdown, preserving the historical single-window behavior; closing a later window retires only that window. Retiring every window explicitly does not terminate the application; `Runtime::RequestShutdown()` remains the whole-application stop.
 `WindowHandle::Retire()` requests retirement of one window, bypassing the platform close path and its request handlers; the retirement runs on the application thread after the current callback returns. Owned windows retire first, deepest chain first, and the native attachment is discarded only after shared teardown, so retiring the initial window keeps the application running and close-path shutdown semantics stay unchanged. Hosts that cannot retire a window at runtime report the capability gap, matching `OpenWindow`.
 `Runtime::Retire()` retires every attached window through the existing registry before closing tasks, HTTP operations, and services, so an application that never closes its extra windows still shuts down cleanly.
 A window that fails native creation after registration is retired immediately and its creation throws.

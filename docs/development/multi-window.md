@@ -1,6 +1,6 @@
 # Developing Multi-Window
 
-This guide covers the development state, validation results, and platform porting checklist for the runtime multi-window extension introduced on `feat/multi-window`.
+This guide covers host support, validation, and the platform porting checklist for runtime multi-window creation.
 It complements the ownership contract in [Multi-Window Design](../design/multi-window.md), which remains the normative reference for the API and invariants.
 
 ## Current status
@@ -9,7 +9,7 @@ It complements the ownership contract in [Multi-Window Design](../design/multi-w
 |---|:---:|---|
 | Windows | Supported | Implemented, built, and tested on the development host. |
 | Linux | Throws `std::logic_error` | Port planned; adapter still owns the window and the `GMainContext` loop. |
-| macOS | Throws `std::logic_error` | Port planned; the application delegate still routes through one window pointer. |
+| macOS | Preview | Runtime-owned AppKit loop, per-window callback routing, ownership, modality, and retirement; validated by the macOS CI workflow, with interactive device validation still required. |
 | Web | Throws `std::logic_error` | Sessions remain host-driven; no runtime creation entry exists yet. |
 | Android, iOS | Throws `std::logic_error` | Platform-driven attachments by design; no runtime creation is planned. |
 
@@ -31,6 +31,24 @@ The focused multi-window filter is `"MultiWindow*,RuntimeOpenWindow*,RetiringOne
 A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice and checks that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
 The interactive demo is `example_multi_window`: the primary window opens a secondary one at runtime, both windows share one counter service, and each window keeps its own local state.
 
+## macOS preview validation
+
+The `macOS Multi-Window Preview` workflow builds on GitHub-hosted macOS runners: arm64 with static linkage and Intel with shared linkage, both retaining the macOS 12 deployment target.
+It builds common and codegen suites, AppKit platform suites, standalone headers, `example_multi_window`, and `example_window_relationship`.
+The separate `HuxerUIMacOSNativeTests` bundle creates real NSWindows on the main thread and exercises startup extras, runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
+Weak native references check that retired windows and their content views are released.
+
+Run the same checks on a Mac with a normal CMake configure:
+
+```bash
+cmake --build build --parallel 3 --target huxerui_macos_tests huxerui_macos_native_tests example_multi_window example_window_relationship
+ctest --test-dir build --output-on-failure -R '^HuxerUIMacOS(Tests|NativeTests)$'
+```
+
+CI results establish compilation and automated lifecycle behavior on the runner, not interactive validation on a physical Mac.
+Traffic lights, native embedded controls, IME, accessibility, focus restoration, dragging, fullscreen, minimization, and multiple displays still need an interactive macOS pass before removing the preview qualification.
+The Linux development host cannot build or execute AppKit, and no local macOS result is claimed.
+
 ## Behavioral notes
 
 - Closing the initial window requests whole-application shutdown, preserving historical single-window behavior on every platform. Closing a runtime-opened window retires only that window.
@@ -47,7 +65,7 @@ The interactive demo is `example_multi_window`: the primary window opens a secon
 
 Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateNativeWindow` construct and initialize the platform window, and retire runtime-opened windows independently of the initial one.
 
-1. Hoist the per-window main loop to the Runtime owner and iterate while any owned window is running.
+1. Hoist the per-window main loop to the Runtime owner and iterate until application shutdown, including when every window is hidden or explicitly retired.
 2. Implement `CreateNativeWindow(const WindowOptions&, std::uint32_t)` on the platform Runtime subclass: construct the platform `UiWindow`, create the native window, call `InitializeWindow(runtime, options, ordinal, configuration)`, and return it without entering a nested loop.
 3. Open the initial window and `AppOptions::extra_windows` through `Runtime::OpenWindow` in the platform entry so every window shares one path.
 4. Route native callbacks from the handle or object that originated them instead of a single stored window pointer.
@@ -57,7 +75,6 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 Concrete anchors on the unported adapters:
 
 - Linux: `LinuxUiWindow::Run` in `platform/linux/linux_adapter.cpp` still creates its `GtkWindow` and runs `g_main_context_iteration` inline; the loop condition is the single window's `running_` flag. Ownership and modality virtuals are implemented through `gtk_window_set_transient_for` and `gtk_window_set_modal`, but the close path still shuts the application down until runtime window creation lands.
-- macOS: `MacUiWindow::Run` in `platform/macos/appkit_adapter.mm` stores itself on the application delegate's single `huxeruiWindow` pointer, and delegate callbacks such as `windowShouldClose:` assume one window. Ownership uses `addChildWindow:ordered:`, and blocked windows refuse key status through the `canBecomeKeyWindow` override on `HuxerUIWindow`; both are unverified on a macOS host.
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest

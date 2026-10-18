@@ -36,7 +36,7 @@ An owned window that is not modal is a transient helper such as an inspector or 
 A modal window blocks user input to its owner's whole owned subtree except windows the modal itself owns; with no owner, it blocks every other window of the application.
 An owned modal window, such as a settings dialog, combines both.
 
-`Runtime::OpenWindow` accepts an optional relationship, and `WindowHandle::SetRelationship` changes it later.
+`Runtime::OpenWindow` accepts an optional relationship, and `SetWindowRelationship(window, relationship)` changes it later.
 Validation runs before any native change: a window cannot own itself, no owner chain may contain the target, and an owner that has already retired is rejected.
 `std::invalid_argument` reports caller input; a retired owner reports through the owning service contract.
 
@@ -62,7 +62,7 @@ Nested modality follows the edge set: closing an inner modal restores its own sc
 
 - Windows marks the initial window with the ownership property, stores the owner through `GWLP_HWNDPARENT`, and applies modality by enabling or disabling the affected HWNDs; disabling the owner also disables its owned chain, matching the blocked-subtree rule. Focus returns to the owner on modal retirement.
 - Linux sets `GtkWindow` transient-for ownership and uses GTK modal grabbing, which already blocks the transient subtree without a nested main loop.
-- macOS orders owned windows as child windows; modality is applied by refusing key and main status outside the modal chain until the modal retires, keeping the single run-loop model.
+- The macOS preview orders owned windows through `addChildWindow:ordered:` and removes the old parent when reparenting. Runtime computes the exact blocked set, including sibling and application-modal stacks; blocked NSWindows reject event delivery, mouse events, key status, and main status, covering embedded native views as well as shared controls. Pending pointer cancellation waits until in-flight pointer dispatch returns, and text input pauses while blocked. Native close queues retirement after the AppKit callback returns; owner cascade releases owned native windows first without a nested run loop.
 - Web, Android, and iOS do not support runtime window creation, so relationships stay unused there; their platform-driven presentations keep their native controller semantics.
 
 ## Interaction with the rest of the framework
