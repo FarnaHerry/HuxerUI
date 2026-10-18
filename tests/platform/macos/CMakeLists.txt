@@ -1,6 +1,8 @@
 huxerui_add_test_suite(huxerui_macos_tests HuxerUIMacOSTests
         LABELS platform macos native
-        LIBRARIES ${HUXERUI_TEST_LIBRARY} ${HUXERUI_PLATFORM_LINK_LIBRARIES}
+        LIBRARIES ${HUXERUI_TEST_LIBRARY}
+                  "-framework AppKit" "-framework Foundation" "-framework CoreGraphics"
+                  "-framework CoreVideo" "-framework Metal" "-framework UserNotifications"
         SOURCES "${HUXERUI_TEST_DIR}/support/builtin_resources.cpp"
 )
 target_sources(huxerui_macos_tests PRIVATE
