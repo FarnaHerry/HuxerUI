@@ -457,6 +457,16 @@ void Runtime::RetireOwned(UiWindow& owner) {
     }
   };
   collect(&owner);
+  // Reject unsupported hosts before RetireWindow's shared teardown or this cascade dismantles
+  // anything: the capability error keeps every window in the chain fully intact.
+  if (!owner.CanDiscardHost()) {
+    throw std::logic_error("HuxerUI host does not support explicit window retirement");
+  }
+  for (UiWindow* window : retiring) {
+    if (window == nullptr || !window->CanDiscardHost()) {
+      throw std::logic_error("HuxerUI host does not support explicit window retirement");
+    }
+  }
   std::vector<UiWindow*> reactivate;
   for (UiWindow* window : retiring) {
     if (UiWindow* activation = RemoveWindowRelations(*window); activation != nullptr) {

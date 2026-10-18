@@ -919,6 +919,10 @@ public:
     applied_modal_states.emplace_back(modal, blocked);
   }
 
+  bool CanDiscardHost() const override {
+    return discard_host_supported;
+  }
+
   void DiscardHost() override {
     host_discarded = true;
   }
@@ -952,6 +956,8 @@ public:
   std::vector<std::pair<bool, bool>> applied_modal_states;
   int application_quit_requests = 0;
   bool host_discarded = false;
+  /// Drives CanDiscardHost so tests can model hosts that do not support explicit native retirement.
+  bool discard_host_supported = true;
   /// Windows produced by CreateNativeWindow for multi-window tests, valid until the Runtime retires them.
   std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;

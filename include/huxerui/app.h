@@ -1027,6 +1027,10 @@ protected:
   /// hosts that support explicit window retirement; the default reports the capability gap.
   /// @throws std::logic_error By default, when the host does not support explicit window retirement.
   virtual void DiscardHost();
+  /// Reports whether DiscardHost() can discard this attachment's native window on the current host.
+  /// The default matches the throwing DiscardHost; adapters that override DiscardHost override this to true,
+  /// so Runtime::RetireWindow can reject unsupported hosts before any shared teardown runs.
+  [[nodiscard]] virtual bool CanDiscardHost() const;
   /// Creates the file-picker transport anchored to this native attachment during window installation.
   /// @return A transport retaining its native operations safely, or null when this host does not support picking.
   virtual std::shared_ptr<detail::FilePickerTransport> CreateFilePickerTransport();

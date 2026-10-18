@@ -891,6 +891,10 @@ public:
     input_blocked_ = false;
   }
 
+  bool CanDiscardHost() const override {
+    return true;
+  }
+
   void DiscardHost() override {
     if (window_ != nullptr) {
       static_cast<void>(DestroyWindow(window_));

@@ -218,4 +218,40 @@ TEST_CASE("PlainOpenWindowJoinsExistingModalBlocking") {
   REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{false, true});
 }
 
+TEST_CASE("WindowHandleRetireRejectsUnsupportedHostBeforeTeardown") {
+  TestPlatform owner;
+  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  const WindowHandle primary = owner.OpenWindow(application.options.window);
+  static_cast<void>(primary);
+  owner.created_windows[0]->discard_host_supported = false;
+
+  primary.Retire();
+  REQUIRE_THROWS_AS(owner.RunPlatformModuleTasks(), std::logic_error);
+  // Rejection keeps the unsupported window fully intact instead of half dismantled.
+  REQUIRE(owner.created_windows[0]->Initialized());
+  REQUIRE(!owner.created_windows[0]->host_discarded);
+  REQUIRE(owner.application_quit_requests == 0);
+}
+
+TEST_CASE("WindowHandleRetireRejectsUnsupportedOwnedChainBeforeTeardown") {
+  TestPlatform owner;
+  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  const WindowHandle primary = owner.OpenWindow(application.options.window);
+  const WindowHandle child = owner.OpenWindow({.title = "child"}, {.owner = primary, .modal = false});
+  const WindowHandle grandchild = owner.OpenWindow({.title = "grandchild"}, {.owner = child, .modal = false});
+  static_cast<void>(child);
+  static_cast<void>(grandchild);
+  owner.created_windows[2]->discard_host_supported = false;
+
+  primary.Retire();
+  REQUIRE_THROWS_AS(owner.RunPlatformModuleTasks(), std::logic_error);
+  // One unsupported descendant rejects the whole retirement; nothing in the chain is torn down.
+  for (const TestPlatform* window : owner.created_windows) {
+    REQUIRE(window->Initialized());
+    REQUIRE(!window->host_discarded);
+  }
+}
+
 } // namespace huxerui::test

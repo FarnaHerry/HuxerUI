@@ -1375,6 +1375,10 @@ void UiWindow::DiscardHost() {
   throw std::logic_error("HuxerUI host does not support explicit window retirement");
 }
 
+bool UiWindow::CanDiscardHost() const {
+  return false;
+}
+
 TextInputApplyResult UiWindow::HandleTextInputCommands(const TextInputCommandBatch& batch) {
   ExecutionGuard execution_guard(state_->execution_);
   return state_->text_->HandleTextInputCommands(batch);
