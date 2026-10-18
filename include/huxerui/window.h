@@ -213,6 +213,10 @@ struct WindowOptions {
   /// The preferred initial logical client size.
   Size initial_size = {520.0F, 360.0F};
 
+  /// The preferred initial top-left position in logical screen coordinates. std::nullopt lets the platform place
+  /// the window. Honored on X11 and Windows; Wayland compositors ignore client-provided positions by protocol.
+  std::optional<Point> initial_position{};
+
   /// The minimum logical client size for framework-owned resizable desktop windows. std::nullopt leaves it
   /// unconstrained by HuxerUI; the platform may still enforce a larger native minimum.
   std::optional<Size> minimum_size{};
@@ -451,6 +455,12 @@ public:
 
   /// Requests the platform's normal close path after consulting the active close handler.
   void Close() const;
+
+  /// Reads the current top-left position of the native window in logical screen coordinates.
+  /// @return The window origin, or std::nullopt when the platform does not expose window positions
+  /// (for example Wayland, where compositors own placement by protocol).
+  /// Call on the application thread; the returned value is a snapshot and changes when the user moves the window.
+  [[nodiscard]] std::optional<Point> Position() const;
 
   /// Requests retirement of this window, bypassing the platform close path and its request handlers. The retirement
   /// runs on the application thread after the current callback returns; owned windows retire first, deepest chain

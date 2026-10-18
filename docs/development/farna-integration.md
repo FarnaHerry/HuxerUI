@@ -110,7 +110,7 @@ with a platform `CreateNativeWindow` virtual, per-window `WindowOptions` through
 a seeded `WindowIdentity` Environment value for content selection, and `AppOptions::extra_windows` for the initial set.
 Android and iOS remain platform-driven attachments and do not support runtime window creation.
 The branch keeps single-window behavior unchanged; the initial window uses the same creation path as runtime windows.
-Windows implements `CreateNativeWindow`, and the macOS preview adds an AppKit implementation validated through dedicated CI. Linux and Web retain the unsupported default in this branch.
+Windows and Linux implement `CreateNativeWindow`, and the macOS preview adds an AppKit implementation validated through dedicated CI. Web retains the unsupported default.
 [Developing Multi-Window](multi-window.md) records the validation results, behavioral notes, and the per-platform
 porting checklist for that follow-up work.
 The window-relationship extension is developed on the `feat/window-relationship` branch from multi-window.

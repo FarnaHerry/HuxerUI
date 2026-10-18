@@ -866,6 +866,12 @@ public:
   /// window;
   /// native minimize/close callbacks still pass through HandleWindowRequest before applying their default operation.
   virtual void RequestWindowCommand(WindowCommand) {}
+  /// Reads the current top-left position of the native window in logical screen coordinates.
+  /// @return The window origin, or std::nullopt when the platform does not expose window positions.
+  /// Called on the application thread; adapters with compositor-owned placement (Wayland) report std::nullopt.
+  virtual std::optional<Point> WindowScreenOrigin() const {
+    return std::nullopt;
+  }
   /// Applies this window's native ownership. The Runtime resolves blocked input state from the relationship
   /// registry and pushes it through SetWindowModalState; ownership here covers ordering, minimization follow, and
   /// native cascade only.

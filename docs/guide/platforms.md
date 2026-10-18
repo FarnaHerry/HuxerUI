@@ -122,6 +122,7 @@ If the producer device is removed, publish a replacement texture from a valid de
 The macOS backend requires macOS 12 or later.
 The macOS backend uses AppKit, Core Graphics, Core Text, and `NSTextInputClient`.
 Runtime-created windows, startup `extra_windows`, ownership, modality, and explicit retirement are available as a preview; see [Developing Multi-Window](../development/multi-window.md#macos-preview-validation) for CI coverage and the remaining interactive validation.
+The macOS preview uses AppKit placement and returns `std::nullopt` from `WindowHandle::Position()`; `WindowOptions::initial_position` is not applied.
 Build with Xcode 26 or later and the macOS SDK; release CI uses Xcode 26.2. This toolchain requirement does not raise the macOS 12 deployment target.
 
 Custom chrome extends application content into the title bar while preserving AppKit traffic lights and window behavior.

@@ -901,6 +901,21 @@ public:
     }
   }
 
+  /// Reports the client-area origin in logical screen coordinates, matching the coordinate base of
+  /// window-local pointer events so callers can translate them into screen space.
+  std::optional<Point> WindowScreenOrigin() const override {
+    if (window_ == nullptr) {
+      return std::nullopt;
+    }
+    POINT origin{0, 0};
+    if (!ClientToScreen(window_, &origin)) {
+      return std::nullopt;
+    }
+    const float scale =
+        static_cast<float>(window_ != nullptr ? win32_api_.WindowDpi(window_) : win32_api_.SystemDpi()) / kDipsPerInch;
+    return Point{static_cast<float>(origin.x) / scale, static_cast<float>(origin.y) / scale};
+  }
+
 
 
   ResourceConfiguration Configuration() const {
@@ -947,13 +962,19 @@ private:
     }
 
     const std::wstring title = Utf8ToWide(options.title);
+    const int initial_x = options.initial_position.has_value()
+                              ? static_cast<int>(std::lround(options.initial_position->x * scale))
+                              : CW_USEDEFAULT;
+    const int initial_y = options.initial_position.has_value()
+                              ? static_cast<int>(std::lround(options.initial_position->y * scale))
+                              : CW_USEDEFAULT;
     window_ = CreateWindowExW(
         0,
         window_class_name_.c_str(),
         title.c_str(),
         style,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
+        initial_x,
+        initial_y,
         frame.right - frame.left,
         frame.bottom - frame.top,
         nullptr,

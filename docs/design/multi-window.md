@@ -14,7 +14,7 @@ It extends the [Application Activation and Lifecycle](application.md) ownership 
 ## Non-goals
 
 - Multiple UI threads or per-window threads; all attached UIs stay on the one application thread.
-- Window geometry, placement, dragging, or platform handle APIs beyond the existing `WindowHandle` commands.
+- Window geometry, dragging, or platform handle APIs beyond the existing `WindowHandle` commands, with one deliberate exception: the best-effort placement surface (`WindowOptions::initial_position` and `WindowHandle::Position()`) for tear-off workflows. It is honored on X11 and Windows and reports unavailable on Wayland, where compositors own placement by protocol.
 - Cross-window layers, shared `NavigationStack` state, or cross-window focus transfer.
 - Window relationships such as owner, transient parent, or modality are specified separately in [Window Relationship Design](window-relationship.md).
 - Mobile multi-window: Android and iOS windows remain platform-driven attachments, and this document does not add runtime window creation there.
@@ -71,9 +71,9 @@ The root factory selects content by reading `UseEnvironment<WindowIdentity>()` d
 ## Platform mapping
 
 - Windows creates one top-level HWND per `WindowsUiWindow` through one shared message loop owned by `WindowsRuntime`; the window procedure routes by per-window instance data. The initial window requests application shutdown when closed, matching historical single-window behavior; windows opened later retire independently.
+- Linux shares one `GMainContext` iteration loop owned by `LinuxRuntime`; `LinuxRuntime::CreateNativeWindow` attaches one `GtkWindow` per `LinuxUiWindow`, and GTK signal handlers route by per-instance user data. Runtime-opened windows run their shared teardown synchronously on the close path because GTK defers the native dispose of `gtk_window_destroy`. Window placement and screen-origin queries exist on X11 and degrade to platform placement on Wayland, where compositors own positions by protocol.
 - The macOS preview creates one NSWindow per `MacUiWindow` through a single `NSApplication` loop owned by `MacRuntime`; window delegate callbacks resolve the originating NSWindow, while application lifecycle changes fan out to all live attachments. Native input scopes defer Runtime task delivery across reentrant AppKit main-queue servicing so close, retirement, and shutdown cannot dismantle an in-flight shared input dispatch. Closing the initial window requests application shutdown; later windows retire independently.
-- Linux, Web, Android, and iOS do not override `CreateNativeWindow` in this revision, so `OpenWindow` reports that the host does not support runtime window creation; their platform-driven attachments are unchanged.
-- The Linux follow-up port moves `GMainContext` iteration to its Runtime owner and overrides `CreateNativeWindow` there, using the same ownership contract as Windows.
+- Web, Android, and iOS do not override `CreateNativeWindow`, so `OpenWindow` reports that the host does not support runtime window creation; their platform-driven attachments are unchanged.
 - Android and iOS keep platform-driven attachments permanently; their multi-window surface remains scene- and activity-based.
 
 ## Shutdown and failure

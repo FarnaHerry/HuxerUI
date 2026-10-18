@@ -412,6 +412,32 @@ public:
     ObserveWindows();
   }
 
+  /// Creates the initial and extra windows through the shared OpenWindow path, then runs the GTK main loop
+  /// until shutdown. The initial window keeps the historical close behavior of requesting application shutdown;
+  /// windows created later retire independently. Rethrows the first recorded window failure after the loop.
+  int RunApplication(const Application& application) {
+    static_cast<void>(OpenWindow(application.options.window));
+    for (const WindowOptions& extra : application.options.extra_windows) {
+      static_cast<void>(OpenWindow(extra));
+    }
+    while (!Stopped()) {
+      g_main_context_iteration(nullptr, TRUE);
+    }
+    if (failure_) {
+      std::exception_ptr failure = failure_;
+      failure_ = nullptr;
+      std::rethrow_exception(failure);
+    }
+    return 0;
+  }
+
+  /// Records the first window failure so RunApplication can rethrow it after the loop.
+  void RecordWindowFailure(std::exception_ptr failure) noexcept {
+    if (failure && !failure_) {
+      failure_ = std::move(failure);
+    }
+  }
+
   /// Aggregates mapped, non-minimized GTK toplevels into application activity on the main thread.
   /// Native GTK windows participate even when they do not contain a HuxerUI attachment.
   void UpdateLifecycleState() {
@@ -433,6 +459,13 @@ public:
   PlatformClipboard* Clipboard() noexcept override {
     return this;
   }
+
+protected:
+  /// Creates one GTK window attachment for Runtime::OpenWindow; the shared main loop lives on this Runtime.
+  std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options,
+                                               std::uint32_t window_ordinal) override;
+
+public:
 
   PlatformResources* Resources() noexcept override {
     return this;
@@ -641,6 +674,7 @@ private:
   std::shared_ptr<LinuxUiThreadDispatcher> dispatcher_;
   GListModel* windows_ = nullptr;
   std::vector<GObject*> observed_windows_;
+  std::exception_ptr failure_;
   bool stopped_ = false;
   bool clipboard_read_active_ = false;
 };
@@ -658,14 +692,20 @@ public:
     return configuration;
   }
 
-  int Run(Runtime& application, const WindowOptions& options) {
+  /// Creates this window's native attachment and shows it; the shared GTK main loop lives on LinuxRuntime.
+  /// @param runtime Owning Runtime whose dispatcher this window borrows.
+  /// @param options This window's own configuration.
+  /// @param window_ordinal Creation order among the application's windows; zero is the initial window and keeps
+  /// the historical whole-application shutdown behavior on close.
+  void Attach(LinuxRuntime& runtime, const WindowOptions& options, std::uint32_t window_ordinal) {
     try {
+      primary_ = window_ordinal == 0;
       renderer_.Initialize();
       const Size initial_size = ResolveInitialWindowSize(options);
       CreateWindow(options, initial_size);
-      auto configuration = application.Resources()->Configuration();
+      auto configuration = runtime.Resources()->Configuration();
       configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
-      InitializeWindow(application, options, 0, configuration);
+      InitializeWindow(runtime, options, window_ordinal, configuration);
       text_input_.SetUiWindow(this);
       platform_views_ = std::make_unique<LinuxPlatformViews>(drawing_area_, renderer_, PlatformRegistry(), *this);
       platform_views_->SetFocusChangedHandler([this](bool focused) {
@@ -683,15 +723,6 @@ public:
       gtk_window_present(window_);
       gtk_widget_grab_focus(GTK_WIDGET(drawing_area_));
       RequestFrameAt(Now());
-      while (running_ && !static_cast<LinuxRuntime&>(ApplicationRuntime()).Stopped()) {
-        g_main_context_iteration(nullptr, TRUE);
-      }
-      Cleanup();
-
-      if (failure_) {
-        std::rethrow_exception(failure_);
-      }
-      return 0;
     } catch (...) {
       Cleanup();
 
@@ -745,6 +776,52 @@ public:
 
   std::shared_ptr<FilePickerTransport> CreateFilePickerTransport() override {
     return CreateLinuxFilePickerTransport([this] { return X11WindowId(); });
+  }
+
+  bool CanDiscardHost() const override {
+    return window_ != nullptr;
+  }
+
+  /// Destroys the GTK window after shared retirement; the synchronous "destroy" signal runs the remaining
+  /// native cleanup through Destroyed. Wayland surfaces are destroyed the same way, positions just were never set.
+  void DiscardHost() override {
+    if (window_ != nullptr) {
+      gtk_window_destroy(window_);
+    }
+  }
+
+  /// Reports the window origin in logical screen coordinates on X11. Wayland compositors own placement by
+  /// protocol, so positions are reported as unavailable there.
+  std::optional<Point> WindowScreenOrigin() const override {
+#ifdef GDK_WINDOWING_X11
+#ifdef HUXERUI_LINUX_X11
+    if (window_ == nullptr) {
+      return std::nullopt;
+    }
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (surface == nullptr || !GDK_IS_X11_SURFACE(surface)) {
+      return std::nullopt;
+    }
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    Display* const xdisplay = gdk_x11_display_get_xdisplay(gdk_surface_get_display(surface));
+    const Window xid = gdk_x11_surface_get_xid(surface);
+    Window root = 0;
+    Window child = 0;
+    int x = 0;
+    int y = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int border = 0;
+    unsigned int depth = 0;
+    if (XGetGeometry(xdisplay, xid, &root, &x, &y, &width, &height, &border, &depth) == 0 ||
+        XTranslateCoordinates(xdisplay, xid, root, 0, 0, &x, &y, &child) == False) {
+      return std::nullopt;
+    }
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    return Point{static_cast<float>(x), static_cast<float>(y)};
+#endif
+#endif
+    return std::nullopt;
   }
 
   void ApplyWindowOwnership(UiWindow* owner) override {
@@ -818,11 +895,27 @@ public:
     try {
       return IsInitialized() && UiWindow::HandleWindowRequest(command);
     } catch (...) {
-      if (!failure_) {
-        failure_ = std::current_exception();
-      }
-      running_ = false;
+      RecordFailure();
       return true;
+    }
+  }
+
+  /// Stores the first window failure on the window and the Runtime, then stops this window. The application
+  /// loop rethrows the recorded failure after shutdown so a broken window fails the run instead of hanging.
+  void RecordFailure() noexcept {
+    if (!failure_) {
+      failure_ = std::current_exception();
+    }
+    running_ = false;
+    if (IsInitialized()) {
+      static_cast<LinuxRuntime&>(ApplicationRuntime()).RecordWindowFailure(failure_);
+      ApplicationRuntime().RequestShutdown();
+    }
+    if (window_ != nullptr) {
+      GtkWindow* window = window_;
+      window_ = nullptr;
+      drawing_area_ = nullptr;
+      gtk_window_destroy(window);
     }
   }
 
@@ -839,6 +932,9 @@ private:
         std::max(1, static_cast<int>(std::lround(initial_size.height)))
     );
     gtk_window_set_decorated(window_, !custom_chrome_);
+    if (options.initial_position.has_value()) {
+      ApplyInitialPosition(*options.initial_position);
+    }
 
     drawing_area_ = CreateHuxerUICanvas(Snapshot, AllocatePlatformViews, this);
     if (options.minimum_size.has_value()) {
@@ -939,11 +1035,7 @@ private:
         RequestFrameAt(*commit.next_frame_deadline);
       }
     } catch (...) {
-      if (!failure_) {
-        failure_ = std::current_exception();
-      }
-      running_ = false;
-      ApplicationRuntime().RequestShutdown();
+      RecordFailure();
     }
     FlushDeferredFrame();
   }
@@ -966,10 +1058,7 @@ private:
         renderer_.Snapshot(snapshot, *committed_frame_);
       }
     } catch (...) {
-      if (!failure_) {
-        failure_ = std::current_exception();
-      }
-      running_ = false;
+      RecordFailure();
     }
     if (const std::optional<double> deadline = frame_state_.EndPaint(drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*deadline);
@@ -1154,6 +1243,25 @@ private:
 
   void Cleanup() noexcept {
     Retire();
+    // Native facilities must release while the widget tree is still alive: the IM client and platform
+    // views detach through live widgets, so a post-destroy release would touch finalized objects.
+    ReleaseNativeFacilities();
+    if (window_ != nullptr) {
+      GtkWindow* window = window_;
+      window_ = nullptr;
+      drawing_area_ = nullptr;
+      gtk_window_destroy(window);
+    }
+  }
+
+  /// Releases the per-window native subsystems while the widget tree can still serve detach calls.
+  /// Runs at most once; later callers (including the deferred "destroy" emission) are no-ops.
+  void ReleaseNativeFacilities() noexcept {
+    if (native_facilities_released_) {
+      return;
+    }
+    native_facilities_released_ = true;
+    running_ = false;
     if (platform_views_) {
       platform_views_->Shutdown();
       platform_views_.reset();
@@ -1169,11 +1277,6 @@ private:
     key_tracker_.Reset();
     committed_frame_ = nullptr;
     renderer_.Discard();
-    if (window_ != nullptr) {
-      gtk_window_destroy(window_);
-      window_ = nullptr;
-      drawing_area_ = nullptr;
-    }
   }
 
   static gboolean FrameReady(gpointer data) {
@@ -1194,13 +1297,65 @@ private:
     }
   }
 
+  /// Stashes the preferred initial position on X11; GTK4 has no placement API, so the request moves the
+  /// window through XMoveWindow once the surface maps. Wayland ignores client positions by protocol.
+  void ApplyInitialPosition(const Point& position) {
+#ifdef GDK_WINDOWING_X11
+#ifdef HUXERUI_LINUX_X11
+    GdkDisplay* display = gdk_display_get_default();
+    if (display == nullptr || !GDK_IS_X11_DISPLAY(display)) {
+      return;
+    }
+    pending_initial_position_ = position;
+#else
+    static_cast<void>(position);
+#endif
+#else
+    static_cast<void>(position);
+#endif
+  }
+
+  /// Applies a pending initial position request after the native surface exists.
+  void ApplyPendingInitialPosition() {
+#ifdef GDK_WINDOWING_X11
+#ifdef HUXERUI_LINUX_X11
+    if (!pending_initial_position_.has_value() || window_ == nullptr) {
+      return;
+    }
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (surface == nullptr || !GDK_IS_X11_SURFACE(surface)) {
+      return;
+    }
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    Display* const xdisplay = gdk_x11_display_get_xdisplay(gdk_surface_get_display(surface));
+    const Point position = *pending_initial_position_;
+    pending_initial_position_.reset();
+    XMoveWindow(xdisplay, gdk_x11_surface_get_xid(surface),
+                static_cast<int>(std::lround(position.x)), static_cast<int>(std::lround(position.y)));
+    G_GNUC_END_IGNORE_DEPRECATIONS
+#endif
+#endif
+  }
+
   static gboolean CloseRequested(GtkWindow*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     if (!self.performing_close_ && self.DispatchWindowRequest(WindowCommand::Close)) {
       return TRUE;
     }
     self.performing_close_ = false;
-    self.ApplicationRuntime().RequestShutdown();
+    if (self.primary_ && self.IsInitialized()) {
+      self.ApplicationRuntime().RequestShutdown();
+      return TRUE;
+    }
+    // Runtime-opened windows retire independently. GTK4 defers the native dispose of gtk_window_destroy,
+    // so the shared teardown runs here — owned transients first, then this window — and the later
+    // "destroy" emission finds everything already retired and releases only the remaining references.
+    self.ApplicationRuntime().RetireOwned(self);
+    self.Retire();
+    self.ReleaseNativeFacilities();
+    if (self.window_ != nullptr) {
+      gtk_window_destroy(self.window_);
+    }
     return TRUE;
   }
 
@@ -1212,22 +1367,24 @@ private:
     }
   }
 
+  /// Runs when GTK finally disposes the native window. Every shutdown decision already happened in
+  /// CloseRequested or RetireWindow, so this only releases window resources idempotently.
   static void Destroyed(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     self.CancelPointer();
     self.key_tracker_.Reset();
-    if (!static_cast<LinuxRuntime&>(self.ApplicationRuntime()).Stopped()) {
-      self.ApplicationRuntime().RequestShutdown();
-    }
     self.toplevel_ = nullptr;
     self.toplevel_state_handler_ = 0;
     self.window_ = nullptr;
     self.drawing_area_ = nullptr;
+    self.Retire();
+    self.ReleaseNativeFacilities();
   }
 
   static void WindowMapped(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     self.AttachToplevelState();
+    self.ApplyPendingInitialPosition();
     self.UpdateLifecycleState();
   }
 
@@ -1473,7 +1630,10 @@ private:
   const RenderFrame* committed_frame_ = nullptr;
   guint frame_source_ = 0;
   bool running_ = false;
+  bool primary_ = false;
   bool minimized_ = false;
+  bool native_facilities_released_ = false;
+  std::optional<Point> pending_initial_position_;
   bool performing_minimize_ = false;
   bool performing_close_ = false;
   bool custom_chrome_ = false;
@@ -1487,11 +1647,17 @@ private:
   std::exception_ptr failure_;
 };
 
+std::unique_ptr<UiWindow> LinuxRuntime::CreateNativeWindow(const WindowOptions& options,
+                                                           std::uint32_t window_ordinal) {
+  auto window = std::make_unique<LinuxUiWindow>(dispatcher_);
+  window->Attach(*this, options, window_ordinal);
+  return window;
+}
+
 int RunPlatformApplication(const Application& application) {
   LinuxRuntime runtime(InitializeGtk());
   runtime.Start(application);
-  LinuxUiWindow window(runtime.Dispatcher());
-  return window.Run(runtime, application.options.window);
+  return runtime.RunApplication(application);
 }
 
 } // namespace huxerui::detail

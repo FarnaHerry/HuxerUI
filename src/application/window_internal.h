@@ -63,6 +63,9 @@ public:
   /// Reads the current native window state and subscribes active composition.
   /// @return This window's state, independent of application foreground aggregation.
   [[nodiscard]] WindowLifecycleState LifecycleState() const;
+  /// Reads the current native window origin through the attached UiWindow.
+  /// @return The window's logical screen position, or std::nullopt when disconnected or unsupported.
+  [[nodiscard]] std::optional<Point> Position() const;
   /// Updates this window and queues distinct transitions through the original application dispatcher.
   /// @param state Native window/scene state on the application thread; equal values produce no event.
   /// Recipient identities are captured at submission so later observers do not receive earlier transitions.
