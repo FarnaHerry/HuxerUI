@@ -61,6 +61,16 @@ struct WindowIdentity {
 The root factory selects content by reading `UseEnvironment<WindowIdentity>()` during composition, the same inherited-value mechanism used for themes.
 `UseWindow()` keeps resolving the handle of the window whose composition is running, so existing window commands and observers bind to the correct window without a new lookup API.
 
+## Window placement
+
+`WindowOptions::initial_position` and `WindowHandle::Position()` use the same client-area origin in logical screen coordinates, with X increasing right and Y downwards.
+Native decorations are excluded; negative positions are valid for displays above or left of the primary display.
+Shared option validation rejects nonfinite positions before native creation; Windows additionally validates its integer coordinate range after applying display scale and decoration offsets.
+The existing Linux/X11 placement and origin implementation requires separate coordinate, scaling, and input-lifecycle validation by Linux maintainers.
+Hosts that do not support placement ignore finite preferences and return `std::nullopt` from the query.
+`Position()` is an application-thread snapshot without composition subscriptions or movement notifications; it returns `std::nullopt` after retirement.
+The application-facing contract and platform availability are documented in [Native window placement](../guide/platforms.md#native-window-placement).
+
 ## State and service rules
 
 - State created by `UseState` inside one window's content belongs to that window's recomposition scopes and is destroyed with the window.

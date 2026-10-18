@@ -8,7 +8,7 @@ It complements the ownership contract in [Multi-Window Design](../design/multi-w
 | Platform | Runtime `OpenWindow` | Status |
 |---|:---:|---|
 | Windows | Supported | Implemented, built, and tested on the development host. |
-| Linux | Supported | Implemented, built, and tested on the development host; see the porting history below. |
+| Linux | Implemented | Native coordinate and lifecycle validation belongs to Linux maintainers on supported Linux hosts. |
 | macOS | Preview | Runtime-owned AppKit loop, per-window callback routing, ownership, modality, and retirement; validated by the macOS CI workflow, with interactive device validation still required. |
 | Web | Throws `std::logic_error` | Sessions remain host-driven; no runtime creation entry exists yet. |
 | Android, iOS | Throws `std::logic_error` | Platform-driven attachments by design; no runtime creation is planned. |
@@ -28,21 +28,15 @@ MSVC Release, full build with examples and tests enabled.
 | Codegen suites and header checks | Built clean |
 
 The focused multi-window filter is `"MultiWindow*,RuntimeOpenWindow*,RetiringOneWindow*,ApplicationHandleOpenWindow*"` against `huxerui_runtime_tests`.
-A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice and checks that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
+A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice, checks requested client origins with both system and custom chrome, and verifies that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
 The Linux port has the mirror-image `[linux-native]` test (`LinuxRuntimeWindowsOpenAndCloseIndependently`): it opens and closes a runtime window twice against a real display, asserts the requested `initial_position` on platforms that honor placement, retires the runtime windows through the close path while the initial window stays alive, and finishes by closing the initial window to exercise whole-application shutdown; run it explicitly with `huxerui_linux_tests [linux-native]` because it creates real GTK toplevels.
 The interactive demo is `example_multi_window`: the primary window opens a secondary one at runtime, both windows share one counter service, and each window keeps its own local state.
 
-## Validated on the Linux host
+## Linux validation ownership
 
-GCC 16, Fedora GTK 4.22, shared build with examples and tests enabled.
-
-| Suite | Result |
-|---|---|
-| `huxerui_runtime_tests` (includes the multi-window and relationship cases) | 979 cases, 30729 assertions |
-| `huxerui_unit_tests` | 177 cases, 11083 assertions |
-| `huxerui_ui_tests` | 35 cases, 204 assertions |
-| `huxerui_linux_tests` | 83 cases, 3765 assertions (one pre-existing bidi caret-metrics failure on hosts without the coverage font, unrelated to multi-window) |
-| `huxerui_linux_tests [linux-native]` | 409 assertions, passes with zero GLib criticals |
+Linux maintainers validate the GTK adapter on supported Linux hosts; WSL is not a supported HuxerUI validation host and its results do not establish Linux compatibility.
+The X11 placement origin, DPI conversion, and close-from-input lifecycle need Linux follow-up; the native placement test and its failure cleanup also need review.
+The Linux changes in the macOS preview PR address CMake/mcpp X11 build dependencies, without claiming those native runtime issues are resolved.
 
 ## macOS preview validation
 
@@ -59,6 +53,7 @@ ctest --test-dir build --output-on-failure -R '^HuxerUIMacOS(Tests|Native)'
 ```
 
 CI results establish compilation and automated lifecycle behavior on the runner, not interactive validation on a physical Mac.
+The native macOS workflow also runs on integration pushes to `farna/main`.
 Traffic lights, native embedded controls, IME, accessibility, focus restoration, dragging, fullscreen, minimization, and multiple displays still need an interactive macOS pass before removing the preview qualification.
 The Linux development host cannot build or execute AppKit, and no local macOS result is claimed.
 

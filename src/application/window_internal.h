@@ -18,6 +18,9 @@ namespace detail {
 struct MountedNode;
 struct ApplicationRuntimeState;
 
+void ValidateWindowOptions(const WindowOptions& options);
+int ResolveWindowPositionCoordinate(double coordinate, int minimum, int maximum);
+
 inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
   if (!options.minimum_size.has_value()) {
     return options.initial_size;

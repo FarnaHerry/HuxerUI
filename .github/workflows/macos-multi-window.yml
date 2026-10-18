@@ -2,7 +2,7 @@ name: macOS Multi-Window Preview
 
 on:
   push:
-    branches: ['codex/macos-multi-window-preview']
+    branches: ['farna/main']
   pull_request:
     branches: ['farna/main']
     paths:

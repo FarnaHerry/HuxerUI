@@ -963,10 +963,14 @@ private:
 
     const std::wstring title = Utf8ToWide(options.title);
     const int initial_x = options.initial_position.has_value()
-                              ? static_cast<int>(std::lround(options.initial_position->x * scale))
+                              ? ResolveWindowPositionCoordinate(
+                                    static_cast<double>(options.initial_position->x) * scale + frame.left,
+                                    std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max())
                               : CW_USEDEFAULT;
     const int initial_y = options.initial_position.has_value()
-                              ? static_cast<int>(std::lround(options.initial_position->y * scale))
+                              ? ResolveWindowPositionCoordinate(
+                                    static_cast<double>(options.initial_position->y) * scale + frame.top,
+                                    std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max())
                               : CW_USEDEFAULT;
     window_ = CreateWindowExW(
         0,
@@ -1023,6 +1027,22 @@ private:
       }
     }
     dpi_ = static_cast<float>(win32_api_.WindowDpi(window_));
+    if (options.initial_position) {
+      POINT client{0, 0};
+      RECT bounds{};
+      if (!ClientToScreen(window_, &client) || !GetWindowRect(window_, &bounds)) {
+        throw std::runtime_error("HuxerUI could not read its Windows client origin");
+      }
+      const int x = ResolveWindowPositionCoordinate(
+          static_cast<double>(options.initial_position->x) * DpiScale() + bounds.left - client.x,
+          std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max());
+      const int y = ResolveWindowPositionCoordinate(
+          static_cast<double>(options.initial_position->y) * DpiScale() + bounds.top - client.y,
+          std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max());
+      if (!SetWindowPos(window_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER)) {
+        throw std::runtime_error("HuxerUI could not position its Windows client area");
+      }
+    }
     accessibility_.SetDpiScale(DpiScale());
     file_drop_ = std::make_unique<Win32FileDrop>(window_, *this, [this] { return DpiScale(); });
   }

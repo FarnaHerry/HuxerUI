@@ -4,8 +4,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -148,16 +151,27 @@ TEST_CASE("Win32RuntimeWindowsOpenAndCloseWithoutRetainingHandles", "[.][win32-n
   const DWORD baseline_user = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
 
   for (int cycle = 0; cycle < 2; ++cycle) {
+    const Point preferred_origin{120.0F + static_cast<float>(cycle) * 40.0F, 160.0F};
+    auto placement = std::make_shared<std::promise<std::optional<Point>>>();
+    auto placement_result = placement->get_future();
     {
       std::lock_guard lock(test_state_mutex);
       const ApplicationHandle application = *captured_application;
-      application_dispatch([application, secondary_title_narrow] {
-        static_cast<void>(application.OpenWindow({
+      application_dispatch([application, secondary_title_narrow, preferred_origin, placement, cycle] {
+        const WindowHandle window = application.OpenWindow({
             .title = secondary_title_narrow,
             .initial_size = {320.0F, 220.0F},
-        }));
+            .initial_position = preferred_origin,
+            .chrome_mode = cycle == 0 ? WindowChromeMode::System : WindowChromeMode::Custom,
+        });
+        placement->set_value(window.Position());
       });
     }
+    REQUIRE(placement_result.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    const auto origin = placement_result.get();
+    REQUIRE(origin.has_value());
+    REQUIRE(std::abs(origin->x - preferred_origin.x) <= 2.0F);
+    REQUIRE(std::abs(origin->y - preferred_origin.y) <= 2.0F);
     PumpUntil([&] { return FindWindowByTitle(secondary_title) != nullptr; }, "the secondary window");
     const HWND secondary = FindWindowByTitle(secondary_title);
     REQUIRE(secondary != nullptr);

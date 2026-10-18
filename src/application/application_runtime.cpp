@@ -377,6 +377,7 @@ WindowHandle Runtime::OpenWindow(const WindowOptions& options) {
     throw std::logic_error("HuxerUI cannot create a window while the application is not running");
   }
   const std::uint32_t ordinal = state_->next_window_ordinal++;
+  detail::ValidateWindowOptions(options);
   std::unique_ptr<UiWindow> window = CreateNativeWindow(options, ordinal);
   if (!window || !window->IsInitialized()) {
     throw std::logic_error("HuxerUI host did not return an initialized window");

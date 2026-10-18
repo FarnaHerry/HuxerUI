@@ -866,8 +866,8 @@ public:
   /// window;
   /// native minimize/close callbacks still pass through HandleWindowRequest before applying their default operation.
   virtual void RequestWindowCommand(WindowCommand) {}
-  /// Reads the current top-left position of the native window in logical screen coordinates.
-  /// @return The window origin, or std::nullopt when the platform does not expose window positions.
+  /// Reads the current client-area origin in logical screen coordinates, with X increasing right and Y down.
+  /// @return The client origin, or std::nullopt when the platform does not expose window positions.
   /// Called on the application thread; adapters with compositor-owned placement (Wayland) report std::nullopt.
   virtual std::optional<Point> WindowScreenOrigin() const {
     return std::nullopt;

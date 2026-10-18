@@ -16,6 +16,39 @@ namespace huxerui {
 
 namespace detail {
 
+void ValidateWindowOptions(const WindowOptions& options) {
+  if (!std::isfinite(options.initial_size.width) || options.initial_size.width <= 0.0F ||
+      !std::isfinite(options.initial_size.height) || options.initial_size.height <= 0.0F) {
+    throw std::invalid_argument("HuxerUI initial window size must be finite and positive");
+  }
+  if (options.initial_position &&
+      (!std::isfinite(options.initial_position->x) || !std::isfinite(options.initial_position->y))) {
+    throw std::invalid_argument("HuxerUI initial window position must be finite");
+  }
+  if (options.minimum_size &&
+      (!std::isfinite(options.minimum_size->width) || options.minimum_size->width <= 0.0F ||
+       !std::isfinite(options.minimum_size->height) || options.minimum_size->height <= 0.0F)) {
+    throw std::invalid_argument("HuxerUI minimum window size must be finite and positive");
+  }
+  if (options.content_mode != WindowContentMode::SafeArea && options.content_mode != WindowContentMode::EdgeToEdge) {
+    throw std::invalid_argument("HuxerUI window content mode is invalid");
+  }
+  if (options.chrome_mode != WindowChromeMode::System && options.chrome_mode != WindowChromeMode::Custom) {
+    throw std::invalid_argument("HuxerUI window chrome mode is invalid");
+  }
+  if (!std::isfinite(options.title_bar_height) || options.title_bar_height <= 0.0F) {
+    throw std::invalid_argument("HuxerUI window title-bar height must be finite and positive");
+  }
+}
+
+int ResolveWindowPositionCoordinate(double coordinate, int minimum, int maximum) {
+  const double rounded = std::round(coordinate);
+  if (!std::isfinite(rounded) || rounded < minimum || rounded > maximum) {
+    throw std::invalid_argument("HuxerUI window position exceeds the native coordinate range");
+  }
+  return static_cast<int>(rounded);
+}
+
 class WindowControlsLayout final : public huxerui::Layout<WindowControlsLayout> {
 public:
   using Layout::Layout;

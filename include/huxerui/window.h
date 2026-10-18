@@ -213,8 +213,10 @@ struct WindowOptions {
   /// The preferred initial logical client size.
   Size initial_size = {520.0F, 360.0F};
 
-  /// The preferred initial top-left position in logical screen coordinates. std::nullopt lets the platform place
-  /// the window. Honored on X11 and Windows; Wayland compositors ignore client-provided positions by protocol.
+  /// The preferred initial client-area origin in logical screen coordinates, with X increasing right and Y down.
+  /// Negative coordinates are allowed; nonfinite values are rejected. Windows also rejects unrepresentable native
+  /// coordinates after display-scale and decoration adjustment.
+  /// std::nullopt lets the platform place the window. Honored on X11 and Windows; other hosts may ignore placement.
   std::optional<Point> initial_position{};
 
   /// The minimum logical client size for framework-owned resizable desktop windows. std::nullopt leaves it
@@ -456,10 +458,10 @@ public:
   /// Requests the platform's normal close path after consulting the active close handler.
   void Close() const;
 
-  /// Reads the current top-left position of the native window in logical screen coordinates.
-  /// @return The window origin, or std::nullopt when the platform does not expose window positions
+  /// Reads the current client-area origin in logical screen coordinates, using the same origin as initial_position.
+  /// @return The client origin, or std::nullopt when the window has retired or the host does not expose positions
   /// (for example Wayland, where compositors own placement by protocol).
-  /// Call on the application thread; the returned value is a snapshot and changes when the user moves the window.
+  /// Call on the application thread. This is a synchronous snapshot; it does not subscribe composition to moves.
   [[nodiscard]] std::optional<Point> Position() const;
 
   /// Requests retirement of this window, bypassing the platform close path and its request handlers. The retirement

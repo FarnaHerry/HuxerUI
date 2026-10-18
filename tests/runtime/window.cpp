@@ -294,6 +294,12 @@ TEST_CASE("WindowMetricsRejectInvalidValues") {
   REQUIRE_THROWS_AS(construct_window(), std::invalid_argument);
   invalid_options.window.minimum_size = Size{640.0F, 480.0F};
   REQUIRE_NOTHROW(construct_window());
+  invalid_options.window.initial_position = Point{std::numeric_limits<float>::quiet_NaN(), 0.0F};
+  REQUIRE_THROWS_AS(construct_window(), std::invalid_argument);
+  invalid_options.window.initial_position = Point{0.0F, std::numeric_limits<float>::infinity()};
+  REQUIRE_THROWS_AS(construct_window(), std::invalid_argument);
+  invalid_options.window.initial_position = Point{-320.0F, -200.0F};
+  REQUIRE_NOTHROW(construct_window());
   TestPlatform invalid_appearance_platform;
   UiWindow invalid_appearance{
       +[]() -> View {
@@ -349,6 +355,22 @@ TEST_CASE("WindowInitialSizeRespectsEachConfiguredMinimumDimension") {
 
   options.minimum_size.reset();
   REQUIRE(detail::ResolveInitialWindowSize(options) == options.initial_size);
+}
+
+TEST_CASE("WindowPositionConversionRejectsOverflowAndPreservesNegativeCoordinates") {
+  const int minimum = std::numeric_limits<int>::min();
+  const int maximum = std::numeric_limits<int>::max();
+  REQUIRE(detail::ResolveWindowPositionCoordinate(-320.5, minimum, maximum) == -321);
+  REQUIRE(detail::ResolveWindowPositionCoordinate(minimum, minimum, maximum) == minimum);
+  REQUIRE(detail::ResolveWindowPositionCoordinate(maximum, minimum, maximum) == maximum);
+  REQUIRE_THROWS_AS(detail::ResolveWindowPositionCoordinate(static_cast<double>(maximum) + 1, minimum, maximum),
+                    std::invalid_argument);
+  REQUIRE_THROWS_AS(detail::ResolveWindowPositionCoordinate(static_cast<double>(minimum) - 1, minimum, maximum),
+                    std::invalid_argument);
+  REQUIRE_THROWS_AS(detail::ResolveWindowPositionCoordinate(std::numeric_limits<double>::infinity(), minimum, maximum),
+                    std::invalid_argument);
+  REQUIRE_THROWS_AS(detail::ResolveWindowPositionCoordinate(32768, -32768, 32767), std::invalid_argument);
+  REQUIRE(detail::ResolveWindowPositionCoordinate(-32768, -32768, 32767) == -32768);
 }
 
 TEST_CASE("Window request handlers independently suppress platform and public defaults") {
