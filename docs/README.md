@@ -23,6 +23,7 @@ User guides describe the current public SDK, development guides cover this repos
 
 - [Building HuxerUI](development/building.md): configure, build, test, and run repository examples.
 - [Downstream integration](development/farna-integration.md): the `farna/main` patch inventory, validation, and adoption.
+- [Developing Multi-Window](development/multi-window.md): the multi-window extension status, validation, behavioral notes, and desktop porting checklist.
 - [SDK Packaging](development/sdk-packaging.md): produce and validate release-ready SDK archives.
 
 ## Design reference
@@ -32,6 +33,8 @@ User guides describe the current public SDK, development guides cover this repos
 [External File Drop](design/file-drop.md) defines host file reception, hover lifecycle, and asynchronous reference delivery.
 [Date and Time Pickers](design/date-time-pickers.md) defines localized chrono-based calendar and clock controls.
 [Local Notifications](design/local-notifications.md) defines the shared authorization, scheduling, cancellation, and activation contract plus the Android, iOS, and macOS transports and remaining native boundaries.
+[Multi-Window](design/multi-window.md) defines runtime window creation, per-window content selection through the window environment identity, and shared-Runtime ownership rules.
+[Window Relationship](design/window-relationship.md) defines window ownership, modality, cascade retirement, and platform input blocking.
 Design documents are implementation references, not a public API stability guarantee.
 
 ## Scope

@@ -58,11 +58,17 @@ struct InternalAccess {
   /// Attaches shared window state after native text, rendering, and scheduling facilities are usable.
   /// @param ui_window Native attachment to initialize on the application's thread.
   /// @param runtime Live application owner that outlives this attachment.
+  /// @param window_options This window's own configuration.
+  /// @param window_ordinal Creation order among the application's windows; zero is the initial window.
   /// @param configuration Initial window resources, or nullopt to use the application's configuration.
   /// @param lifecycle Initial visibility/activation state exposed to WindowHooks.
-  static void InitializeWindow(UiWindow& ui_window, Runtime& runtime,
+  static void InitializeWindow(UiWindow& ui_window, Runtime& runtime, const WindowOptions& window_options,
+      std::uint32_t window_ordinal = 0,
       std::optional<ResourceConfiguration> configuration = std::nullopt,
       WindowLifecycleState lifecycle = WindowLifecycleState::Background);
+  /// Borrows one initialized window's service for Runtime::OpenWindow handle creation.
+  /// @return The window service, or null when the window has not completed initialization.
+  static std::shared_ptr<detail::WindowService> WindowServiceOf(UiWindow& ui_window);
   /// Retires shared UI state while native window facilities are still alive.
   /// @param ui_window Original attachment; retirement is idempotent and stays on the application thread.
   static void RetireWindow(UiWindow& ui_window) noexcept;

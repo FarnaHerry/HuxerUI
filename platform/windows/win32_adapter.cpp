@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -429,10 +430,15 @@ private:
 
 /// Owns process services and a hidden facilities HWND independently of visible WindowsUiWindow attachments.
 /// Native facilities are prepared before shared startup and remain alive until Runtime::Retire completes.
+class WindowsUiWindow;
+
 class WindowsRuntime final : public huxerui::Runtime, public PlatformResources, public PlatformClipboard {
 public:
-  WindowsRuntime(Win32UiThreadDispatcher& dispatcher, std::shared_ptr<LocalNotificationTransport> notifications)
-      : Runtime(dispatcher.Bind()), notifications_(std::move(notifications)) {
+  WindowsRuntime(Win32UiThreadDispatcher& dispatcher, std::shared_ptr<LocalNotificationTransport> notifications,
+                 std::wstring application_window_class, Win32WindowReady on_window_ready)
+      : Runtime(dispatcher.Bind()), dispatcher_(dispatcher), notifications_(std::move(notifications)),
+        application_window_class_(std::move(application_window_class)),
+        on_window_ready_(std::move(on_window_ready)) {
     win32_api_.ConfigureProcessDpiAwareness();
     window_class_ = L"HuxerUI.ApplicationFacilities." + std::to_wstring(reinterpret_cast<std::uintptr_t>(this));
     WNDCLASSW window_class{};
@@ -457,6 +463,18 @@ public:
     }
     DestroyWindow(window_);
     UnregisterClassW(window_class_.c_str(), GetModuleHandleW(nullptr));
+    if (application_window_class_atom_ != 0) {
+      UnregisterClassW(application_window_class_.c_str(), GetModuleHandleW(nullptr));
+      application_window_class_atom_ = 0;
+    }
+    if (window_icon_ != nullptr) {
+      DestroyIcon(window_icon_);
+      window_icon_ = nullptr;
+    }
+    if (window_small_icon_ != nullptr) {
+      DestroyIcon(window_small_icon_);
+      window_small_icon_ = nullptr;
+    }
   }
 
   /// Starts shared services after the facilities HWND and dispatcher are available.
@@ -495,6 +513,17 @@ public:
 
   std::optional<AppDirectories> CreateAppDirectories() override {
     return CreateWin32AppDirectories();
+  }
+
+  /// Pushes the registered application icons onto a window, so every window created from the
+  /// shared class still carries the loaded icons.
+  void ApplyWindowIcons(HWND window) const {
+    if (window_icon_ != nullptr) {
+      SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(window_icon_));
+    }
+    if (window_small_icon_ != nullptr) {
+      SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(window_small_icon_));
+    }
   }
 
 
@@ -624,8 +653,46 @@ public:
 
 protected:
   void OnRuntimeStopped() override { PostQuitMessage(0); }
+  std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
+                                                        std::uint32_t window_ordinal) override;
+
+public:
+  /// Creates the initial and extra windows, then runs the shared message loop until shutdown.
+  /// The initial window keeps the historical close behavior of requesting application shutdown; windows created
+  /// later close independently. Returns the posted quit code.
+  int RunWindowsApplication(const Application& application);
+  /// Adds one attached window to the native lookup table used by the shared message loop.
+  void RegisterAttachedWindow(HWND window, WindowsUiWindow* ui_window) {
+    attached_[window] = ui_window;
+  }
+  /// Removes one destroyed native window from the attached-window table.
+  void DetachWindow(HWND window) noexcept {
+    attached_.erase(window);
+  }
+  /// Resolves the attached window owning a native handle, walking up to its top-level window.
+  WindowsUiWindow* WindowFor(HWND window) const noexcept;
+  /// Records the first window failure so RunWindowsApplication can rethrow it after the loop.
+  void RecordWindowFailure(std::exception_ptr failure) noexcept {
+    if (failure && !failure_) {
+      failure_ = std::move(failure);
+    }
+  }
+  /// Invokes the shell readiness callback once, for the initial window only.
+  void NotifyInitialWindowReady(HWND window) {
+    if (on_window_ready_ && !initial_window_ready_notified_) {
+      initial_window_ready_notified_ = true;
+      on_window_ready_(dispatcher_.Bind(), window);
+    }
+  }
+  /// Returns the shared application window class name registered for every window of this Runtime.
+  [[nodiscard]] const std::wstring& ApplicationWindowClass() const noexcept {
+    return application_window_class_;
+  }
 
 private:
+  /// Registers the shared application window class on the first window creation.
+  void RegisterApplicationWindowClass();
+
   static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
     auto* runtime = reinterpret_cast<WindowsRuntime*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -645,6 +712,15 @@ private:
     return DefWindowProcW(window, message, w_param, l_param);
   }
 
+  Win32UiThreadDispatcher& dispatcher_;
+  std::wstring application_window_class_;
+  Win32WindowReady on_window_ready_;
+  bool initial_window_ready_notified_ = false;
+  ATOM application_window_class_atom_ = 0;
+  HICON window_icon_ = nullptr;
+  HICON window_small_icon_ = nullptr;
+  std::exception_ptr failure_;
+  std::unordered_map<HWND, WindowsUiWindow*> attached_;
   HWND window_ = nullptr;
   std::wstring window_class_;
   Win32Api win32_api_;
@@ -655,64 +731,47 @@ private:
 /// Owns one visible Win32 window, its rendering/text facilities, and the shared UiWindow state.
 class WindowsUiWindow final : public huxerui::UiWindow {
 public:
-  WindowsUiWindow(Win32UiThreadDispatcher& ui_dispatcher, std::wstring window_class_name,
-                  Win32WindowReady on_window_ready)
-      : ui_dispatcher_(ui_dispatcher), window_class_name_(std::move(window_class_name)),
-        on_window_ready_(std::move(on_window_ready)) {
+  explicit WindowsUiWindow(Win32UiThreadDispatcher& ui_dispatcher) : ui_dispatcher_(ui_dispatcher) {
     win32_api_.ConfigureProcessDpiAwareness();
   }
 
   ~WindowsUiWindow() override { Retire(); Cleanup(); }
 
-  int Run(Runtime& application, const WindowOptions& options) {
+  /// Creates this window's native attachment and shows it; the shared message loop lives on WindowsRuntime.
+  void Attach(WindowsRuntime& runtime, const WindowOptions& options, std::uint32_t window_ordinal) {
+    runtime_ = &runtime;
+    primary_ = window_ordinal == 0;
+    instance_ = GetModuleHandleW(nullptr);
+    window_class_name_ = runtime.ApplicationWindowClass();
+    renderer_.Initialize();
+    CreateApplicationWindow(runtime, options, window_ordinal);
+    runtime.RegisterAttachedWindow(window_, this);
+    if (primary_) {
+      static_cast<void>(SetPropW(window_, win32_primary_window_property, reinterpret_cast<HANDLE>(this)));
+    }
+    runtime.NotifyInitialWindowReady(window_);
+    UiWindow::UpdateResourceConfiguration(Configuration());
 
-    try {
-      renderer_.Initialize();
-      RegisterWindowClass();
-      CreateApplicationWindow(application, options);
-      if (on_window_ready_) {
-        on_window_ready_(ui_dispatcher_.Bind(), window_);
-      }
-      UiWindow::UpdateResourceConfiguration(Configuration());
+    ShowWindow(window_, SW_SHOW);
+    UpdateApplicationLifecycleState(
+        GetActiveWindow() == window_ ? ApplicationLifecycleState::Active : ApplicationLifecycleState::Inactive
+    );
+    UpdateRuntimeViewport();
+    RequestFrameAt(Now());
+    UpdateWindow(window_);
+  }
 
-      ShowWindow(window_, SW_SHOW);
-      UpdateApplicationLifecycleState(
-          GetActiveWindow() == window_ ? ApplicationLifecycleState::Active : ApplicationLifecycleState::Inactive
-      );
-      UpdateRuntimeViewport();
-      RequestFrameAt(Now());
-      UpdateWindow(window_);
-
-      MSG message{};
-      int message_result = 0;
-      while ((message_result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-        if (platform_views_ && platform_views_->HandleFocusTraversal(message)) {
-          platform_views_->SynchronizeFocus(GetFocus());
-          continue;
-        }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-        if (platform_views_) {
-          platform_views_->SynchronizeFocus(GetFocus());
-        }
-      }
-      if (message_result < 0 && !failure_) {
-        failure_ = std::make_exception_ptr(std::runtime_error("HuxerUI Windows message loop failed"));
-      }
-
-      const int exit_code = static_cast<int>(message.wParam);
-      Cleanup();
-
-      if (failure_) {
-        std::rethrow_exception(failure_);
-      }
-      return exit_code;
-    } catch (...) {
-      Cleanup();
-
-      throw;
+  /// Claims focus-traversal messages before translation when this window hosts platform views.
+  [[nodiscard]] bool HandleFocusTraversal(const MSG& message) const {
+    return platform_views_ != nullptr && platform_views_->HandleFocusTraversal(message);
+  }
+  /// Publishes the current native focus to this window's hosted platform views.
+  void SynchronizePlatformViewsFocus() const {
+    if (platform_views_) {
+      platform_views_->SynchronizeFocus(GetFocus());
     }
   }
+  [[nodiscard]] std::exception_ptr Failure() const noexcept { return failure_; }
 
   void RequestFrameAt(double deadline) override {
     if (const std::optional<double> scheduled = frame_state_.Request(deadline, Now(), window_ != nullptr)) {
@@ -799,6 +858,49 @@ public:
     PostMessageW(window_, kWindowCommandMessage, static_cast<WPARAM>(command), 0);
   }
 
+  void ApplyWindowOwnership(UiWindow* owner) override {
+    if (window_ == nullptr) {
+      return;
+    }
+    HWND owner_window = nullptr;
+    if (owner != nullptr) {
+      owner_window = static_cast<WindowsUiWindow*>(owner)->window_;
+    }
+    static_cast<void>(
+        SetWindowLongPtrW(window_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner_window))
+    );
+  }
+
+  void ApplyWindowModalState(bool modal, bool blocked) override {
+    static_cast<void>(modal);
+    if (window_ == nullptr || blocked == input_blocked_) {
+      return;
+    }
+    if (blocked) {
+      enabled_before_input_block_ = IsWindowEnabled(window_) != FALSE;
+      if (enabled_before_input_block_) {
+        static_cast<void>(EnableWindow(window_, FALSE));
+      }
+      input_blocked_ = true;
+      return;
+    }
+    if (enabled_before_input_block_) {
+      static_cast<void>(EnableWindow(window_, TRUE));
+    }
+    enabled_before_input_block_ = true;
+    input_blocked_ = false;
+  }
+
+  bool CanDiscardHost() const override {
+    return true;
+  }
+
+  void DiscardHost() override {
+    if (window_ != nullptr) {
+      static_cast<void>(DestroyWindow(window_));
+    }
+  }
+
 
 
   ResourceConfiguration Configuration() const {
@@ -807,6 +909,8 @@ public:
     return configuration;
   }
 private:
+  friend class WindowsRuntime;
+
   void UpdateApplicationLifecycleState(ApplicationLifecycleState lifecycle_state) {
     if (IsInitialized()) {
       switch (lifecycle_state) {
@@ -824,51 +928,7 @@ private:
     }
   }
 
-  void RegisterWindowClass() {
-    instance_ = GetModuleHandleW(nullptr);
-    const HICON icon = LoadApplicationIcon(instance_, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
-    const HICON small_icon =
-        LoadApplicationIcon(instance_, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
-#if HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID
-    if (icon == nullptr || small_icon == nullptr) {
-      if (icon != nullptr) {
-        DestroyIcon(icon);
-      }
-      if (small_icon != nullptr) {
-        DestroyIcon(small_icon);
-      }
-      throw std::runtime_error("HuxerUI could not load its Windows application icon resource");
-    }
-#endif
-    WNDCLASSEXW window_class{
-        sizeof(WNDCLASSEXW),
-        CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
-        &WindowsUiWindow::WindowProcedure,
-        0,
-        0,
-        instance_,
-        icon,
-        LoadCursorW(nullptr, IDC_ARROW),
-        nullptr,
-        nullptr,
-        window_class_name_.c_str(),
-        small_icon,
-    };
-    class_atom_ = RegisterClassExW(&window_class);
-    if (class_atom_ == 0) {
-      if (icon != nullptr) {
-        DestroyIcon(icon);
-      }
-      if (small_icon != nullptr) {
-        DestroyIcon(small_icon);
-      }
-      throw std::runtime_error("HuxerUI could not register its Windows window class");
-    }
-    window_icon_ = icon;
-    window_small_icon_ = small_icon;
-  }
-
-  void CreateApplicationWindow(Runtime& application, const WindowOptions& options) {
+  void CreateApplicationWindow(Runtime& application, const WindowOptions& options, std::uint32_t window_ordinal) {
     dpi_ = static_cast<float>(win32_api_.SystemDpi());
     const float scale = DpiScale();
     custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
@@ -915,16 +975,11 @@ private:
       static_cast<void>(DwmSetWindowAttribute(
           window_, kDwmWindowCornerPreference, &preference, sizeof(preference)));
     }
-    if (window_icon_ != nullptr) {
-      SendMessageW(window_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(window_icon_));
-    }
-    if (window_small_icon_ != nullptr) {
-      SendMessageW(window_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(window_small_icon_));
-    }
+    static_cast<WindowsRuntime&>(application).ApplyWindowIcons(window_);
     dpi_ = static_cast<float>(win32_api_.WindowDpi(window_));
     auto configuration = application.Resources()->Configuration();
     configuration.display_scale = DpiScale();
-    InitializeWindow(application, configuration);
+    InitializeWindow(application, options, window_ordinal, configuration);
     accessibility_.SetUiWindow(this);
     text_input_.SetUiWindow(this);
     platform_views_ =
@@ -966,18 +1021,6 @@ private:
       window_ = nullptr;
     }
     renderer_.Discard();
-    if (class_atom_ != 0 && instance_ != nullptr) {
-      UnregisterClassW(window_class_name_.c_str(), instance_);
-      class_atom_ = 0;
-    }
-    if (window_icon_ != nullptr) {
-      DestroyIcon(window_icon_);
-      window_icon_ = nullptr;
-    }
-    if (window_small_icon_ != nullptr) {
-      DestroyIcon(window_small_icon_);
-      window_small_icon_ = nullptr;
-    }
     instance_ = nullptr;
   }
 
@@ -1175,15 +1218,36 @@ private:
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
                    PointerButton pressed_buttons = PointerButton::None) {
     last_pointer_position_ = position;
-    UiWindow::HandlePointerEvent({
-        type,
-        0,
-        position,
-        PointerDeviceKind::Mouse,
-        changed_button,
-        pressed_buttons,
-        CurrentKeyModifiers(),
-    });
+    // Disabling or re-enabling this window (modal blocking), destroying a capturing window, or other capture
+    // changes can synchronously deliver WM_CANCELMODE or WM_CAPTURECHANGED while a pointer event is still being
+    // dispatched. Delivering that nested cancellation immediately would re-enter the shared pointer interaction
+    // and end the active session while the outer dispatch still references it, so defer the cancellation until
+    // the outer dispatch returns.
+    if (type == PointerEventType::Cancel && dispatching_pointer_event_) {
+      pointer_cancel_deferred_ = true;
+      return;
+    }
+    const bool outermost = !dispatching_pointer_event_;
+    dispatching_pointer_event_ = true;
+    try {
+      UiWindow::HandlePointerEvent({
+          type,
+          0,
+          position,
+          PointerDeviceKind::Mouse,
+          changed_button,
+          pressed_buttons,
+          CurrentKeyModifiers(),
+      });
+    } catch (...) {
+      dispatching_pointer_event_ = false;
+      throw;
+    }
+    dispatching_pointer_event_ = false;
+    if (outermost && pointer_cancel_deferred_) {
+      pointer_cancel_deferred_ = false;
+      SendPointer(PointerEventType::Cancel, last_pointer_position_);
+    }
   }
 
   void CancelPointer() {
@@ -1478,22 +1542,33 @@ private:
       text_input_.SetDpiScale(DpiScale());
       return 0;
     case WM_DESTROY:
-      file_drop_.reset();
-      text_input_.SetWindow(nullptr);
-      accessibility_.Reset();
-      if (platform_views_) {
-        platform_views_->Shutdown();
+      if (runtime_ != nullptr) {
+        runtime_->DetachWindow(window);
       }
-      window_ = nullptr;
-      committed_frame_ = nullptr;
-      ApplicationRuntime().RequestShutdown();
+      {
+        const bool shutdown_application = primary_ && IsInitialized();
+        Retire();
+        window_ = nullptr;
+        committed_frame_ = nullptr;
+        Cleanup();
+        if (shutdown_application) {
+          ApplicationRuntime().RequestShutdown();
+        }
+      }
       return 0;
     case WM_CLOSE:
       if (!performing_close_ && IsInitialized() && UiWindow::HandleWindowRequest(WindowCommand::Close)) {
         return 0;
       }
       performing_close_ = false;
-      ApplicationRuntime().RequestShutdown();
+      if (primary_) {
+        ApplicationRuntime().RequestShutdown();
+      } else {
+        if (runtime_ != nullptr) {
+          runtime_->RetireOwned(*this);
+        }
+        static_cast<void>(DestroyWindow(window_));
+      }
       return 0;
     case WM_SYSCOMMAND:
       if ((w_param & 0xFFF0U) == SC_MINIMIZE && IsInitialized() &&
@@ -1719,6 +1794,9 @@ private:
       if (!ui_window->failure_) {
         ui_window->failure_ = std::current_exception();
       }
+      if (ui_window->runtime_ != nullptr) {
+        ui_window->runtime_->RecordWindowFailure(ui_window->failure_);
+      }
       PostQuitMessage(1);
       return 0;
     }
@@ -1729,10 +1807,7 @@ private:
   }
 
   HINSTANCE instance_ = nullptr;
-  ATOM class_atom_ = 0;
   HWND window_ = nullptr;
-  HICON window_icon_ = nullptr;
-  HICON window_small_icon_ = nullptr;
   float dpi_ = kDipsPerInch;
   bool custom_chrome_ = false;
   bool fullscreen_ = false;
@@ -1748,7 +1823,11 @@ private:
   PointerCursorKind pointer_cursor_kind_ = PointerCursorKind::Default;
   HWND mouse_tracking_window_ = nullptr;
   bool pointer_down_ = false;
+  bool dispatching_pointer_event_ = false;
+  bool pointer_cancel_deferred_ = false;
   bool performing_close_ = false;
+  bool input_blocked_ = false;
+  bool enabled_before_input_block_ = true;
   Point last_pointer_position_;
   Win32Accessibility accessibility_;
   Win32TextInput text_input_;
@@ -1757,15 +1836,108 @@ private:
   const RenderFrame* committed_frame_ = nullptr;
   Win32UiThreadDispatcher& ui_dispatcher_;
   std::wstring window_class_name_;
-  Win32WindowReady on_window_ready_;
+  WindowsRuntime* runtime_ = nullptr;
+  bool primary_ = false;
   Win32Api win32_api_;
   Win32Renderer renderer_;
   std::unique_ptr<Win32PlatformViews> platform_views_;
   std::unique_ptr<Win32FileDrop> file_drop_;
 };
 
+void WindowsRuntime::RegisterApplicationWindowClass() {
+  const HINSTANCE instance = GetModuleHandleW(nullptr);
+  const HICON icon = LoadApplicationIcon(instance, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+  const HICON small_icon =
+      LoadApplicationIcon(instance, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+#if HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID
+  if (icon == nullptr || small_icon == nullptr) {
+    if (icon != nullptr) {
+      DestroyIcon(icon);
+    }
+    if (small_icon != nullptr) {
+      DestroyIcon(small_icon);
+    }
+    throw std::runtime_error("HuxerUI could not load its Windows application icon resource");
+  }
+#endif
+  WNDCLASSEXW window_class{
+      sizeof(WNDCLASSEXW),
+      CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
+      &WindowsUiWindow::WindowProcedure,
+      0,
+      0,
+      instance,
+      icon,
+      LoadCursorW(nullptr, IDC_ARROW),
+      nullptr,
+      nullptr,
+      application_window_class_.c_str(),
+      small_icon,
+  };
+  application_window_class_atom_ = RegisterClassExW(&window_class);
+  if (application_window_class_atom_ == 0) {
+    if (icon != nullptr) {
+      DestroyIcon(icon);
+    }
+    if (small_icon != nullptr) {
+      DestroyIcon(small_icon);
+    }
+    throw std::runtime_error("HuxerUI could not register its Windows window class");
+  }
+  window_icon_ = icon;
+  window_small_icon_ = small_icon;
+}
+
+std::unique_ptr<huxerui::UiWindow> WindowsRuntime::CreateNativeWindow(const WindowOptions& options,
+                                                                      std::uint32_t window_ordinal) {
+  if (application_window_class_atom_ == 0) {
+    RegisterApplicationWindowClass();
+  }
+  auto window = std::make_unique<WindowsUiWindow>(dispatcher_);
+  window->Attach(*this, options, window_ordinal);
+  return window;
+}
+
+WindowsUiWindow* WindowsRuntime::WindowFor(HWND window) const noexcept {
+  HWND current = window;
+  while (current != nullptr) {
+    if (const auto found = attached_.find(current); found != attached_.end()) {
+      return found->second;
+    }
+    current = GetAncestor(current, GA_PARENT);
+  }
+  return nullptr;
+}
+
+int WindowsRuntime::RunWindowsApplication(const Application& application) {
+  static_cast<void>(OpenWindow(application.options.window));
+  for (const WindowOptions& extra : application.options.extra_windows) {
+    static_cast<void>(OpenWindow(extra));
+  }
+  MSG message{};
+  int message_result = 0;
+  while ((message_result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+    WindowsUiWindow* target = WindowFor(message.hwnd);
+    if (target != nullptr && target->HandleFocusTraversal(message)) {
+      target->SynchronizePlatformViewsFocus();
+      continue;
+    }
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+    if (target != nullptr) {
+      target->SynchronizePlatformViewsFocus();
+    }
+  }
+  if (message_result < 0 && !failure_) {
+    failure_ = std::make_exception_ptr(std::runtime_error("HuxerUI Windows message loop failed"));
+  }
+  if (failure_) {
+    std::rethrow_exception(failure_);
+  }
+  return static_cast<int>(message.wParam);
+}
+
 int RunWin32PlatformApplication(const Application& application, Win32WindowReady on_window_ready) {
-  WindowOptions options = application.options.window;
   Win32StartupInput startup = CurrentWin32StartupInput();
   const std::wstring window_class_name = Win32ApplicationWindowClassName();
   // Ordinary launches remain independent; only externally supplied URL and file payloads reuse an existing window.
@@ -1791,9 +1963,10 @@ int RunWin32PlatformApplication(const Application& application, Win32WindowReady
     }
     startup.activation = LaunchActivation{};
   }
-  WindowsRuntime application_runtime(ui_dispatcher, notifications.Transport());
+  WindowsRuntime application_runtime(
+      ui_dispatcher, notifications.Transport(), window_class_name, std::move(on_window_ready)
+  );
   application_runtime.Start(application, std::move(startup.activation));
-  WindowsUiWindow window(ui_dispatcher, window_class_name, std::move(on_window_ready));
   notifications.SetActivationHandler(
       [&application_runtime](NotificationActivation activation) { application_runtime.HandleApplicationActivation(std::move(activation)); });
   if (notification) {
@@ -1801,7 +1974,7 @@ int RunWin32PlatformApplication(const Application& application, Win32WindowReady
   }
   try {
     ui_dispatcher.Start();
-    const int result = window.Run(application_runtime, options);
+    const int result = application_runtime.RunWindowsApplication(application);
     notifications.SetActivationHandler({});
     return result;
   } catch (...) {

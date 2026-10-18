@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -21,8 +22,16 @@
 namespace huxerui {
 
 class UiWindow;
+class WindowHandle;
 
 namespace detail {
+class WindowService;
+/// Creates a public window handle for an initialized window's service.
+/// Framework use only; applications obtain handles through UseWindow() or ApplicationHandle::OpenWindow().
+[[nodiscard]] WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service);
+/// Borrows the service behind a public window handle for framework relationship resolution.
+/// Framework use only; applications never need the service object.
+[[nodiscard]] std::shared_ptr<WindowService> WindowServiceFor(const WindowHandle& handle) noexcept;
 /// Rejects a window service key already owned by the application's service table.
 /// @param type Exact C++ key about to be installed by WindowContext::Provide.
 void ValidateRootServiceType(std::type_index type);
@@ -197,6 +206,10 @@ struct WindowOptions {
   /// The top-level window or surface title. Platforms without an application-owned title may ignore it.
   std::string title = "HuxerUI";
 
+  /// Stable application-defined identity of this window's content. Empty selects the default root content;
+  /// distinct keys let one root factory render different content per window through UseEnvironment<WindowIdentity>().
+  std::string key{};
+
   /// The preferred initial logical client size.
   Size initial_size = {520.0F, 360.0F};
 
@@ -218,6 +231,23 @@ struct WindowOptions {
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;
+};
+
+/// Identifies one attached window within its application, seeded into each root composition's Environment.
+/// Read it during composition with UseEnvironment<WindowIdentity>() to select content for the calling window.
+struct WindowIdentity {
+  /// WindowOptions::key of this window; empty unless the application set one.
+  std::string key{};
+
+  /// Creation order among this Runtime's windows; zero is the initial window.
+  std::uint32_t ordinal = 0;
+
+  static WindowIdentity Default() {
+    return {};
+  }
+
+  /// Compares both identity fields exactly.
+  bool operator==(const WindowIdentity&) const = default;
 };
 
 /// Current platform-submitted window geometry in logical units.
@@ -422,6 +452,13 @@ public:
   /// Requests the platform's normal close path after consulting the active close handler.
   void Close() const;
 
+  /// Requests retirement of this window, bypassing the platform close path and its request handlers. The retirement
+  /// runs on the application thread after the current callback returns; owned windows retire first, deepest chain
+  /// first. The application keeps running even when the initial window retires, so applications can reopen windows
+  /// later, for example from a tray activation, and stop with ApplicationHandle::Quit().
+  /// Safe to call from any thread, and ignored when this window has already retired or shutdown has begun.
+  void Retire() const;
+
   /// Registers a lifecycle-bound minimize request handler. Return true to consume the request or false to continue the
   /// native minimize operation. Changing a dependency reconnects the handler.
   template <class... Dependencies>
@@ -464,7 +501,28 @@ private:
   std::shared_ptr<detail::WindowService> service_;
 
   friend WindowHandle UseWindow();
+  friend WindowHandle detail::MakeWindowHandle(std::shared_ptr<detail::WindowService> service);
+  friend std::shared_ptr<detail::WindowService> detail::WindowServiceFor(const WindowHandle& handle) noexcept;
 };
+
+/// Describes how one window relates to the rest of the application: which window owns it and whether it blocks
+/// user input. A modal window with no owner is application-modal and blocks every other window.
+struct WindowRelationship {
+  /// The window that owns the target. The owned window stays ordered above its owner and retires with it.
+  std::optional<WindowHandle> owner{};
+
+  /// Whether the window blocks user input to the windows its relationship covers.
+  bool modal = false;
+};
+
+/// Changes one window's ownership and modality. The platform applies the native relationship; blocked windows
+/// stop receiving user input until every modal window covering them retires. No nested event loop is introduced.
+/// @param window Live window whose relationship changes; an empty owner with modal set blocks the whole
+/// application.
+/// Call on the application thread. Captured handles keep this usable while the windows are alive.
+/// @throws std::invalid_argument If the relationship would make the window own itself or create an owner cycle.
+/// @throws std::logic_error If the target or the requested owner has already retired.
+void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship);
 
 /// Returns a handle for the UiWindow in the current composition or captured window callback context.
 /// @return A handle retaining that window's service, without extending the native window's lifetime.

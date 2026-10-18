@@ -1,6 +1,8 @@
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/HuxerUIExamples.cmake")
 
 add_subdirectory(counter)
+add_subdirectory(multi_window)
+add_subdirectory(window_relationship)
 add_subdirectory(ui_gallery)
 add_subdirectory(dynamic_list)
 add_subdirectory(scroll_view)

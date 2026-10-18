@@ -164,7 +164,7 @@ TEST_CASE("Generated scopes run in UiWindow") {
   TestPlatform platform;
   Application application{GeneratedApp, {.show_debug_overlay = false}};
   huxerui::detail::InternalAccess::InitializeRuntime(platform, application);
-  huxerui::detail::InternalAccess::InitializeWindow(platform, platform);
+  huxerui::detail::InternalAccess::InitializeWindow(platform, platform, application.options.window);
   UiWindow& runtime = platform;
   runtime.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
 
@@ -182,7 +182,7 @@ TEST_CASE("Generated scopes expose recomposed parent layout values") {
   TestPlatform platform;
   Application application{GeneratedGrowApp, {.show_debug_overlay = false}};
   huxerui::detail::InternalAccess::InitializeRuntime(platform, application);
-  huxerui::detail::InternalAccess::InitializeWindow(platform, platform);
+  huxerui::detail::InternalAccess::InitializeWindow(platform, platform, application.options.window);
   UiWindow& runtime = platform;
   runtime.SetWindowMetrics({.viewport = {100.0F, 100.0F}});
   runtime.BuildFrame();

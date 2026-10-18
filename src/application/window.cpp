@@ -243,6 +243,30 @@ void WindowService::Request(WindowCommand command) {
   ui_window_->RequestWindowCommand(command);
 }
 
+void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal) {
+  const auto state = application_.lock();
+  if (!state || state->owner == nullptr) {
+    throw std::logic_error("HuxerUI application is disconnected");
+  }
+  state->owner->SetRelationship(*this, owner, modal);
+}
+
+void WindowService::Retire() {
+  const auto state = application_.lock();
+  if (!state || state->owner == nullptr) {
+    return;
+  }
+  Runtime* const runtime = state->owner;
+  const std::weak_ptr<WindowService> weak = weak_from_this();
+  // Queue the retirement so it runs after the current callback returns: retiring synchronously from inside
+  // pointer, semantic, or lifecycle dispatch would tear down the structures that dispatch still references.
+  state->Post([runtime, weak] {
+    if (const auto service = weak.lock()) {
+      runtime->RetireWindow(*service);
+    }
+  });
+}
+
 bool WindowService::HandleRequest(WindowCommand command) {
   RequestHandler& request = Handler(command);
   if (!request.handler) {
@@ -441,6 +465,10 @@ void WindowHandle::Close() const {
   service_->Request(WindowCommand::Close);
 }
 
+void WindowHandle::Retire() const {
+  service_->Retire();
+}
+
 std::function<void()>
 WindowHandle::ConnectRequest(WindowCommand command, std::function<bool()> handler) const {
   return service_->ConnectRequest(command, std::move(handler));
@@ -448,6 +476,27 @@ WindowHandle::ConnectRequest(WindowCommand command, std::function<bool()> handle
 
 WindowHandle UseWindow() {
   return WindowHandle{UseService<detail::WindowService>()};
+}
+
+namespace detail {
+
+WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service) {
+  if (!service) {
+    throw std::logic_error("HuxerUI window handle requires an initialized window service");
+  }
+  return WindowHandle{std::move(service)};
+}
+
+std::shared_ptr<WindowService> WindowServiceFor(const WindowHandle& handle) noexcept {
+  return handle.service_;
+}
+
+} // namespace detail
+
+void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship) {
+  detail::WindowServiceFor(window)->ApplyRelationship(
+      relationship.owner.has_value() ? detail::WindowServiceFor(*relationship.owner) : nullptr, relationship.modal
+  );
 }
 
 } // namespace huxerui

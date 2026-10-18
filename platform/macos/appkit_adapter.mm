@@ -521,7 +521,7 @@ public:
       window_.contentView = view_;
       auto configuration = application_runtime.Configuration();
       if (window_.screen != nil) configuration.display_scale = static_cast<float>(window_.screen.backingScaleFactor);
-      InitializeWindow(application_runtime, configuration);
+      InitializeWindow(application_runtime, options, 0, configuration);
       view_->huxeruiWindow = this;
       [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
       [NSNotificationCenter.defaultCenter addObserver:view_
@@ -575,6 +575,29 @@ public:
 
   NSWindow* Window() const noexcept {
     return window_;
+  }
+
+  /// Reports whether a modal window currently blocks this window's key input.
+  [[nodiscard]] bool IsInputBlocked() const noexcept {
+    return input_blocked_;
+  }
+
+  void ApplyWindowOwnership(UiWindow* owner) override {
+    if (window_ == nil) {
+      return;
+    }
+    if (window_.parentWindow != nil) {
+      [window_.parentWindow removeChildWindow:window_];
+    }
+    if (owner != nullptr) {
+      NSWindow* owner_window = static_cast<MacUiWindow*>(owner)->window_;
+      [owner_window addChildWindow:window_ ordered:NSWindowAbove];
+    }
+  }
+
+  void ApplyWindowModalState(bool modal, bool blocked) override {
+    static_cast<void>(modal);
+    input_blocked_ = blocked;
   }
 
   void RequestFrameAt(double deadline) override {
@@ -1010,6 +1033,7 @@ private:
   const RenderFrame* committed_frame_ = nullptr;
   bool performing_minimize_ = false;
   bool performing_close_ = false;
+  bool input_blocked_ = false;
   std::exception_ptr failure_;
 };
 
@@ -1048,6 +1072,11 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   } @finally {
     huxeruiWindow->EndPlatformViewFocusTraversal();
   }
+}
+
+/// A window blocked by a window-level modal refuses key status so input stays with the modal chain.
+- (BOOL)canBecomeKeyWindow {
+  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKeyWindow];
 }
 
 @end

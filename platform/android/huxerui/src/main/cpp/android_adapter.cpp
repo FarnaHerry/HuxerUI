@@ -826,7 +826,7 @@ public:
       throw std::runtime_error("HuxerUI could not retain the Android platform Context");
     }
     try {
-      InitializeWindow(application, Configuration(), lifecycle);
+      InitializeWindow(application, CurrentApplication().options.window, 0, Configuration(), lifecycle);
       platform_views_ = std::make_unique<AndroidPlatformViews>(
           environment, view_, context_, renderer_, PlatformRegistry(), *this);
     } catch (...) {

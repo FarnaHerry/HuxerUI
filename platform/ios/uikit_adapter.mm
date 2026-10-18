@@ -552,7 +552,7 @@ public:
 
       auto configuration = application.Resources()->Configuration();
       if (view_.window.screen != nil) configuration.display_scale = static_cast<float>(view_.window.screen.scale);
-      InitializeWindow(application, configuration);
+      InitializeWindow(application, CurrentApplication().options.window, 0, configuration);
       view_->huxeruiWindow = this;
       platform_views_ = std::make_unique<UIKitPlatformViews>(renderer_, PlatformRegistry(), *this);
 

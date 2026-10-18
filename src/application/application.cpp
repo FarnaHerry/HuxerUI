@@ -536,6 +536,20 @@ void ApplicationService::Quit() const {
   }
 }
 
+WindowHandle ApplicationService::OpenWindow(const WindowOptions& options) const {
+  if (runtime_ == nullptr) {
+    throw std::logic_error("HuxerUI application service is disconnected");
+  }
+  return runtime_->OpenWindow(options);
+}
+
+WindowHandle ApplicationService::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const {
+  if (runtime_ == nullptr) {
+    throw std::logic_error("HuxerUI application service is disconnected");
+  }
+  return runtime_->OpenWindow(options, relationship);
+}
+
 void ApplicationService::Enqueue(ApplicationActivation activation) {
   ValidateApplicationActivation(activation);
   if (runtime_ == nullptr) {
@@ -635,6 +649,14 @@ std::shared_ptr<Clipboard> ApplicationHandle::Clipboard() const noexcept {
 
 const AppDirectories& ApplicationHandle::Directories() const {
   return service_->Directories();
+}
+
+WindowHandle ApplicationHandle::OpenWindow(const WindowOptions& options) const {
+  return service_->OpenWindow(options);
+}
+
+WindowHandle ApplicationHandle::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const {
+  return service_->OpenWindow(options, relationship);
 }
 
 File ApplicationHandle::CurrentDirectory() const {
