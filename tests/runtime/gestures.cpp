@@ -1631,6 +1631,9 @@ struct WindowDragObservations {
   int source_hover_leaves = 0;
   bool dropped = false;
   bool throw_on_enter = false;
+  bool throw_on_move = false;
+  bool throw_on_exit = false;
+  bool throw_on_drop = false;
 };
 
 WindowDragObservations* window_drag_observations = nullptr;
@@ -1670,9 +1673,22 @@ View WindowDragRoot() {
       .On<DropEvents<int>::Moved>([&observed](int, const DropEvent& event) {
         observed.events.emplace_back("moved");
         observed.target_event = event;
+        if (observed.throw_on_move) {
+          throw std::runtime_error("HuxerUI window drag test failure");
+        }
       })
-      .On<DropEvents<int>::Exited>([&observed](int, const DropEvent&) { observed.events.emplace_back("exited"); })
-      .On<DropEvents<int>::Dropped>([&observed](int, const DropEvent&) { observed.events.emplace_back("dropped"); })
+      .On<DropEvents<int>::Exited>([&observed](int, const DropEvent&) {
+        observed.events.emplace_back("exited");
+        if (observed.throw_on_exit) {
+          throw std::runtime_error("HuxerUI window drag test failure");
+        }
+      })
+      .On<DropEvents<int>::Dropped>([&observed](int, const DropEvent&) {
+        observed.events.emplace_back("dropped");
+        if (observed.throw_on_drop) {
+          throw std::runtime_error("HuxerUI window drag test failure");
+        }
+      })
       .OnClick([&observed] { ++observed.target_clicks; });
 }
 
@@ -1819,6 +1835,44 @@ TEST_CASE("Application drag callback exceptions terminate the original session o
   REQUIRE(fixture.observed.events == std::vector<std::string>{"started", "entered", "exited", "canceled"});
   transfer->Finish(false);
   REQUIRE(std::ranges::count(fixture.observed.events, "canceled") == 1);
+}
+
+TEST_CASE("Application drag callback failures release native transport once", "[window-drag]") {
+  int native_cancels = 0;
+  WindowDragFixture fixture;
+  fixture.Begin();
+  const auto transfer = fixture.host.transfer;
+  transfer->SetNativeCancel([&native_cancels, transfer] {
+    ++native_cancels;
+    transfer->SetNativeCancel({});
+    transfer->Finish(true);
+  });
+  SECTION("Entered") {
+    fixture.observed.throw_on_enter = true;
+    REQUIRE_THROWS_AS(transfer->Move(fixture.destination, {40.0F, 30.0F}), std::runtime_error);
+  }
+  SECTION("Moved") {
+    REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+    fixture.observed.throw_on_move = true;
+    REQUIRE_THROWS_AS(transfer->Move(fixture.destination, {50.0F, 30.0F}), std::runtime_error);
+  }
+  SECTION("Exited") {
+    REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+    fixture.observed.throw_on_exit = true;
+    REQUIRE_THROWS_AS(transfer->Leave(fixture.destination), std::runtime_error);
+  }
+  SECTION("Dropped") {
+    REQUIRE(transfer->Move(fixture.destination, {40.0F, 30.0F}));
+    fixture.observed.throw_on_drop = true;
+    REQUIRE_THROWS_AS(transfer->Drop(fixture.destination, {40.0F, 30.0F}), std::runtime_error);
+  }
+  REQUIRE_FALSE(transfer->Active());
+  REQUIRE(native_cancels == 1);
+  REQUIRE(std::ranges::count(fixture.observed.events, "canceled") == 1);
+  REQUIRE_FALSE(ContainsText(fixture.target.BuildFrame(), "window preview"));
+  transfer->Finish(false);
+  REQUIRE(native_cancels == 1);
+  REQUIRE(std::ranges::count(fixture.observed.events, "ended") == 0);
 }
 
 TEST_CASE("Application drag never crosses Runtime boundaries", "[window-drag]") {

@@ -706,7 +706,18 @@ bool WindowDrag::Move(UiWindow& window, Point position, bool moved) {
 
 void WindowDrag::Leave(UiWindow& window) {
   const auto receiver = receiver_.lock();
-  if (receiver && receiver->ui_window == &window) Exit();
+  if (!receiver || receiver->ui_window != &window) {
+    return;
+  }
+  try {
+    Exit();
+  } catch (...) {
+    try {
+      Finish(true);
+    } catch (...) {
+    }
+    throw;
+  }
 }
 
 void WindowDrag::Refresh(bool moved, const FrameInfo* frame) {
@@ -760,14 +771,19 @@ bool WindowDrag::Drop(UiWindow& window, Point position) {
 }
 
 void WindowDrag::Finish(bool canceled) {
-  if (!active_) return;
+  if (!active_) {
+    return;
+  }
   const auto source = source_.lock();
-  cancel_native_ = {};
+  // Native completion clears its callback first; shared failures must still release the host transport.
   try {
     Close();
   } catch (...) {
     if (source && source->ui_window && source->ui_window->IsInitialized()) {
-      try { source->ui_window->state_->pointer_->CompleteWindowDrag(*this, true, false); } catch (...) {}
+      try {
+        source->ui_window->state_->pointer_->CompleteWindowDrag(*this, true, false);
+      } catch (...) {
+      }
     }
     throw;
   }

@@ -320,6 +320,7 @@ Physical drag-and-drop must not be the only way to perform an essential operatio
 
 Runtime stores every ownership, target, preview, and terminal transition before invoking the corresponding application callback.
 An escaping predicate or event exception quarantines the PointerSession, dismisses preview content, prevents duplicate normal terminal events, and then rethrows the original exception.
+For application-scoped transfers, this also cancels native transport, including when an Exited callback throws while leaving a receiver.
 
 Quarantine attempts the ordinary single cancellation path, consistent with other accepted gestures; an exception from that cleanup does not replace the original exception.
 This preserves strong internal commit while ensuring later physical pointer events cannot resume the failed operation.
