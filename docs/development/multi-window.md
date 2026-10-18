@@ -15,17 +15,17 @@ It complements the ownership contract in [Multi-Window Design](../design/multi-w
 
 The unsupported-host error is the intended contract, not a regression: the shared `Runtime::CreateNativeWindow` default throws, and only hosts that override it gain the capability.
 
-## Validated on the Windows host
+## Windows validation
 
-MSVC Release, full build with examples and tests enabled.
+Use the existing MSVC Release build with examples and tests enabled.
 
-| Suite | Result |
+| Check | Coverage |
 |---|---|
-| `huxerui_runtime_tests` (includes the six multi-window cases) | 979 cases, 30731 assertions |
-| `huxerui_unit_tests` | 177 cases, 11083 assertions |
-| `huxerui_windows_tests` | 63 cases, 725 assertions |
-| `huxerui_ui_tests` | 35 cases, 204 assertions |
-| Codegen suites and header checks | Built clean |
+| Common CTest label | Unit, Runtime, UI, and Library suites, including window configuration and coordinate-range validation |
+| `huxerui_windows_tests` | Win32 platform behavior |
+| `huxerui_windows_tests [win32-native]` | Native lifecycle, client-origin round trips with both chrome modes, and native handle release |
+| `huxerui_header_checks` | Standalone public headers |
+| `example_multi_window`, `example_window_relationship` | Public application API and window relationships |
 
 The focused multi-window filter is `"MultiWindow*,RuntimeOpenWindow*,RetiringOneWindow*,ApplicationHandleOpenWindow*"` against `huxerui_runtime_tests`.
 A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice, checks requested client origins with both system and custom chrome, and verifies that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
