@@ -386,6 +386,7 @@ WindowHandle Runtime::OpenWindow(const WindowOptions& options) {
     throw std::logic_error("HuxerUI host returned a window without its window service");
   }
   state_->windows.push_back(std::move(window));
+  RebuildWindowBlocking({});
   return detail::MakeWindowHandle(std::move(service));
 }
 
@@ -426,10 +427,10 @@ void Runtime::SetRelationship(detail::WindowService& target, const std::shared_p
         throw std::invalid_argument("HuxerUI window relationship would create an owner cycle");
       }
       const auto relation = state_->window_relations.find(cursor);
-      if (relation == state_->window_relations.end() || relation->second.first == nullptr) {
+      if (relation == state_->window_relations.end() || relation->second.owner == nullptr) {
         break;
       }
-      cursor = relation->second.first;
+      cursor = relation->second.owner;
     }
   }
   ApplyWindowRelationship(target, owner_service.get(), modal);
@@ -557,7 +558,7 @@ void Runtime::ApplyWindowRelationship(detail::WindowService& target, detail::Win
   UiWindow* const owner = owner_service != nullptr ? RequireLiveWindow(*owner_service) : nullptr;
   const auto previous = state_->window_relations.find(target_window);
   if (previous != state_->window_relations.end()) {
-    UiWindow* const previous_owner = previous->second.first;
+    UiWindow* const previous_owner = previous->second.owner;
     if (previous_owner != nullptr && previous_owner != owner) {
       auto& edges = state_->owned_window_edges[previous_owner];
       std::erase(edges, target_window);
@@ -566,7 +567,15 @@ void Runtime::ApplyWindowRelationship(detail::WindowService& target, detail::Win
       }
     }
   }
-  state_->window_relations[target_window] = {owner, modal};
+  ApplicationRuntimeState::WindowRelationRecord record{owner, modal, 0};
+  // Re-affirming an unchanged relationship keeps its place in the modal stack; only an actual
+  // change establishes a new priority.
+  if (previous != state_->window_relations.end() && previous->second.owner == owner && previous->second.modal == modal) {
+    record.sequence = previous->second.sequence;
+  } else {
+    record.sequence = state_->next_relationship_sequence++;
+  }
+  state_->window_relations[target_window] = record;
   if (owner != nullptr) {
     auto& edges = state_->owned_window_edges[owner];
     if (std::find(edges.begin(), edges.end(), target_window) == edges.end()) {
@@ -583,8 +592,8 @@ UiWindow* Runtime::RemoveWindowRelations(UiWindow& window) {
     state_->owned_window_edges.erase(&window);
     return nullptr;
   }
-  UiWindow* const owner = relation->second.first;
-  const bool modal = relation->second.second;
+  UiWindow* const owner = relation->second.owner;
+  const bool modal = relation->second.modal;
   if (owner != nullptr) {
     auto& edges = state_->owned_window_edges[owner];
     std::erase(edges, &window);
@@ -605,24 +614,45 @@ void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
   std::vector<UiWindow*> modals;
   for (UiWindow* window : live) {
     const auto relation = state_->window_relations.find(window);
-    if (relation != state_->window_relations.end() && relation->second.second) {
+    if (relation != state_->window_relations.end() && relation->second.modal) {
       modals.push_back(window);
     }
   }
   const auto contains = [](const std::vector<UiWindow*>& windows, const UiWindow* needle) {
     return std::find(windows.begin(), windows.end(), needle) != windows.end();
   };
+  // A modal protects its own chain: a covering modal only blocks a window when it is newer than
+  // every modal whose chain contains that window, so sibling modals stack newest-on-top instead
+  // of disabling each other and leaving no interactive window to dismiss them.
+  const auto protection_sequence = [&](const UiWindow* window) {
+    std::uint64_t newest = 0;
+    for (UiWindow* modal : modals) {
+      const auto relation = state_->window_relations.find(modal);
+      if (relation == state_->window_relations.end() || relation->second.sequence <= newest) {
+        continue;
+      }
+      const std::vector<UiWindow*> chain = OwnedSubtree(*modal, true);
+      if (contains(chain, window)) {
+        newest = relation->second.sequence;
+      }
+    }
+    return newest;
+  };
   for (UiWindow* window : live) {
     const auto relation = state_->window_relations.find(window);
-    const bool modal = relation != state_->window_relations.end() && relation->second.second;
+    const bool modal = relation != state_->window_relations.end() && relation->second.modal;
+    const std::uint64_t protected_by = protection_sequence(window);
     bool blocked = false;
     for (UiWindow* covering : modals) {
       if (covering == window) {
         continue;
       }
       const auto covering_relation = state_->window_relations.find(covering);
+      if (covering_relation != state_->window_relations.end() && covering_relation->second.sequence <= protected_by) {
+        continue;
+      }
       const UiWindow* const covering_owner =
-          covering_relation != state_->window_relations.end() ? covering_relation->second.first : nullptr;
+          covering_relation != state_->window_relations.end() ? covering_relation->second.owner : nullptr;
       const std::vector<UiWindow*> excluded = OwnedSubtree(*covering, true);
       if (contains(excluded, window)) {
         continue;

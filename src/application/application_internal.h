@@ -155,8 +155,17 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   /// Next creation order assigned to a window; zero is the initial window.
   std::uint32_t next_window_ordinal = 0;
   /// Window relationship registry on the application thread: per-window record plus deterministic owned edges.
-  std::unordered_map<UiWindow*, std::pair<UiWindow* /*owner*/, bool /*modal*/>> window_relations;
+  struct WindowRelationRecord {
+    UiWindow* owner = nullptr;
+    bool modal = false;
+    /// Monotonic establishment order of the relationship; when modal coverages overlap the newest
+    /// sequence wins, so sibling modals stack instead of disabling each other.
+    std::uint64_t sequence = 0;
+  };
+  std::unordered_map<UiWindow*, WindowRelationRecord> window_relations;
   std::unordered_map<UiWindow*, std::vector<UiWindow*>> owned_window_edges;
+  /// Monotonic source for WindowRelationRecord::sequence; zero means a window carries no relationship.
+  std::uint64_t next_relationship_sequence = 1;
   /// Last modal/blocked state pushed to each window, so relationship changes push native updates only on
   /// differences.
   std::unordered_map<UiWindow*, std::pair<bool /*modal*/, bool /*blocked*/>> window_blocked_state;

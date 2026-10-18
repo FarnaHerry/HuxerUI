@@ -168,4 +168,54 @@ TEST_CASE("WindowHandleRetireIsHarmlessAfterRetirement") {
   REQUIRE(owner.created_windows[2]->Initialized());
 }
 
+TEST_CASE("SiblingModalWindowsStackSoNewestStaysInteractive") {
+  TestPlatform owner;
+  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  const WindowHandle primary = owner.OpenWindow(application.options.window);
+  const WindowHandle first = owner.OpenWindow({.title = "first"}, {.owner = primary, .modal = true});
+  const WindowHandle second = owner.OpenWindow({.title = "second"}, {.owner = primary, .modal = true});
+  static_cast<void>(first);
+  // The owner stays blocked and the older sibling yields to the newer one, which stays interactive.
+  REQUIRE(owner.created_windows.size() == 3);
+  REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, true});
+  REQUIRE(owner.created_windows[1]->applied_modal_states.back() == ModalState{true, true});
+  REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{true, false});
+
+  second.Retire();
+  owner.RunPlatformModuleTasks();
+  REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, true});
+  REQUIRE(owner.created_windows[1]->applied_modal_states.back() == ModalState{true, false});
+  REQUIRE(ReceivedCommand(*owner.created_windows[0], WindowCommand::Activate));
+}
+
+TEST_CASE("ApplicationModalWindowsStackSoNewestStaysInteractive") {
+  TestPlatform owner;
+  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  const WindowHandle primary = owner.OpenWindow(application.options.window);
+  const WindowHandle first = owner.OpenWindow({.title = "first"}, {.owner = std::nullopt, .modal = true});
+  const WindowHandle second = owner.OpenWindow({.title = "second"}, {.owner = std::nullopt, .modal = true});
+  static_cast<void>(first);
+  REQUIRE(owner.created_windows.size() == 3);
+  REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, true});
+  REQUIRE(owner.created_windows[1]->applied_modal_states.back() == ModalState{true, true});
+  REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{true, false});
+}
+
+TEST_CASE("PlainOpenWindowJoinsExistingModalBlocking") {
+  TestPlatform owner;
+  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  const WindowHandle primary = owner.OpenWindow(application.options.window);
+  const WindowHandle dialog = owner.OpenWindow({.title = "dialog"}, {.owner = std::nullopt, .modal = true});
+  static_cast<void>(dialog);
+  const WindowHandle later = owner.OpenWindow({.title = "later"});
+  static_cast<void>(later);
+  REQUIRE(owner.created_windows.size() == 3);
+  // Windows opened after a modal already exists join the blocking set on the common creation path.
+  REQUIRE(!owner.created_windows[2]->applied_modal_states.empty());
+  REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{false, true});
+}
+
 } // namespace huxerui::test
