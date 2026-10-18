@@ -21,7 +21,7 @@ MSVC Release, full build with examples and tests enabled.
 
 | Suite | Result |
 |---|---|
-| `huxerui_runtime_tests` (includes the six multi-window cases) | 965 cases, 30669 assertions |
+| `huxerui_runtime_tests` (includes the six multi-window cases) | 977 cases, 30718 assertions |
 | `huxerui_unit_tests` | 177 cases, 11083 assertions |
 | `huxerui_windows_tests` | 55 cases, 651 assertions |
 | `huxerui_ui_tests` | 35 cases, 204 assertions |
@@ -40,6 +40,7 @@ The interactive demo is `example_multi_window`: the primary window opens a secon
 - Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the committed damage snapshot, and the native resources of hosts that override `CreateNativeWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`.
 - Closing a Windows window frees object memory immediately; the graphics driver returns the remaining working set asynchronously. This looks like a partial drop in Task Manager and is expected. If retention is ever suspected again, compare "Commit size" across repeated open/close cycles and use `EmptyWorkingSet` to prove that no object pins the memory before investigating further.
 - Applying modal blocking on Windows calls `EnableWindow` on the covered windows. When a modal window opens from a click, the press still holds mouse capture, and disabling the capturing window synchronously delivers `WM_CANCELMODE` or `WM_CAPTURECHANGED`; the adapter defers the nested pointer cancellation until the in-flight pointer dispatch returns (see `WindowsUiWindow::SendPointer`). Delivering that cancellation immediately re-enters the shared pointer interaction and ends the active session while the outer dispatch still holds it, which corrupts the session map. Host ports whose grab-loss notifications arrive synchronously during input dispatch need an equivalent guard.
+- When several modal windows overlap in coverage, the most recently established relationship wins: each window is blocked only by modals newer than every modal whose own owned chain contains it. Sibling modals of one owner therefore stack newest-on-top instead of disabling each other, application modals stack the same way, and retiring the top modal unblocks the previous one. Re-affirming an unchanged relationship keeps its place in the stack; windows opened through the ordinary `OpenWindow` overload join the blocking set on the common creation path.
 - Running the test executables leaves an untracked `testing/Temporary/` directory next to the sources; it is a test artifact and is never committed.
 
 ## Porting checklist for remaining desktop hosts
@@ -56,7 +57,7 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 Concrete anchors on the unported adapters:
 
 - Linux: `LinuxUiWindow::Run` in `platform/linux/linux_adapter.cpp` still creates its `GtkWindow` and runs `g_main_context_iteration` inline; the loop condition is the single window's `running_` flag. Ownership and modality virtuals are implemented through `gtk_window_set_transient_for` and `gtk_window_set_modal`, but the close path still shuts the application down until runtime window creation lands.
-- macOS: `MacUiWindow::Run` in `platform/macos/appkit_adapter.mm` stores itself on the application delegate's single `huxeruiWindow` pointer, and delegate callbacks such as `windowShouldClose:` assume one window. Ownership uses `addChildWindow:ordered:`, and blocked windows refuse key status through the `HuxerUIWindow (ModalInputGate)` category; both are unverified on a macOS host.
+- macOS: `MacUiWindow::Run` in `platform/macos/appkit_adapter.mm` stores itself on the application delegate's single `huxeruiWindow` pointer, and delegate callbacks such as `windowShouldClose:` assume one window. Ownership uses `addChildWindow:ordered:`, and blocked windows refuse key status through the `canBecomeKeyWindow` override on `HuxerUIWindow`; both are unverified on a macOS host.
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest
