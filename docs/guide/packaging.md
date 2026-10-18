@@ -248,6 +248,8 @@ const Application application{
 ```
 
 `InstallerHandle` starts install, repair, and uninstall operations, requests cooperative cancellation, and answers the current identified prompt.
+`InstallerStatus::product` distinguishes a fresh install (`Absent`), an older installed release (`Present`), this exact installed release (`SameVersion`), and a newer installed release (`NewerVersion`).
+Both installed states support repair and uninstall; a surviving bundle registration also remains removable when its MSI is absent.
 `InstallerInstallOptions` overrides the authored destination or desktop-shortcut choice for one install request; leaving either field unset preserves the matching Burn variable.
 `ChooseDestinationAsync()` opens the Windows folder picker from a Task launched by the component's `TaskScope` and returns no value when the user dismisses it.
 `InstallerStatus` is the single observable status value for phase, detected product state, expanded defaults, action, progress, current package, prompt, failure, and restart requirement.

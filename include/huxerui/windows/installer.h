@@ -33,11 +33,11 @@ enum class InstallerPhase {
 enum class InstallerProductState {
   /// Detection produced no usable signal yet.
   Unknown,
-  /// No llm-switch registration was found; a fresh install can proceed.
+  /// No product registration was found; a fresh install can proceed.
   Absent,
-  /// A registered llm-switch with a different, older version was found; installing upgrades it.
+  /// A registered product with a different, older version was found; installing upgrades it.
   Present,
-  /// A registered llm-switch with a newer version was found; installing would downgrade.
+  /// A registered product with a newer version was found; installing would downgrade.
   NewerVersion,
   /// This exact release build is already registered on this computer.
   SameVersion,

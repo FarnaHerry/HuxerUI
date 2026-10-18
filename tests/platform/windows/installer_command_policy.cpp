@@ -95,7 +95,7 @@ TEST_CASE("commanded action maps only executable commands", "[installer][windows
 
 TEST_CASE("superseded packages stay removable during commanded runs", "[installer][windows]") {
   CHECK(detail::InstallerProductStateForPackage(BOOTSTRAPPER_PACKAGE_STATE_PRESENT, false) ==
-        InstallerProductState::Present);
+        InstallerProductState::SameVersion);
   CHECK(detail::InstallerProductStateForPackage(BOOTSTRAPPER_PACKAGE_STATE_ABSENT, false) ==
         InstallerProductState::Absent);
   CHECK(detail::InstallerProductStateForPackage(BOOTSTRAPPER_PACKAGE_STATE_UNKNOWN, false) ==
@@ -142,6 +142,7 @@ TEST_CASE("terminal events quit the engine when the window already exited", "[in
 
 TEST_CASE("commanded uninstall stays meaningful while the bundle is registered", "[installer][windows]") {
   CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::Present, /*bundle_registered=*/false));
+  CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::SameVersion, /*bundle_registered=*/false));
   CHECK_FALSE(detail::InstallerUninstallIsMeaningful(InstallerProductState::Absent, /*bundle_registered=*/false));
   CHECK_FALSE(detail::InstallerUninstallIsMeaningful(InstallerProductState::Unknown, /*bundle_registered=*/false));
 
@@ -149,6 +150,26 @@ TEST_CASE("commanded uninstall stays meaningful while the bundle is registered",
     CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::Absent, /*bundle_registered=*/true));
     CHECK(detail::InstallerUninstallIsMeaningful(InstallerProductState::Unknown, /*bundle_registered=*/true));
   }
+}
+
+TEST_CASE("installer versions distinguish upgrades, maintenance, and downgrades", "[installer][windows]") {
+  CHECK(detail::InstallerCompareVersions("0.3.34", "0.3.35") == -1);
+  CHECK(detail::InstallerCompareVersions("0.3.35", "0.3.35") == 0);
+  CHECK(detail::InstallerCompareVersions("0.3.36", "0.3.35") == 1);
+  CHECK(detail::InstallerCompareVersions("1", "1.0.0.0") == 0);
+  CHECK(detail::InstallerCompareVersions("1.10", "1.9") == 1);
+  for (const auto version : {"", "1.", "1..2", "1.2.3.4.5", "1.2-rc", "18446744073709551616"}) {
+    CHECK_FALSE(detail::InstallerCompareVersions(version, "1").has_value());
+    CHECK_FALSE(detail::InstallerCompareVersions("1", version).has_value());
+  }
+}
+
+TEST_CASE("repair accepts both installed product states", "[installer][windows]") {
+  CHECK(detail::InstallerRepairIsMeaningful(InstallerProductState::SameVersion));
+  CHECK(detail::InstallerRepairIsMeaningful(InstallerProductState::Present));
+  CHECK_FALSE(detail::InstallerRepairIsMeaningful(InstallerProductState::Absent));
+  CHECK_FALSE(detail::InstallerRepairIsMeaningful(InstallerProductState::Unknown));
+  CHECK_FALSE(detail::InstallerRepairIsMeaningful(InstallerProductState::NewerVersion));
 }
 
 } // namespace huxerui::test

@@ -3,7 +3,11 @@
 #include <windows.h>
 #include <msiquery.h>
 
+#include <array>
+#include <charconv>
 #include <optional>
+#include <string_view>
+#include <system_error>
 
 #include <BootstrapperApplicationTypes.h>
 #include <BootstrapperEngineTypes.h>
@@ -11,6 +15,36 @@
 #include <huxerui/windows/installer.h>
 
 namespace huxerui::detail {
+
+// Burn numeric versions may omit trailing zero fields. Invalid and overflowing fields must not
+// escape an engine callback as exceptions or be mistaken for an equal version.
+[[nodiscard]] inline std::optional<int> InstallerCompareVersions(std::string_view candidate,
+                                                                std::string_view current) {
+  const auto parse = [](std::string_view text, std::array<unsigned long long, 4>& fields) {
+    for (std::size_t index = 0; index < fields.size(); ++index) {
+      const std::size_t end = text.find('.');
+      const std::string_view field = text.substr(0, end);
+      if (field.empty()) {
+        return false;
+      }
+      const auto result = std::from_chars(field.data(), field.data() + field.size(), fields[index]);
+      if (result.ec != std::errc{} || result.ptr != field.data() + field.size()) {
+        return false;
+      }
+      if (end == std::string_view::npos) {
+        return true;
+      }
+      text.remove_prefix(end + 1);
+    }
+    return false;
+  };
+  std::array<unsigned long long, 4> left{};
+  std::array<unsigned long long, 4> right{};
+  if (!parse(candidate, left) || !parse(current, right)) {
+    return std::nullopt;
+  }
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 // Returns true when the engine command leaves no user available to answer interactive pages:
 // related-bundle runs embedded by a parent bundle (a previous version asked to uninstall itself

@@ -71,42 +71,6 @@ DWORD InstallerExitCode(HRESULT result) {
   return static_cast<DWORD>(result);
 }
 
-// Compares two Burn-style numeric versions ("1", "1.2", "1.2.3.0"). Missing trailing fields count
-// as zero; any non-numeric field makes the pair incomparable and reports false without touching
-// the output.
-bool TryIsVersionOlder(const std::string& candidate, const std::string& current, bool* older) {
-  auto parse = [](const std::string& text, unsigned long long (&fields)[4]) {
-    std::size_t begin = 0;
-    int count = 0;
-    while (true) {
-      const std::size_t end = text.find('.', begin);
-      const std::string field = end == std::string::npos ? text.substr(begin) : text.substr(begin, end - begin);
-      if (field.empty() || count == 4 ||
-          !std::all_of(field.begin(), field.end(), [](char digit) { return digit >= '0' && digit <= '9'; })) {
-        return false;
-      }
-      fields[count++] = std::stoull(field);
-      if (end == std::string::npos) {
-        return true;
-      }
-      begin = end + 1;
-    }
-  };
-  unsigned long long left[4] = {};
-  unsigned long long right[4] = {};
-  if (!parse(candidate, left) || !parse(current, right)) {
-    return false;
-  }
-  for (int index = 0; index < 4; ++index) {
-    if (left[index] != right[index]) {
-      *older = left[index] < right[index];
-      return true;
-    }
-  }
-  *older = false;
-  return true;
-}
-
 std::optional<std::filesystem::path> ChooseInstallerDestination(HWND owner, const std::filesystem::path& initial) {
   ComPtr<IFileOpenDialog> dialog;
   HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
@@ -349,14 +313,16 @@ public:
   // decides between NewerVersion (a real downgrade blocker) and SameVersion (this exact release
   // already installed).
   void ForwardCompatibleBundleDetected(std::string version) {
-    bool older = false;
-    if (!TryIsVersionOlder(version, bundle_version_, &older) || older) {
+    const auto comparison = InstallerCompareVersions(version, bundle_version_);
+    if (!comparison || *comparison > 0) {
       // Incomparable version strings keep the conservative reading and treat the registration as
       // newer, so an interactive run still lands on an explanatory page.
       NewerVersionDetected();
       return;
     }
-    SameVersionDetected();
+    if (*comparison == 0) {
+      SameVersionDetected();
+    }
   }
 
   void SameVersionDetected() {
@@ -510,12 +476,12 @@ private:
   void Quit(DWORD exit_code);
 
   // Related-bundle callbacks and package detection interleave; once the engine finishes detection
-  // this settles the remaining combination: a registered older llm-switch promotes Absent to
+  // this settles the remaining combination: an older registered product promotes Absent to
   // Present (upgrade page). SameVersion comes from package detection of this exact build, and
   // NewerVersion from the forward-compatible comparison, both of which land immediately.
   void CoalesceDetectedProduct() {
-    bool older = false;
-    if (!registered_version_seen_ || !TryIsVersionOlder(registered_version_, bundle_version_, &older) || !older) {
+    const auto comparison = InstallerCompareVersions(registered_version_, bundle_version_);
+    if (!registered_version_seen_ || !comparison || *comparison >= 0) {
       return;
     }
     Mutate([](windows::InstallerStatus& status) {
@@ -845,9 +811,12 @@ public:
   // empty string instead of an error: WixBundleVersion is absent in layout/design runs.
   std::string EngineVariableString(const wchar_t* variable) {
     SIZE_T length = 0;
-    if (FAILED(m_pEngine->GetVariableString(variable, nullptr, &length)) || length == 0) {
+    const HRESULT probe = m_pEngine->GetVariableString(variable, nullptr, &length);
+    if ((FAILED(probe) && probe != E_MOREDATA) || length == 0) {
       return {};
     }
+    // Burn reports the character count without the terminating null.
+    ++length;
     std::wstring value(length, L'\0');
     if (FAILED(m_pEngine->GetVariableString(variable, value.data(), &length))) {
       return {};
@@ -949,7 +918,7 @@ void WindowsInstallerSession::Start(windows::InstallerAction action, windows::In
     if (status_.phase != windows::InstallerPhase::Ready) {
       throw std::logic_error("HuxerUI Windows installer action requires a ready session");
     }
-    if (action == windows::InstallerAction::Repair && status_.product != windows::InstallerProductState::Present) {
+    if (action == windows::InstallerAction::Repair && !InstallerRepairIsMeaningful(status_.product)) {
       throw std::logic_error("HuxerUI Windows installer cannot repair an absent product");
     }
     if (action == windows::InstallerAction::Uninstall &&

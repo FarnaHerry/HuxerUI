@@ -450,6 +450,8 @@ Its coalesced status contains the current phase, detected product state, expande
 Commands choose an installation directory asynchronously through the window-owned system picker, start install with one optional override object, repair or uninstall, request cooperative cancellation, and answer the currently identified prompt.
 It does not expose WiX interfaces, HRESULT callbacks, a second event stream, duplicated `can_xxx` flags, or a generic cross-platform installer abstraction.
 Installing over an older product is the ordinary install action rather than a separate update command.
+Detection compares the related bundle version with `WixBundleVersion`: an older registration reports `Present`, the current release reports `SameVersion`, and a newer registration reports `NewerVersion` without allowing package absence to erase that downgrade blocker.
+Both `Present` and `SameVersion` pass the same repair eligibility check in interactive and commanded paths.
 
 Burn's `InstallFolder` and `CreateDesktopShortcut` variables are the only authored defaults and the only values passed into the matching MSI properties.
 The generated HuxerUI interface keeps only controlled local drafts, initializes them from the expanded Burn values, and submits one `InstallerInstallOptions` value when installation begins.
@@ -674,6 +676,9 @@ Desktop hosts use `sdkmanager` and ADB for managed Android SDK components and ex
 Termux instead requires a compatible SDK and NDK supplied outside HuxerUI, overrides AGP's `aapt2` executable with the Termux package, restricts the build to the local `arm64-v8a` ABI, and opens the APK with the system package installer.
 
 ### iOS
+
+The application-core build evaluates conditional link edges for the active configuration before traversing the target dependency graph into `link.rsp`.
+The response file includes resolved target archives, ordinary library flags, application link options, and transitive interface link options; aliases and interface targets retain their dependencies, and paths with spaces remain single arguments.
 
 The shell is a source-controlled Xcode application project. It owns the Info.plist, launch screen, asset catalog, build configurations, shared scheme, product identifier, signing, Capabilities, platform sources, archive behavior, and final App Bundle.
 
