@@ -292,6 +292,8 @@ public:
     });
   }
 
+  bool IsNativeInputActive() const noexcept { return native_input_depth_ != 0; }
+
   void BeginNativeInput() noexcept { ++native_input_depth_; }
 
   void EndNativeInput() {
@@ -876,6 +878,11 @@ public:
   }
 
   void CommitFrameAndInvalidate() noexcept {
+    if (runtime_->IsNativeInputActive()) {
+      __weak HuxerUIView* view = view_;
+      runtime_->PostNativeTask([view] { [view commitHuxerUIFrame]; });
+      return;
+    }
     try {
       CommitFrame();
     } catch (...) {
