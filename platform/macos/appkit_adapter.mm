@@ -350,13 +350,11 @@ public:
   }
 
   /// Coordinates AppKit termination with asynchronous shared Runtime shutdown.
-  /// @return NSTerminateLater while shutdown is pending, NSTerminateNow when stopped, or Cancel before startup.
+  /// @return Cancel native process termination so RunApplication can return after shared teardown.
   NSApplicationTerminateReply ShouldTerminate() {
-    if (stopped_) return NSTerminateNow;
-    if (!IsInitialized()) return NSTerminateCancel;
-    termination_pending_ = true;
-    Runtime::RequestShutdown();
-    return NSTerminateLater;
+    if (IsInitialized() && !stopped_) Runtime::RequestShutdown();
+    // NSTerminateLater enters a modal loop that can starve shutdown queued from a main-queue callback.
+    return NSTerminateCancel;
   }
   void OpenURLs(NSArray* urls) noexcept {
     try {
@@ -508,10 +506,6 @@ private:
   void OnRuntimeStopped() override {
     stopped_ = true;
     NSApplication* application = NSApplication.sharedApplication;
-    if (termination_pending_) {
-      // RunApplication returns to its caller after orderly teardown, including a native Quit request.
-      [application replyToApplicationShouldTerminate:NO];
-    }
     [application stop:nil];
     [application postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
                                            location:NSZeroPoint
@@ -528,7 +522,6 @@ private:
   __strong HuxerUIApplicationDelegate* delegate_ = nil;
   std::vector<ApplicationActivation> pending_activations_;
   bool stopped_ = false;
-  bool termination_pending_ = false;
   std::exception_ptr failure_;
   std::size_t native_input_depth_ = 0;
   std::vector<std::function<void()>> deferred_native_tasks_;

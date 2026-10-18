@@ -44,6 +44,7 @@ The `macOS Multi-Window Preview` workflow builds on GitHub-hosted macOS runners:
 It builds common and codegen suites, AppKit platform suites, standalone headers, `example_multi_window`, and `example_window_relationship`.
 The separate native test bundle creates real NSWindows on the main thread and exercises startup extras, runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
 Each CTest scenario runs in a fresh process because AppKit owns a process-wide NSApplication; weak native references check that retired windows and their content views are released after bounded native autorelease cleanup.
+The native Quit scenario invokes AppKit termination from the main queue and verifies that queued Runtime shutdown completes and returns to the caller.
 
 Run the same checks on a Mac with a normal CMake configure:
 

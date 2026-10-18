@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <dispatch/dispatch.h>
 #include <catch2/catch_amalgamated.hpp>
 
 #include <algorithm>
@@ -151,7 +152,10 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
       }
       [sender invalidate];
       if (scenario.completed && scenario.native_quit) {
-        [NSApplication.sharedApplication terminate:nil];
+        // A Quit delivered on the main queue must not block the shutdown task queued behind it.
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [NSApplication.sharedApplication terminate:nil];
+        });
       } else if (scenario.completed && scenario.native_primary_close) {
         NSWindow* native = scenario.watches.front()->Window();
         if (scenario.destroy_primary) [native close];

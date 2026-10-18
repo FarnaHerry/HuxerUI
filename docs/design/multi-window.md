@@ -89,6 +89,7 @@ The application-facing contract and platform availability are documented in [Nat
 ## Shutdown and failure
 
 Closing the initial window requests application shutdown, preserving the historical single-window behavior; closing a later window retires only that window. Retiring every window explicitly does not terminate the application; `Runtime::RequestShutdown()` remains the whole-application stop.
+The macOS preview cancels AppKit's process termination request and queues Runtime shutdown, allowing `RunApplication` to return after teardown without entering AppKit's termination modal loop.
 `WindowHandle::Retire()` requests retirement of one window, bypassing the platform close path and its request handlers; the retirement runs on the application thread after the current callback returns. Owned windows retire first, deepest chain first, and the native attachment is discarded only after shared teardown, so retiring the initial window keeps the application running and close-path shutdown semantics stay unchanged. Hosts that cannot retire a window at runtime report the capability gap, matching `OpenWindow`.
 `Runtime::Retire()` retires every attached window through the existing registry before closing tasks, HTTP operations, and services, so an application that never closes its extra windows still shuts down cleanly.
 A window that fails native creation after registration is retired immediately and its creation throws.
