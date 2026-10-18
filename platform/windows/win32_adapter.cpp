@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <windowsx.h>
+#include <dwmapi.h>
 #include <objbase.h>
 #include <ole2.h>
 #include <psapi.h>
@@ -514,6 +515,17 @@ public:
     return CreateWin32AppDirectories();
   }
 
+  /// Pushes the registered application icons onto a window, so every window created from the
+  /// shared class still carries the loaded icons.
+  void ApplyWindowIcons(HWND window) const {
+    if (window_icon_ != nullptr) {
+      SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(window_icon_));
+    }
+    if (window_small_icon_ != nullptr) {
+      SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(window_small_icon_));
+    }
+  }
+
 
   std::shared_ptr<HttpTransport> CreateHttpTransport() override {
     return CreateWin32HttpTransport();
@@ -948,6 +960,18 @@ private:
     if (window_ == nullptr) {
       throw std::runtime_error("HuxerUI could not create its Windows application window");
     }
+    if (custom_chrome_) {
+      // Win11 DWM rounds only windows that keep the standard frame; a
+      // frame-stripped custom-chrome window stays square unless it opts in.
+      // Windows 10 has no corner attribute and ignores the call, so literals
+      // keep older SDKs compiling (DWMWA_WINDOW_CORNER_PREFERENCE / DWMWCP_ROUND).
+      constexpr DWORD kDwmWindowCornerPreference = 33;
+      constexpr DWORD kDwmWindowCornerRound = 2;
+      DWORD preference = kDwmWindowCornerRound;
+      static_cast<void>(DwmSetWindowAttribute(
+          window_, kDwmWindowCornerPreference, &preference, sizeof(preference)));
+    }
+    static_cast<WindowsRuntime&>(application).ApplyWindowIcons(window_);
     dpi_ = static_cast<float>(win32_api_.WindowDpi(window_));
     auto configuration = application.Resources()->Configuration();
     configuration.display_scale = DpiScale();

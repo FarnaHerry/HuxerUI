@@ -19,6 +19,7 @@ set(HUXERUI_PLATFORM_LINK_LIBRARIES
         "-framework CoreFoundation"
         "-framework CoreGraphics"
         "-framework CoreImage"
+        "-framework CoreMedia"
         "-framework CoreText"
         "-framework CoreVideo"
         "-framework Foundation"

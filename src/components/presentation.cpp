@@ -1513,14 +1513,17 @@ struct LayerAnchorState : std::enable_shared_from_this<LayerAnchorState> {
   explicit LayerAnchorState(LayerController controller) : layers(std::move(controller)) {}
 
   void Mount(std::uint64_t identity) {
-    if (mounted) {
-      throw std::logic_error("HuxerUI presentation anchor must be mounted on only one View");
-    }
+    // Structural recomposition (responsive breakpoint crossing, layout swaps)
+    // builds the replacement node before the previous node is destroyed, and
+    // composition-hook state (UsePopup/UseMenu handles) outlives the swap.
+    // The anchor therefore TRANSFERS to the new node instead of aborting the
+    // runtime; the stale node's UnmountNode(identity) becomes a no-op.
     mounted_identity = identity;
     mounted = true;
   }
 
-  void Unmount() {
+  void UnmountNode(std::uint64_t identity) {
+    if (!mounted || mounted_identity != identity) return;
     mounted = false;
     mounted_identity.reset();
     node_bounds.reset();
@@ -2201,25 +2204,27 @@ public:
   }
 
   ~LayerAnchorExtension() override {
-    if (state_) {
+    if (state_ && node_identity.has_value()) {
       try {
-        state_->Unmount();
+        state_->UnmountNode(*node_identity);
       } catch (...) {
       }
     }
   }
 
   void Update(huxerui::ViewNode& node, const LayerAnchor& modifier) {
-    static_cast<void>(node);
+    const auto identity = static_cast<const detail::MountedNode&>(node).identity;
     if (state_ == modifier.state_) {
+      node_identity = identity;
       return;
     }
-    if (state_) {
-      state_->Unmount();
+    if (state_ && node_identity.has_value()) {
+      state_->UnmountNode(*node_identity);
     }
     state_ = modifier.state_;
+    node_identity = identity;
     if (state_) {
-      state_->Mount(static_cast<const detail::MountedNode&>(node).identity);
+      state_->Mount(identity);
     }
   }
 
@@ -2233,6 +2238,7 @@ public:
 
 private:
   std::shared_ptr<LayerAnchorState> state_;
+  std::optional<std::uint64_t> node_identity;
 };
 
 class DebugOverlayInstaller {
