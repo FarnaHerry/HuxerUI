@@ -80,7 +80,8 @@ foreach (native_case IN ITEMS
 )
     add_test(NAME "HuxerUIMacOSNative${native_case}"
             COMMAND huxerui_macos_native_tests "MacNative${native_case}")
-    set_tests_properties("HuxerUIMacOSNative${native_case}" PROPERTIES LABELS "platform;macos;native" TIMEOUT 45)
+    set_tests_properties("HuxerUIMacOSNative${native_case}" PROPERTIES
+            LABELS "platform;macos;native" TIMEOUT 45 PASS_REGULAR_EXPRESSION "All tests passed")
 endforeach ()
 
 set(native_initial_sections
@@ -96,7 +97,8 @@ foreach (index RANGE 0 3)
     add_test(NAME "HuxerUIMacOSNativeInitial${name}"
             COMMAND huxerui_macos_native_tests "MacNativeWindowsIsolateStateAndReleaseClosedAttachments"
                     --section "${section}")
-    set_tests_properties("HuxerUIMacOSNativeInitial${name}" PROPERTIES LABELS "platform;macos;native" TIMEOUT 45)
+    set_tests_properties("HuxerUIMacOSNativeInitial${name}" PROPERTIES
+            LABELS "platform;macos;native" TIMEOUT 45 PASS_REGULAR_EXPRESSION "All tests passed")
 endforeach ()
 
 set(native_owned_sections "Close retires the owned chain" "Native destruction retires the owned chain")
@@ -107,5 +109,6 @@ foreach (index RANGE 0 1)
     add_test(NAME "HuxerUIMacOSNativeOwned${name}"
             COMMAND huxerui_macos_native_tests "MacNativeOwnedModalsPreserveIndependentWindowsAndCascade"
                     --section "${section}")
-    set_tests_properties("HuxerUIMacOSNativeOwned${name}" PROPERTIES LABELS "platform;macos;native" TIMEOUT 45)
+    set_tests_properties("HuxerUIMacOSNativeOwned${name}" PROPERTIES
+            LABELS "platform;macos;native" TIMEOUT 45 PASS_REGULAR_EXPRESSION "All tests passed")
 endforeach ()
