@@ -80,6 +80,14 @@ struct RunnerGuard {
   std::thread runner;
   ~RunnerGuard() {
     if (runner.joinable()) {
+      std::optional<ApplicationHandle> application;
+      UiThreadDispatcher post;
+      {
+        std::lock_guard lock(test_state_mutex);
+        application = captured_application;
+        post = application_dispatch;
+      }
+      if (application && post) post([application = *application] { application.Quit(); });
       const HWND primary = primary_window.load();
       if (primary != nullptr && IsWindow(primary)) {
         PostMessageW(primary, WM_CLOSE, 0, 0);
@@ -151,6 +159,7 @@ TEST_CASE("Win32RuntimeWindowsOpenAndCloseWithoutRetainingHandles", "[.][win32-n
   const DWORD baseline_user = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
 
   for (int cycle = 0; cycle < 2; ++cycle) {
+    INFO("cycle " << cycle);
     const Point preferred_origin{120.0F + static_cast<float>(cycle) * 40.0F, 160.0F};
     auto placement = std::make_shared<std::promise<std::optional<Point>>>();
     auto placement_result = placement->get_future();
@@ -174,12 +183,22 @@ TEST_CASE("Win32RuntimeWindowsOpenAndCloseWithoutRetainingHandles", "[.][win32-n
     REQUIRE(std::abs(origin->y - preferred_origin.y) <= 2.0F);
     PumpUntil([&] { return FindWindowByTitle(secondary_title) != nullptr; }, "the secondary window");
     const HWND secondary = FindWindowByTitle(secondary_title);
+    if (secondary == nullptr) {
+      PumpUntil([] { return runner_finished.load(); }, "creation failure propagation from the native runner");
+      guard.runner.join();
+      if (runner_failure) REQUIRE_NOTHROW(std::rethrow_exception(runner_failure));
+    }
     REQUIRE(secondary != nullptr);
     REQUIRE(IsWindow(secondary));
     REQUIRE(secondary != primary_window.load());
 
     PostMessageW(secondary, WM_CLOSE, 0, 0);
     PumpUntil([&secondary] { return !IsWindow(secondary); }, "secondary window destruction");
+    if (!IsWindow(primary_window.load())) {
+      PumpUntil([] { return runner_finished.load(); }, "failure propagation from the native runner");
+      guard.runner.join();
+      if (runner_failure) REQUIRE_NOTHROW(std::rethrow_exception(runner_failure));
+    }
     REQUIRE(IsWindow(primary_window.load()));
   }
 
