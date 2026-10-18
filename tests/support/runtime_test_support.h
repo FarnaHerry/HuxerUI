@@ -911,6 +911,23 @@ public:
     window_commands.push_back(command);
   }
 
+  void ApplyWindowOwnership(huxerui::UiWindow* owner) override {
+    applied_owners.push_back(owner);
+  }
+
+  void ApplyWindowModalState(bool modal, bool blocked) override {
+    applied_modal_states.emplace_back(modal, blocked);
+  }
+
+  void DiscardHost() override {
+    host_discarded = true;
+  }
+
+  /// Tests whether shared window initialization completed; retirement resets it.
+  [[nodiscard]] bool Initialized() const noexcept {
+    return UiWindow::IsInitialized();
+  }
+
 
 
   std::shared_ptr<huxerui::detail::SystemTrayTransport> CreateSystemTrayTransport() override {
@@ -931,7 +948,10 @@ public:
       system_bar_brightness;
   std::optional<huxerui::ProcessMetrics> process_metrics;
   std::vector<huxerui::WindowCommand> window_commands;
+  std::vector<huxerui::UiWindow*> applied_owners;
+  std::vector<std::pair<bool, bool>> applied_modal_states;
   int application_quit_requests = 0;
+  bool host_discarded = false;
   /// Windows produced by CreateNativeWindow for multi-window tests, valid until the Runtime retires them.
   std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;

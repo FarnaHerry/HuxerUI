@@ -34,6 +34,7 @@ User guides describe the current public SDK, development guides cover this repos
 [Date and Time Pickers](design/date-time-pickers.md) defines localized chrono-based calendar and clock controls.
 [Local Notifications](design/local-notifications.md) defines the shared authorization, scheduling, cancellation, and activation contract plus the Android, iOS, and macOS transports and remaining native boundaries.
 [Multi-Window](design/multi-window.md) defines runtime window creation, per-window content selection through the window environment identity, and shared-Runtime ownership rules.
+[Window Relationship](design/window-relationship.md) defines window ownership, modality, cascade retirement, and platform input blocking.
 Design documents are implementation references, not a public API stability guarantee.
 
 ## Scope

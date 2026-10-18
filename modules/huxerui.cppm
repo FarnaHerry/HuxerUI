@@ -385,6 +385,7 @@ export namespace huxerui {
     using huxerui::SemanticRange;
     using huxerui::SemanticRole;
     using huxerui::Semantics;
+    using huxerui::SetWindowRelationship;
     using huxerui::Shadow;
     using huxerui::ShapeScheme;
     using huxerui::SharedBounds;
@@ -587,6 +588,7 @@ export namespace huxerui {
     using huxerui::WindowLifecycleState;
     using huxerui::WindowMetrics;
     using huxerui::WindowOptions;
+    using huxerui::WindowRelationship;
     using huxerui::WindowTitleBar;
     using huxerui::WindowTitleBarMetrics;
     using huxerui::WorkerSequence;

@@ -154,6 +154,21 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   std::vector<std::unique_ptr<UiWindow>> windows;
   /// Next creation order assigned to a window; zero is the initial window.
   std::uint32_t next_window_ordinal = 0;
+  /// Window relationship registry on the application thread: per-window record plus deterministic owned edges.
+  struct WindowRelationRecord {
+    UiWindow* owner = nullptr;
+    bool modal = false;
+    /// Monotonic establishment order of the relationship; when modal coverages overlap the newest
+    /// sequence wins, so sibling modals stack instead of disabling each other.
+    std::uint64_t sequence = 0;
+  };
+  std::unordered_map<UiWindow*, WindowRelationRecord> window_relations;
+  std::unordered_map<UiWindow*, std::vector<UiWindow*>> owned_window_edges;
+  /// Monotonic source for WindowRelationRecord::sequence; zero means a window carries no relationship.
+  std::uint64_t next_relationship_sequence = 1;
+  /// Last modal/blocked state pushed to each window, so relationship changes push native updates only on
+  /// differences.
+  std::unordered_map<UiWindow*, std::pair<bool /*modal*/, bool /*blocked*/>> window_blocked_state;
   std::vector<std::function<void()>> handler_cleanups;
   bool event_dispatch_pending = false;
   bool hosted = false;
@@ -300,6 +315,7 @@ public:
   [[nodiscard]] const std::shared_ptr<huxerui::Clipboard>& Clipboard() const noexcept;
   [[nodiscard]] const AppDirectories& Directories() const;
   [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options) const;
+  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const;
   void Quit() const;
   void Enqueue(ApplicationActivation activation);
   void UpdateLifecycleState(ApplicationLifecycleState lifecycle_state);

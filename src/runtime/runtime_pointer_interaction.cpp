@@ -2158,7 +2158,11 @@ void detail::PointerInteraction::UpdateHoverRoute(detail::PointerHoverState next
   }
 
   for (const NodeExtensionHandle& handle : previous.extensions) {
-    if (std::ranges::find(current.extensions, handle) != current.extensions.end()) {
+    // `find_if` rather than `find`: the 24-byte NodeExtensionHandle does not fit the sizes the
+    // MSVC STL vectorized search supports, and clang instantiates its static_assert for `find`.
+    if (std::ranges::find_if(current.extensions, [&](const NodeExtensionHandle& next) {
+          return next == handle;
+        }) != current.extensions.end()) {
       continue;
     }
     if (NodeExtension* extension = FindExtension(*runtime_state_.mounted_root_, handle)) {
@@ -2179,7 +2183,9 @@ void detail::PointerInteraction::UpdateHoverRoute(detail::PointerHoverState next
   }
 
   for (const NodeExtensionHandle& handle : current.extensions) {
-    const bool entered = std::ranges::find(previous.extensions, handle) == previous.extensions.end();
+    const bool entered = std::ranges::find_if(previous.extensions, [&](const NodeExtensionHandle& next) {
+                           return next == handle;
+                         }) == previous.extensions.end();
     if (entered || moved) {
       if (NodeExtension* extension = FindExtension(*runtime_state_.mounted_root_, handle)) {
         if (detail::MountedNode* node = FindNode(*runtime_state_.mounted_root_, handle.node_identity)) {
