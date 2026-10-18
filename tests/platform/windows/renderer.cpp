@@ -362,6 +362,53 @@ TEST_CASE("Win32BackdropRendersNestedClipsAndOpacityGroupsAfterDeviceReset") {
   renderer.Discard();
 }
 
+TEST_CASE("Win32BackdropPreservesClippedPrefixAndSharpForegroundPixels", "[backdrop]") {
+  PaintFixture fixture;
+  RenderNode root;
+  PaintContext paint(root.content, {0.0F, 0.0F, 128.0F, 128.0F});
+  paint.DrawRect({0.0F, 0.0F, 64.0F, 128.0F}, Color::Rgb(255, 0, 0));
+  paint.DrawRect({64.0F, 0.0F, 64.0F, 128.0F}, Color::Rgb(0, 0, 255));
+  paint.PushClip({24.0F, 24.0F, 80.0F, 80.0F}, 8.0F);
+  paint.DrawBackdrop({16.0F, 16.0F, 96.0F, 96.0F}, {.blur_radius = 6.0F});
+  paint.PopClip();
+  paint.DrawRect({56.0F, 56.0F, 16.0F, 16.0F}, Color::Rgb(0, 255, 0));
+  paint.Finish();
+  const auto pixels = fixture.Draw(root);
+  REQUIRE(pixels[16 * 128 + 63] == 0xFFFF0000U);
+  REQUIRE(pixels[64 * 128 + 110] == 0xFF0000FFU);
+  REQUIRE(pixels[64 * 128 + 64] == 0xFF00FF00U);
+  const auto blurred = pixels[40 * 128 + 63];
+  REQUIRE(((blurred >> 16U) & 255U) > 0);
+  REQUIRE((blurred & 255U) > 0);
+  fixture.renderer.ResetDeviceResources();
+  REQUIRE(fixture.Draw(root) == pixels);
+}
+
+TEST_CASE("Win32BackdropOpacityGroupSamplesItsTransparentPrefix", "[backdrop]") {
+  PaintFixture fixture;
+  RenderNode root;
+  PaintContext background(root.content, {0.0F, 0.0F, 128.0F, 128.0F});
+  background.DrawRect({0.0F, 0.0F, 128.0F, 128.0F}, Color::Rgb(255, 0, 0));
+  background.Finish();
+  RenderNode group;
+  group.opacity = 0.5F;
+  PaintContext paint(group.content, {0.0F, 0.0F, 128.0F, 128.0F});
+  paint.DrawBackdrop({0.0F, 0.0F, 128.0F, 128.0F}, {.blur_radius = 6.0F, .brightness = 0.0F});
+  paint.DrawRect({24.0F, 24.0F, 32.0F, 32.0F}, Color::Rgb(0, 255, 0));
+  paint.Finish();
+  root.children = {&group};
+  const auto pixels = fixture.Draw(root);
+  REQUIRE(pixels[10 * 128 + 10] == 0xFFFF0000U);
+  const auto foreground = pixels[40 * 128 + 40];
+  REQUIRE(((foreground >> 16U) & 255U) >= 127);
+  REQUIRE(((foreground >> 16U) & 255U) <= 128);
+  REQUIRE(((foreground >> 8U) & 255U) >= 127);
+  REQUIRE(((foreground >> 8U) & 255U) <= 128);
+  REQUIRE((foreground & 255U) == 0);
+  fixture.renderer.ResetDeviceResources();
+  REQUIRE(fixture.Draw(root) == pixels);
+}
+
 TEST_CASE("Win32BackdropRejectsOversizedViewportBeforeAllocatingRenderTargets") {
   const auto destroy_window = [](HWND window) { DestroyWindow(window); };
   const std::unique_ptr<std::remove_pointer_t<HWND>, decltype(destroy_window)> window(
