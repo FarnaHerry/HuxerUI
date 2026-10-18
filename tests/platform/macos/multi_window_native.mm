@@ -120,6 +120,8 @@ View NativeMultiWindowRoot() {
           return false;
         }
         window.Close();
+        // Native APIs can service the main queue before the surrounding shared key dispatch returns.
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
         scenario.key_close_returned = record.unmounts == 0;
         return true;
       });

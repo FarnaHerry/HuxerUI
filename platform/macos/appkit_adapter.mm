@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -244,14 +245,7 @@ GestureSettings MacGestureDefaults() noexcept {
 class MacRuntime final : public Runtime, public PlatformClipboard, public PlatformResources {
 public:
   MacRuntime()
-      : Runtime([](std::function<void()> task) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            try {
-              task();
-            } catch (...) {
-            }
-          });
-        }) {
+      : Runtime([this](std::function<void()> task) { PostNativeTask(std::move(task)); }) {
     NSApplication* application = NSApplication.sharedApplication;
     [application setActivationPolicy:NSApplicationActivationPolicyRegular];
     delegate_ = [[HuxerUIApplicationDelegate alloc] init];
@@ -286,6 +280,25 @@ public:
   void RecordWindowFailure(std::exception_ptr failure) noexcept {
     if (!failure_) failure_ = std::move(failure);
     if (IsInitialized()) RequestShutdown();
+  }
+
+  void PostNativeTask(std::function<void()> task) {
+    __weak HuxerUIApplicationDelegate* delegate = delegate_;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      HuxerUIApplicationDelegate* live_delegate = delegate;
+      if (live_delegate != nil && live_delegate->huxeruiApplicationRuntime != nullptr) {
+        live_delegate->huxeruiApplicationRuntime->RunNativeTask(task);
+      }
+    });
+  }
+
+  void BeginNativeInput() noexcept { ++native_input_depth_; }
+
+  void EndNativeInput() {
+    if (--native_input_depth_ != 0) return;
+    auto tasks = std::move(deferred_native_tasks_);
+    deferred_native_tasks_.clear();
+    for (auto& task : tasks) PostNativeTask(std::move(task));
   }
 
   void WindowsActivityChanged(std::optional<bool> active);
@@ -475,6 +488,19 @@ public:
   }
 
 private:
+  void RunNativeTask(std::function<void()> task) noexcept {
+    // AppKit may service the main queue inside a native operation entered from shared input dispatch.
+    if (native_input_depth_ != 0) {
+      deferred_native_tasks_.push_back(std::move(task));
+      return;
+    }
+    try {
+      task();
+    } catch (...) {
+      RecordWindowFailure(std::current_exception());
+    }
+  }
+
   std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options, std::uint32_t ordinal) override;
 
   void OnRuntimeStopped() override {
@@ -502,6 +528,19 @@ private:
   bool stopped_ = false;
   bool termination_pending_ = false;
   std::exception_ptr failure_;
+  std::size_t native_input_depth_ = 0;
+  std::vector<std::function<void()>> deferred_native_tasks_;
+};
+
+class MacNativeInputGuard final {
+public:
+  explicit MacNativeInputGuard(MacRuntime& runtime) : runtime_(runtime) { runtime_.BeginNativeInput(); }
+  ~MacNativeInputGuard() { runtime_.EndNativeInput(); }
+  MacNativeInputGuard(const MacNativeInputGuard&) = delete;
+  MacNativeInputGuard& operator=(const MacNativeInputGuard&) = delete;
+
+private:
+  MacRuntime& runtime_;
 };
 
 /// Owns one AppKit window and its text/rendering state; shared UI state retires before native facilities.
@@ -620,13 +659,15 @@ public:
     closing_ = true;
     // Keep input and native bindings alive until the originating AppKit callback returns.
     __weak HuxerUIWindow* window = window_;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runtime_->PostNativeTask([window] {
       HuxerUIWindow* live_window = window;
       if (live_window != nil && live_window->huxeruiWindow != nullptr) {
         live_window->huxeruiWindow->FinishClose();
       }
     });
   }
+
+  MacRuntime& NativeRuntime() const noexcept { return *runtime_; }
 
   void FinishClose() noexcept {
     try {
@@ -688,6 +729,7 @@ public:
       if (event.type == PointerEventType::Cancel) pointer_cancel_pending_ = true;
       return;
     }
+    MacNativeInputGuard input_guard(*runtime_);
     pointer_dispatching_ = true;
     try {
       HandlePointerEvent(event);
@@ -696,6 +738,17 @@ public:
     } catch (...) {
       pointer_dispatching_ = false;
       runtime_->RecordWindowFailure(std::current_exception());
+    }
+  }
+
+  bool SendKey(const KeyEvent& event) {
+    if (!IsInitialized() || input_blocked_) return true;
+    MacNativeInputGuard input_guard(*runtime_);
+    try {
+      return HandleKeyEvent(event);
+    } catch (...) {
+      runtime_->RecordWindowFailure(std::current_exception());
+      return true;
     }
   }
 
@@ -754,8 +807,7 @@ public:
       }
       break;
     case WindowCommand::Close:
-      performing_close_ = true;
-      [window_ performClose:nil];
+      QueueClose();
       break;
     case WindowCommand::Show:
       [window_ orderFront:nil];
@@ -778,9 +830,7 @@ public:
       return true;
     }
     try {
-      const bool handled = !(command == WindowCommand::Close && performing_close_) &&
-                           IsInitialized() && UiWindow::HandleWindowRequest(command);
-      performing_close_ = false;
+      const bool handled = IsInitialized() && UiWindow::HandleWindowRequest(command);
       if (handled) return false;
       if (command == WindowCommand::Close) {
         QueueClose();
@@ -943,7 +993,8 @@ public:
   }
 
   bool HandleTextInputEvent(NSEvent* event) {
-    return text_input_ && text_input_->HandleEvent(event);
+    MacNativeInputGuard input_guard(*runtime_);
+    return !input_blocked_ && text_input_ && text_input_->HandleEvent(event);
   }
 
   void ApplicationActiveChanged(bool active) {
@@ -1138,7 +1189,6 @@ private:
   std::optional<double> scheduled_frame_deadline_;
   const RenderFrame* committed_frame_ = nullptr;
   bool performing_minimize_ = false;
-  bool performing_close_ = false;
   bool input_blocked_ = false;
   bool primary_ = false;
   bool closing_ = false;
@@ -1188,7 +1238,11 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 @implementation HuxerUIWindow
 
 - (void)sendEvent:(NSEvent*)event {
-  if (huxeruiWindow != nullptr && huxeruiWindow->IsInputBlocked()) return;
+  std::optional<huxerui::detail::MacNativeInputGuard> input_guard;
+  if (huxeruiWindow != nullptr) {
+    if (huxeruiWindow->IsInputBlocked()) return;
+    input_guard.emplace(huxeruiWindow->NativeRuntime());
+  }
   if (huxeruiWindow == nullptr || !huxeruiWindow->BeginPlatformViewFocusTraversal(event)) {
     [super sendEvent:event];
     return;
@@ -1484,7 +1538,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     return NO;
   }
   if (huxeruiWindow->IsInputBlocked()) return YES;
-  return huxeruiWindow->HandleKeyEvent(huxerui::detail::MakeMacKeyEvent(event, type));
+  return huxeruiWindow->SendKey(huxerui::detail::MakeMacKeyEvent(event, type));
 }
 
 - (void)mouseDown:(NSEvent*)event {
