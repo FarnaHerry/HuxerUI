@@ -1,6 +1,6 @@
 param(
     [string]$BuildDirectory = 'build/check',
-    [string]$BaselineRef = 'fa04cb45bd1f405e0c6a06073b2be1db539b8661',
+    [string]$BaselineRef = 'c1cce090f7fc59f88c8b7087e7a81e47ae68657a',
     [ValidateRange(1, 30)][int]$Rounds = 5,
     [ValidateRange(1, 10000)][int]$Samples = 160,
     [ValidateRange(0, 10000)][int]$Warmup = 64,
