@@ -1127,6 +1127,11 @@ ScrollView ScrollView::Controller(huxerui::ScrollController controller) && {
   return std::move(*this);
 }
 
+ScrollView ScrollView::FillViewport() && {
+  SetLayoutValue(typeid(detail::ScrollFillViewport), true);
+  return std::move(*this);
+}
+
 VirtualList VirtualList::ScrollAxis(Axis axis) && {
   SetLayoutValue(typeid(detail::ScrollAxisBinding), axis);
   return std::move(*this);

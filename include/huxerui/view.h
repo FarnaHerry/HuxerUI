@@ -1571,6 +1571,11 @@ public:
   ScrollView ScrollAxis(Axis axis) &&;
   /// Connects a stable controller for programmatic scrolling and metric observation.
   ScrollView Controller(huxerui::ScrollController controller) &&;
+  /// Makes the content at least as tall as the viewport along the scroll axis.
+  ///
+  /// Bottom-anchored feeds (chat transcripts, activity streams) combine this with a MainAlign(End)
+  /// content column: short content hugs the viewport end, and overflow scrolls normally.
+  ScrollView FillViewport() &&;
 };
 
 /// Virtualizes a one-dimensional logical item source with fixed, estimated, or measured item extents.
