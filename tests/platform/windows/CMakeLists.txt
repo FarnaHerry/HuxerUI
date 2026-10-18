@@ -50,3 +50,4 @@ target_include_directories(huxerui_windows_tests PRIVATE "${HUXERUI_PROJECT_DIR}
 target_compile_definitions(huxerui_windows_tests PRIVATE
         HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE="${HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE}"
 )
+_huxerui_append_resource_package_input(huxerui_windows_tests "${HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE}")

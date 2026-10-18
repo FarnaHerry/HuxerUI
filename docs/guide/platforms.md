@@ -21,6 +21,30 @@ The shared local-notification API is available on every listed platform.
 Registered Windows applications, configured Android hosts, and the iOS and macOS adapters install native transports; Linux and Web currently report unavailable capabilities and operations.
 See [Local Notifications](../design/local-notifications.md) for authorization, activation, and platform mapping details.
 
+## Native window placement
+
+`WindowOptions::initial_position` requests the initial client-area origin in logical screen coordinates: X increases to the right and Y downwards, with negative coordinates allowed for monitors left of or above the primary display.
+The client origin is the point corresponding to `{0, 0}` in the window's content coordinates; native title bars, borders, and shadows are excluded.
+Windows applies this preference using the native display scale; the window manager may constrain placement.
+Linux/X11 has a placement implementation, but its origin consistency, scaling, and native lifecycle still require separate Linux maintainer validation.
+Wayland, the macOS multi-window preview, and host-managed mobile and Web surfaces use platform placement instead.
+
+```cpp
+const WindowHandle secondary = application.OpenWindow({
+    .title = "Inspector",
+    .initial_size = {400.0F, 300.0F},
+    .initial_position = Point{120.0F, 160.0F},
+});
+const std::optional<Point> origin = secondary.Position();
+```
+
+`WindowHandle::Position()` reads that same client origin synchronously on the application thread.
+It is a snapshot: reading it during composition does not subscribe to window moves or trigger recomposition when the user moves the window.
+It returns `std::nullopt` after retirement and on hosts that do not expose positions, including Wayland and the macOS preview.
+Initial positions must be finite; NaN and infinity throw `std::invalid_argument`, including on hosts that ignore placement.
+On Windows, conversion to native coordinates checks the signed integer range before narrowing and reserves the default-placement sentinel.
+Positions that become unrepresentable after DPI and decoration adjustment throw `std::invalid_argument`; ordinary negative positions remain valid.
+
 ## Android host focus
 
 The native HuxerUI host remains focusable for keyboard and IME input.
@@ -121,6 +145,8 @@ If the producer device is removed, publish a replacement texture from a valid de
 
 The macOS backend requires macOS 12 or later.
 The macOS backend uses AppKit, Core Graphics, Core Text, and `NSTextInputClient`.
+Runtime-created windows, startup `extra_windows`, ownership, modality, and explicit retirement are available as a preview; see [Developing Multi-Window](../development/multi-window.md#macos-preview-validation) for CI coverage and the remaining interactive validation.
+The macOS preview uses AppKit placement and returns `std::nullopt` from `WindowHandle::Position()`; `WindowOptions::initial_position` is not applied.
 Build with Xcode 26 or later and the macOS SDK; release CI uses Xcode 26.2. This toolchain requirement does not raise the macOS 12 deployment target.
 
 Custom chrome extends application content into the title bar while preserving AppKit traffic lights and window behavior.

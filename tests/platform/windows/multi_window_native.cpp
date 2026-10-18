@@ -4,8 +4,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <functional>
+#include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -77,6 +80,14 @@ struct RunnerGuard {
   std::thread runner;
   ~RunnerGuard() {
     if (runner.joinable()) {
+      std::optional<ApplicationHandle> application;
+      UiThreadDispatcher post;
+      {
+        std::lock_guard lock(test_state_mutex);
+        application = captured_application;
+        post = application_dispatch;
+      }
+      if (application && post) post([application = *application] { application.Quit(); });
       const HWND primary = primary_window.load();
       if (primary != nullptr && IsWindow(primary)) {
         PostMessageW(primary, WM_CLOSE, 0, 0);
@@ -148,24 +159,46 @@ TEST_CASE("Win32RuntimeWindowsOpenAndCloseWithoutRetainingHandles", "[.][win32-n
   const DWORD baseline_user = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
 
   for (int cycle = 0; cycle < 2; ++cycle) {
+    INFO("cycle " << cycle);
+    const Point preferred_origin{120.0F + static_cast<float>(cycle) * 40.0F, 160.0F};
+    auto placement = std::make_shared<std::promise<std::optional<Point>>>();
+    auto placement_result = placement->get_future();
     {
       std::lock_guard lock(test_state_mutex);
       const ApplicationHandle application = *captured_application;
-      application_dispatch([application, secondary_title_narrow] {
-        static_cast<void>(application.OpenWindow({
+      application_dispatch([application, secondary_title_narrow, preferred_origin, placement, cycle] {
+        const WindowHandle window = application.OpenWindow({
             .title = secondary_title_narrow,
             .initial_size = {320.0F, 220.0F},
-        }));
+            .initial_position = preferred_origin,
+            .chrome_mode = cycle == 0 ? WindowChromeMode::System : WindowChromeMode::Custom,
+        });
+        placement->set_value(window.Position());
       });
     }
+    REQUIRE(placement_result.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    const auto origin = placement_result.get();
+    REQUIRE(origin.has_value());
+    REQUIRE(std::abs(origin->x - preferred_origin.x) <= 2.0F);
+    REQUIRE(std::abs(origin->y - preferred_origin.y) <= 2.0F);
     PumpUntil([&] { return FindWindowByTitle(secondary_title) != nullptr; }, "the secondary window");
     const HWND secondary = FindWindowByTitle(secondary_title);
+    if (secondary == nullptr) {
+      PumpUntil([] { return runner_finished.load(); }, "creation failure propagation from the native runner");
+      guard.runner.join();
+      if (runner_failure) REQUIRE_NOTHROW(std::rethrow_exception(runner_failure));
+    }
     REQUIRE(secondary != nullptr);
     REQUIRE(IsWindow(secondary));
     REQUIRE(secondary != primary_window.load());
 
     PostMessageW(secondary, WM_CLOSE, 0, 0);
     PumpUntil([&secondary] { return !IsWindow(secondary); }, "secondary window destruction");
+    if (!IsWindow(primary_window.load())) {
+      PumpUntil([] { return runner_finished.load(); }, "failure propagation from the native runner");
+      guard.runner.join();
+      if (runner_failure) REQUIRE_NOTHROW(std::rethrow_exception(runner_failure));
+    }
     REQUIRE(IsWindow(primary_window.load()));
   }
 

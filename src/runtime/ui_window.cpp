@@ -1209,26 +1209,7 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, const WindowOption
   detail::ValidateGestureSettings(gesture_settings);
   const ScrollPhysics scroll_physics = ScrollDefaults();
   detail::ValidateScrollPhysics(scroll_physics);
-  if (!std::isfinite(window_options.initial_size.width) || window_options.initial_size.width <= 0.0F ||
-      !std::isfinite(window_options.initial_size.height) || window_options.initial_size.height <= 0.0F) {
-    throw std::invalid_argument("HuxerUI initial window size must be finite and positive");
-  }
-  if (window_options.minimum_size.has_value() &&
-      (!std::isfinite(window_options.minimum_size->width) || window_options.minimum_size->width <= 0.0F ||
-       !std::isfinite(window_options.minimum_size->height) || window_options.minimum_size->height <= 0.0F)) {
-    throw std::invalid_argument("HuxerUI minimum window size must be finite and positive");
-  }
-  if (window_options.content_mode != WindowContentMode::SafeArea &&
-      window_options.content_mode != WindowContentMode::EdgeToEdge) {
-    throw std::invalid_argument("HuxerUI window content mode is invalid");
-  }
-  if (window_options.chrome_mode != WindowChromeMode::System &&
-      window_options.chrome_mode != WindowChromeMode::Custom) {
-    throw std::invalid_argument("HuxerUI window chrome mode is invalid");
-  }
-  if (!std::isfinite(window_options.title_bar_height) || window_options.title_bar_height <= 0.0F) {
-    throw std::invalid_argument("HuxerUI window title-bar height must be finite and positive");
-  }
+  detail::ValidateWindowOptions(window_options);
   try {
     application_runtime_ = &application_runtime;
     external_texture_frame_requester_ =

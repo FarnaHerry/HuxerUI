@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -18,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <huxerui/app.h>
@@ -135,7 +137,6 @@ NSCursor* MacPointerCursor(huxerui::PointerCursorKind kind) {
 @interface HuxerUIApplicationDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate,
                                                   UNUserNotificationCenterDelegate> {
 @public
-  huxerui::detail::MacUiWindow* huxeruiWindow;
   huxerui::detail::MacRuntime* huxeruiApplicationRuntime;
 }
 - (void)resourceConfigurationDidChange:(NSNotification*)notification;
@@ -244,14 +245,7 @@ GestureSettings MacGestureDefaults() noexcept {
 class MacRuntime final : public Runtime, public PlatformClipboard, public PlatformResources {
 public:
   MacRuntime()
-      : Runtime([](std::function<void()> task) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            try {
-              task();
-            } catch (...) {
-            }
-          });
-        }) {
+      : Runtime([this](std::function<void()> task) { PostNativeTask(std::move(task)); }) {
     NSApplication* application = NSApplication.sharedApplication;
     [application setActivationPolicy:NSApplicationActivationPolicyRegular];
     delegate_ = [[HuxerUIApplicationDelegate alloc] init];
@@ -272,11 +266,44 @@ public:
     [NSNotificationCenter.defaultCenter removeObserver:delegate_];
   }
 
-  /// Borrows the delegate coordinating AppKit callbacks and the original Runtime.
-  /// @return Main-thread delegate retained by this Runtime; callers must not extend its native binding.
-  HuxerUIApplicationDelegate* Delegate() const {
-    return delegate_;
+  int Run(const Application& application) {
+    Start(application);
+    static_cast<void>(OpenWindow(application.options.window));
+    for (const WindowOptions& options : application.options.extra_windows) {
+      static_cast<void>(OpenWindow(options));
+    }
+    [NSApplication.sharedApplication run];
+    if (failure_) std::rethrow_exception(failure_);
+    return 0;
   }
+
+  void RecordWindowFailure(std::exception_ptr failure) noexcept {
+    if (!failure_) failure_ = std::move(failure);
+    if (IsInitialized()) RequestShutdown();
+  }
+
+  void PostNativeTask(std::function<void()> task) {
+    __weak HuxerUIApplicationDelegate* delegate = delegate_;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      HuxerUIApplicationDelegate* live_delegate = delegate;
+      if (live_delegate != nil && live_delegate->huxeruiApplicationRuntime != nullptr) {
+        live_delegate->huxeruiApplicationRuntime->RunNativeTask(task);
+      }
+    });
+  }
+
+  bool IsNativeInputActive() const noexcept { return native_input_depth_ != 0; }
+
+  void BeginNativeInput() noexcept { ++native_input_depth_; }
+
+  void EndNativeInput() {
+    if (--native_input_depth_ != 0) return;
+    auto tasks = std::move(deferred_native_tasks_);
+    deferred_native_tasks_.clear();
+    for (auto& task : tasks) PostNativeTask(std::move(task));
+  }
+
+  void WindowsActivityChanged(std::optional<bool> active);
 
   /// Removes the first pending non-notification activation for startup.
   /// @return That activation, or LaunchActivation when absent; notifications remain queued for later delivery.
@@ -323,13 +350,11 @@ public:
   }
 
   /// Coordinates AppKit termination with asynchronous shared Runtime shutdown.
-  /// @return NSTerminateLater while shutdown is pending, NSTerminateNow when stopped, or Cancel before startup.
+  /// @return Cancel native process termination so RunApplication can return after shared teardown.
   NSApplicationTerminateReply ShouldTerminate() {
-    if (stopped_) return NSTerminateNow;
-    if (!IsInitialized()) return NSTerminateCancel;
-    termination_pending_ = true;
-    Runtime::RequestShutdown();
-    return NSTerminateLater;
+    if (IsInitialized() && !stopped_) Runtime::RequestShutdown();
+    // NSTerminateLater enters a modal loop that can starve shutdown queued from a main-queue callback.
+    return NSTerminateCancel;
   }
   void OpenURLs(NSArray* urls) noexcept {
     try {
@@ -463,19 +488,54 @@ public:
   }
 
 private:
+  void RunNativeTask(std::function<void()> task) noexcept {
+    // AppKit may service the main queue inside a native operation entered from shared input dispatch.
+    if (native_input_depth_ != 0) {
+      deferred_native_tasks_.push_back(std::move(task));
+      return;
+    }
+    try {
+      task();
+    } catch (...) {
+      RecordWindowFailure(std::current_exception());
+    }
+  }
+
+  std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options, std::uint32_t ordinal) override;
+
   void OnRuntimeStopped() override {
     stopped_ = true;
-    if (termination_pending_) {
-      [NSApplication.sharedApplication replyToApplicationShouldTerminate:YES];
-    } else {
-      [NSApplication.sharedApplication terminate:nil];
-    }
+    NSApplication* application = NSApplication.sharedApplication;
+    [application stop:nil];
+    [application postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                           location:NSZeroPoint
+                                      modifierFlags:0
+                                          timestamp:0
+                                       windowNumber:0
+                                            context:nil
+                                            subtype:0
+                                              data1:0
+                                              data2:0]
+                    atStart:NO];
   }
 
   __strong HuxerUIApplicationDelegate* delegate_ = nil;
   std::vector<ApplicationActivation> pending_activations_;
   bool stopped_ = false;
-  bool termination_pending_ = false;
+  std::exception_ptr failure_;
+  std::size_t native_input_depth_ = 0;
+  std::vector<std::function<void()>> deferred_native_tasks_;
+};
+
+class MacNativeInputGuard final {
+public:
+  explicit MacNativeInputGuard(MacRuntime& runtime) : runtime_(runtime) { runtime_.BeginNativeInput(); }
+  ~MacNativeInputGuard() { runtime_.EndNativeInput(); }
+  MacNativeInputGuard(const MacNativeInputGuard&) = delete;
+  MacNativeInputGuard& operator=(const MacNativeInputGuard&) = delete;
+
+private:
+  MacRuntime& runtime_;
 };
 
 /// Owns one AppKit window and its text/rendering state; shared UI state retires before native facilities.
@@ -483,11 +543,12 @@ class MacUiWindow final : public UiWindow {
 public:
   ~MacUiWindow() override { Shutdown(); }
 
-  int Run(MacRuntime& application_runtime, const WindowOptions& options) {
+  void Attach(MacRuntime& application_runtime, const WindowOptions& options, std::uint32_t ordinal) {
     @autoreleasepool {
       NSApplication* application = [NSApplication sharedApplication];
-      delegate_ = application_runtime.Delegate();
-      delegate_->huxeruiWindow = this;
+      runtime_ = &application_runtime;
+      primary_ = ordinal == 0;
+      renderer_ = std::make_unique<AppKitRenderer>();
       const Size initial_size = ResolveInitialWindowSize(options);
       const NSRect frame = NSMakeRect(0.0, 0.0, initial_size.width, initial_size.height);
       custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
@@ -501,13 +562,15 @@ public:
                                                  styleMask:style
                                                    backing:NSBackingStoreBuffered
                                                      defer:NO];
+      if (window_ == nil) throw std::runtime_error("HuxerUI could not create an AppKit window");
       window_->huxeruiWindow = this;
+      window_.releasedWhenClosed = NO;
       if (options.minimum_size.has_value()) {
         window_.contentMinSize = NSMakeSize(options.minimum_size->width, options.minimum_size->height);
       }
       window_.title = [NSString stringWithUTF8String:options.title.c_str()];
       window_.acceptsMouseMovedEvents = YES;
-      window_.delegate = delegate_;
+      window_.delegate = static_cast<id<NSWindowDelegate>>(application.delegate);
       if (custom_chrome_) {
         window_.titleVisibility = NSWindowTitleHidden;
         window_.titlebarAppearsTransparent = YES;
@@ -521,17 +584,17 @@ public:
       window_.contentView = view_;
       auto configuration = application_runtime.Configuration();
       if (window_.screen != nil) configuration.display_scale = static_cast<float>(window_.screen.backingScaleFactor);
-      InitializeWindow(application_runtime, options, 0, configuration);
+      text_input_ = std::make_unique<MacTextInput>(*this, view_);
+      frame_scheduler_ = [[HuxerUIFrameScheduler alloc] initWithView:view_];
+      InitializeWindow(application_runtime, options, ordinal, configuration);
       view_->huxeruiWindow = this;
       [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
       [NSNotificationCenter.defaultCenter addObserver:view_
                                              selector:@selector(resourceConfigurationDidChange:)
                                                  name:NSCurrentLocaleDidChangeNotification
                                                object:nil];
-      text_input_ = std::make_unique<MacTextInput>(*this, view_);
-      platform_views_ = std::make_unique<AppKitPlatformViews>(renderer_, PlatformRegistry(), *this, window_);
+      platform_views_ = std::make_unique<AppKitPlatformViews>(*renderer_, PlatformRegistry(), *this, window_);
       accessibility_ = std::make_unique<MacAccessibility>(*this, view_, *platform_views_);
-      frame_scheduler_ = [[HuxerUIFrameScheduler alloc] initWithView:view_];
       [window_ center];
       [window_ makeKeyAndOrderFront:nil];
       [window_ makeFirstResponder:view_];
@@ -544,24 +607,20 @@ public:
           static_cast<float>(view_.bounds.size.height),
       });
       RequestFrameAt(Now());
-      [application run];
-      Shutdown();
-      if (failure_) {
-        std::rethrow_exception(failure_);
-      }
     }
-    return 0;
   }
 
   void Shutdown() noexcept {
+    closing_ = true;
     Retire();
-    [NSNotificationCenter.defaultCenter removeObserver:view_ name:NSCurrentLocaleDidChangeNotification object:nil];
+    if (view_ != nil) {
+      [NSNotificationCenter.defaultCenter removeObserver:view_ name:NSCurrentLocaleDidChangeNotification object:nil];
+    }
     [view_ unregisterDraggedTypes];
     [view_ draggingExited:nil];
     if (view_ != nil) {
       view_->huxeruiWindow = nullptr;
     }
-    if (delegate_ != nil) delegate_->huxeruiWindow = nullptr;
     if (window_ != nil) window_->huxeruiWindow = nullptr;
     [frame_scheduler_ shutdown];
     frame_scheduler_ = nil;
@@ -571,6 +630,50 @@ public:
     if (platform_views_) platform_views_->Shutdown();
     platform_views_.reset();
     text_input_.reset();
+    renderer_.reset();
+    if (window_.parentWindow != nil) [window_.parentWindow removeChildWindow:window_];
+    window_.delegate = nil;
+    [window_ orderOut:nil];
+    if (!native_closed_) [window_ close];
+    window_.contentView = nil;
+    view_ = nil;
+    window_ = nil;
+  }
+
+  bool CanDiscardHost() const override { return true; }
+
+  void DiscardHost() override { Shutdown(); }
+
+  void NativeWindowClosed() noexcept {
+    native_closed_ = true;
+    QueueClose();
+  }
+
+  void QueueClose() noexcept {
+    if (closing_ || !IsInitialized()) return;
+    closing_ = true;
+    // Keep input and native bindings alive until the originating AppKit callback returns.
+    __weak HuxerUIWindow* window = window_;
+    runtime_->PostNativeTask([window] {
+      HuxerUIWindow* live_window = window;
+      if (live_window != nil && live_window->huxeruiWindow != nullptr) {
+        live_window->huxeruiWindow->FinishClose();
+      }
+    });
+  }
+
+  MacRuntime& NativeRuntime() const noexcept { return *runtime_; }
+
+  void FinishClose() noexcept {
+    try {
+      if (primary_) runtime_->RequestShutdown();
+      else {
+        runtime_->RetireOwned(*this);
+        Shutdown();
+      }
+    } catch (...) {
+      runtime_->RecordWindowFailure(std::current_exception());
+    }
   }
 
   NSWindow* Window() const noexcept {
@@ -597,7 +700,51 @@ public:
 
   void ApplyWindowModalState(bool modal, bool blocked) override {
     static_cast<void>(modal);
+    if (input_blocked_ == blocked) return;
     input_blocked_ = blocked;
+    window_.ignoresMouseEvents = blocked;
+    if (blocked) {
+      if (pointer_dispatching_) {
+        pointer_cancel_pending_ = true;
+      } else {
+        [view_ cancelPointer];
+      }
+      view_->huxeruiModifierKeys = 0;
+      if (text_input_) text_input_->ApplicationActiveChanged(false);
+      [window_ resignKeyWindow];
+      [window_ resignMainWindow];
+    } else if (text_input_) {
+      text_input_->ApplicationActiveChanged(NSApplication.sharedApplication.active && window_.keyWindow);
+    }
+  }
+
+  void SendPointer(const PointerEvent& event) noexcept {
+    if (!IsInitialized() || (input_blocked_ && event.type != PointerEventType::Cancel)) return;
+    if (pointer_dispatching_) {
+      if (event.type == PointerEventType::Cancel) pointer_cancel_pending_ = true;
+      return;
+    }
+    MacNativeInputGuard input_guard(*runtime_);
+    pointer_dispatching_ = true;
+    try {
+      HandlePointerEvent(event);
+      pointer_dispatching_ = false;
+      if (std::exchange(pointer_cancel_pending_, false)) [view_ cancelPointer];
+    } catch (...) {
+      pointer_dispatching_ = false;
+      runtime_->RecordWindowFailure(std::current_exception());
+    }
+  }
+
+  bool SendKey(const KeyEvent& event) {
+    if (!IsInitialized() || input_blocked_) return true;
+    MacNativeInputGuard input_guard(*runtime_);
+    try {
+      return HandleKeyEvent(event);
+    } catch (...) {
+      runtime_->RecordWindowFailure(std::current_exception());
+      return true;
+    }
   }
 
   void RequestFrameAt(double deadline) override {
@@ -623,7 +770,7 @@ public:
   }
 
   void RequestWindowCommand(WindowCommand command) override {
-    if (window_ == nil) {
+    if (window_ == nil || closing_) {
       return;
     }
     switch (command) {
@@ -655,8 +802,7 @@ public:
       }
       break;
     case WindowCommand::Close:
-      performing_close_ = true;
-      [window_ performClose:nil];
+      QueueClose();
       break;
     case WindowCommand::Show:
       [window_ orderFront:nil];
@@ -679,26 +825,21 @@ public:
       return true;
     }
     try {
-      const bool handled = !(command == WindowCommand::Close && performing_close_) &&
-                           IsInitialized() && UiWindow::HandleWindowRequest(command);
-      performing_close_ = false;
+      const bool handled = IsInitialized() && UiWindow::HandleWindowRequest(command);
       if (handled) return false;
       if (command == WindowCommand::Close) {
-        ApplicationRuntime().RequestShutdown();
+        QueueClose();
         return false;
       }
       return true;
     } catch (...) {
-      if (!failure_) {
-        failure_ = std::current_exception();
-      }
-      [[NSApplication sharedApplication] terminate:nil];
+      runtime_->RecordWindowFailure(std::current_exception());
       return false;
     }
   }
 
   bool BeginWindowDrag(NSEvent* event) {
-    if (!custom_chrome_ || !IsInitialized() || view_ == nil || window_ == nil || event == nil) {
+    if (input_blocked_ || !custom_chrome_ || !IsInitialized() || view_ == nil || window_ == nil || event == nil) {
       return false;
     }
     const NSPoint point = [view_ convertPoint:event.locationInWindow fromView:nil];
@@ -729,7 +870,20 @@ public:
     InvalidateTextInputGeometry();
   }
 
-  void CommitFrameAndInvalidate() {
+  void CommitFrameAndInvalidate() noexcept {
+    if (runtime_->IsNativeInputActive()) {
+      __weak HuxerUIView* view = view_;
+      runtime_->PostNativeTask([view] { [view commitHuxerUIFrame]; });
+      return;
+    }
+    try {
+      CommitFrame();
+    } catch (...) {
+      runtime_->RecordWindowFailure(std::current_exception());
+    }
+  }
+
+  void CommitFrame() {
     scheduled_frame_deadline_.reset();
     if (!IsInitialized() || !frame_state_.BeginCommit()) {
       return;
@@ -808,22 +962,22 @@ public:
   }
 
   FontMetrics Metrics(const Font& font) override {
-    return renderer_.Metrics(font);
+    return renderer_->Metrics(font);
   }
 
   TextRunMetrics
   MeasureRun(std::string_view text, const TextStyle& style, const TextShapingOptions& options = {}) override {
-    return renderer_.MeasureRun(text, style, options);
+    return renderer_->MeasureRun(text, style, options);
   }
 
   TextLayoutMetrics MeasureText(const huxerui::AttributedText& text, const TextStyle& style, float max_width,
       const TextLayoutOptions& options = {}) override {
-    return renderer_.MeasureText(text, style, max_width, options);
+    return renderer_->MeasureText(text, style, max_width, options);
   }
 
   std::unique_ptr<TextLayout> CreateTextLayout(const huxerui::AttributedText& text, const TextStyle& style,
       float max_width, const TextLayoutOptions& options = {}) override {
-    return renderer_.CreateTextLayout(text, style, max_width, options);
+    return renderer_->CreateTextLayout(text, style, max_width, options);
   }
 
   PlatformTextInput* TextInput() noexcept override {
@@ -839,13 +993,14 @@ public:
   }
 
   bool HandleTextInputEvent(NSEvent* event) {
-    return text_input_ && text_input_->HandleEvent(event);
+    MacNativeInputGuard input_guard(*runtime_);
+    return !input_blocked_ && text_input_ && text_input_->HandleEvent(event);
   }
 
   void ApplicationActiveChanged(bool active) {
     UpdateWindowLifecycleState();
     if (text_input_) {
-      text_input_->ApplicationActiveChanged(active);
+      text_input_->ApplicationActiveChanged(active && window_.keyWindow && !input_blocked_);
     }
   }
 
@@ -857,6 +1012,9 @@ public:
         : window_.keyWindow && NSApplication.sharedApplication.active
             ? WindowLifecycleState::Active : WindowLifecycleState::Inactive;
     UiWindow::UpdateWindowLifecycleState(state);
+    if (text_input_) {
+      text_input_->ApplicationActiveChanged(state == WindowLifecycleState::Active && !input_blocked_);
+    }
   }
 
   void InvalidateTextInputGeometry() {
@@ -1018,12 +1176,11 @@ private:
     return invalidated;
   }
 
-  AppKitRenderer renderer_;
+  std::unique_ptr<AppKitRenderer> renderer_;
   bool custom_chrome_ = false;
   float custom_title_bar_height_ = 0.0F;
   __strong HuxerUIWindow* window_ = nil;
   __strong HuxerUIView* view_ = nil;
-  __strong HuxerUIApplicationDelegate* delegate_ = nil;
   __strong HuxerUIFrameScheduler* frame_scheduler_ = nil;
   std::unique_ptr<MacTextInput> text_input_;
   std::unique_ptr<MacAccessibility> accessibility_;
@@ -1032,17 +1189,35 @@ private:
   std::optional<double> scheduled_frame_deadline_;
   const RenderFrame* committed_frame_ = nullptr;
   bool performing_minimize_ = false;
-  bool performing_close_ = false;
   bool input_blocked_ = false;
-  std::exception_ptr failure_;
+  bool primary_ = false;
+  bool closing_ = false;
+  bool native_closed_ = false;
+  bool pointer_dispatching_ = false;
+  bool pointer_cancel_pending_ = false;
+  MacRuntime* runtime_ = nullptr;
 };
+
+std::unique_ptr<UiWindow> MacRuntime::CreateNativeWindow(const WindowOptions& options, std::uint32_t ordinal) {
+  auto window = std::make_unique<MacUiWindow>();
+  window->Attach(*this, options, ordinal);
+  return window;
+}
+
+void MacRuntime::WindowsActivityChanged(std::optional<bool> active) {
+  for (NSWindow* window in NSApplication.sharedApplication.windows) {
+    if (![window isKindOfClass:HuxerUIWindow.class]) continue;
+    MacUiWindow* ui = static_cast<HuxerUIWindow*>(window)->huxeruiWindow;
+    if (ui == nullptr) continue;
+    if (active.has_value()) ui->ApplicationActiveChanged(*active);
+    else ui->UpdateWindowLifecycleState();
+  }
+}
 
 int RunPlatformApplication(const Application& application) {
   @autoreleasepool {
     MacRuntime runtime;
-    runtime.Start(application);
-    MacUiWindow window;
-    return window.Run(runtime, application.options.window);
+    return runtime.Run(application);
   }
 }
 
@@ -1063,6 +1238,11 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 @implementation HuxerUIWindow
 
 - (void)sendEvent:(NSEvent*)event {
+  std::optional<huxerui::detail::MacNativeInputGuard> input_guard;
+  if (huxeruiWindow != nullptr) {
+    if (huxeruiWindow->IsInputBlocked()) return;
+    input_guard.emplace(huxeruiWindow->NativeRuntime());
+  }
   if (huxeruiWindow == nullptr || !huxeruiWindow->BeginPlatformViewFocusTraversal(event)) {
     [super sendEvent:event];
     return;
@@ -1070,7 +1250,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   @try {
     [super sendEvent:event];
   } @finally {
-    huxeruiWindow->EndPlatformViewFocusTraversal();
+    if (huxeruiWindow != nullptr) huxeruiWindow->EndPlatformViewFocusTraversal();
   }
 }
 
@@ -1079,13 +1259,18 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKeyWindow];
 }
 
+- (BOOL)canBecomeMainWindow {
+  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeMainWindow];
+}
+
 @end
 
 @implementation HuxerUIView
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
   [self draggingExited:nil];
-  if (huxeruiWindow == nullptr || !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() ||
+      !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     return NSDragOperationNone;
   }
   const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
@@ -1103,7 +1288,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
-  if (!(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() ||
+      !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     [self draggingExited:nil];
     return NSDragOperationNone;
   }
@@ -1133,7 +1319,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-  if (huxeruiWindow == nullptr || !huxeruiFileDropHover ||
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() || !huxeruiFileDropHover ||
       !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     [self draggingExited:nil];
     return NO;
@@ -1309,7 +1495,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
   const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
   huxeruiPointerPosition = point;
-  huxeruiWindow->HandlePointerEvent({
+  huxeruiWindow->SendPointer({
       type,
       0,
       {
@@ -1334,7 +1520,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   if (huxeruiWindow == nullptr) {
     return;
   }
-  huxeruiWindow->HandlePointerEvent({
+  huxeruiWindow->SendPointer({
       huxerui::PointerEventType::Cancel,
       0,
       {
@@ -1351,7 +1537,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   if (huxeruiWindow == nullptr) {
     return NO;
   }
-  return huxeruiWindow->HandleKeyEvent(huxerui::detail::MakeMacKeyEvent(event, type));
+  if (huxeruiWindow->IsInputBlocked()) return YES;
+  return huxeruiWindow->SendKey(huxerui::detail::MakeMacKeyEvent(event, type));
 }
 
 - (void)mouseDown:(NSEvent*)event {
@@ -1406,6 +1593,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)keyDown:(NSEvent*)event {
+  if (huxeruiWindow != nullptr && huxeruiWindow->IsInputBlocked()) return;
   if (huxeruiWindow != nullptr && huxeruiWindow->IsTextInputActive()) {
     if (!huxeruiWindow->HandleTextInputEvent(event)) {
       [super keyDown:event];
@@ -1504,7 +1692,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)scrollWheel:(NSEvent*)event {
-  if (huxeruiWindow == nullptr) {
+  if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked()) {
     return;
   }
 
@@ -1570,12 +1758,12 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (BOOL)windowShouldClose:(NSWindow*)sender {
-  static_cast<void>(sender);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(sender)->huxeruiWindow;
   return huxeruiWindow == nullptr || huxeruiWindow->AllowWindowRequest(huxerui::WindowCommand::Close);
 }
 
 - (BOOL)windowShouldMiniaturize:(NSWindow*)sender {
-  static_cast<void>(sender);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(sender)->huxeruiWindow;
   return huxeruiWindow == nullptr || huxeruiWindow->AllowWindowRequest(huxerui::WindowCommand::Minimize);
 }
 
@@ -1588,59 +1776,59 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 - (void)applicationDidBecomeActive:(NSNotification*)notification {
   static_cast<void>(notification);
-  if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
-  if (huxeruiWindow != nullptr) {
-    huxeruiWindow->ApplicationActiveChanged(true);
+  if (huxeruiApplicationRuntime != nullptr) {
+    huxeruiApplicationRuntime->UpdateLifecycleState();
+    huxeruiApplicationRuntime->WindowsActivityChanged(true);
   }
 }
 
 - (void)applicationDidResignActive:(NSNotification*)notification {
   static_cast<void>(notification);
-  if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
-  if (huxeruiWindow != nullptr) {
-    huxeruiWindow->ApplicationActiveChanged(false);
+  if (huxeruiApplicationRuntime != nullptr) {
+    huxeruiApplicationRuntime->UpdateLifecycleState();
+    huxeruiApplicationRuntime->WindowsActivityChanged(false);
   }
 }
 
 - (void)applicationDidHide:(NSNotification*)notification {
   static_cast<void>(notification);
-  if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
-  if (huxeruiWindow != nullptr) {
-    huxeruiWindow->UpdateWindowLifecycleState();
+  if (huxeruiApplicationRuntime != nullptr) {
+    huxeruiApplicationRuntime->UpdateLifecycleState();
+    huxeruiApplicationRuntime->WindowsActivityChanged(std::nullopt);
   }
 }
 
 - (void)applicationDidUnhide:(NSNotification*)notification {
   static_cast<void>(notification);
-  if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
-  if (huxeruiWindow != nullptr) {
-    huxeruiWindow->UpdateWindowLifecycleState();
+  if (huxeruiApplicationRuntime != nullptr) {
+    huxeruiApplicationRuntime->UpdateLifecycleState();
+    huxeruiApplicationRuntime->WindowsActivityChanged(std::nullopt);
   }
 }
 
 - (void)windowDidMove:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->InvalidateTextInputGeometry();
   }
 }
 
 - (void)windowDidUpdate:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->SynchronizePlatformViewFocus();
   }
 }
 
 - (void)windowDidResize:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->WindowGeometryChanged();
   }
 }
 
 - (void)windowDidChangeScreen:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->UpdateResourceConfiguration();
     huxeruiWindow->WindowGeometryChanged();
@@ -1648,14 +1836,14 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)windowDidEnterFullScreen:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->WindowGeometryChanged();
   }
 }
 
 - (void)windowDidExitFullScreen:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->WindowGeometryChanged();
   }
@@ -1672,27 +1860,32 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)windowDidBecomeKey:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidResignKey:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidMiniaturize:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidDeminiaturize:(NSNotification*)notification {
-  static_cast<void>(notification);
+  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
+- (void)windowWillClose:(NSNotification*)notification {
+  auto* window = static_cast<HuxerUIWindow*>(notification.object);
+  if (window->huxeruiWindow != nullptr) window->huxeruiWindow->NativeWindowClosed();
+}
+
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
   static_cast<void>(sender);
-  return YES;
+  return NO;
 }
 
 @end

@@ -87,6 +87,7 @@ huxerui-build-rules       = { path = "mcpp/huxerui-build-rules", host-module = t
 # Sources mirror cmake/platform/Linux.cmake.
 [target.'cfg(linux)'.build]
 sources = ["platform/linux/*.cpp"]
+defines = ["HUXERUI_LINUX_X11=1"]
 
 # THE GTK STACK COMES FROM XLINGS, NOT FROM THE MACHINE.
 #

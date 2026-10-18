@@ -1,6 +1,7 @@
 #include "runtime_test_support.h"
 
 #include <optional>
+#include <limits>
 #include <string>
 #include <thread>
 
@@ -169,6 +170,11 @@ TEST_CASE("RuntimeOpenWindowValidatesPhaseThreadAndOptions") {
   RuntimeLifetime lifetime(application, owner);
   static_cast<void>(owner.OpenWindow(application.options.window));
   REQUIRE_THROWS_AS(owner.OpenWindow({.initial_size = {0.0F, 0.0F}}), std::invalid_argument);
+  REQUIRE_THROWS_AS(owner.OpenWindow({.initial_position = Point{std::numeric_limits<float>::infinity(), 0.0F}}),
+                    std::invalid_argument);
+  REQUIRE_THROWS_AS(owner.OpenWindow({.initial_position = Point{0.0F, std::numeric_limits<float>::quiet_NaN()}}),
+                    std::invalid_argument);
+  REQUIRE_NOTHROW(owner.OpenWindow({.initial_position = Point{-320.0F, -200.0F}}));
 
   std::exception_ptr thread_failure;
   std::thread worker([&owner, &thread_failure] {

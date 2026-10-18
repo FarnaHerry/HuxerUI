@@ -1,0 +1,85 @@
+name: macOS Multi-Window Preview
+
+on:
+  push:
+    branches: ['farna/main']
+  pull_request:
+    branches: ['farna/main']
+    paths:
+      - 'platform/macos/**'
+      - 'tests/platform/macos/**'
+      - 'src/application/**'
+      - 'src/runtime/**'
+      - 'include/huxerui/**'
+      - 'cmake/**'
+      - '.github/workflows/macos-multi-window.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-multi-window-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  appkit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            linkage: static
+          - runner: macos-15-intel
+            linkage: shared
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - name: Show Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun clang++ --version
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DHUXERUI_BUILD_STATIC=${{ matrix.linkage == 'static' && 'ON' || 'OFF' }} \
+            -DHUXERUI_BUILD_SHARED=${{ matrix.linkage == 'shared' && 'ON' || 'OFF' }} \
+            -DHUXERUI_BUILD_EXAMPLES=ON -DHUXERUI_BUILD_TESTS=ON \
+            -DHUXERUI_BUILD_TESTING_LIBRARY=ON -DHUXERUI_BUILD_CLI=OFF
+      - name: Build native lifecycle bundle
+        run: cmake --build build --parallel 3 --target huxerui_macos_native_tests
+      - name: Native multi-window lifecycle
+        run: ctest --test-dir build --output-on-failure -R '^HuxerUIMacOSNative'
+      - name: Diagnose native failure
+        if: failure()
+        run: |
+          lldb --batch -o run -k 'thread backtrace all' -k 'register read' -- \
+            build/bin/huxerui_macos_native_tests.app/Contents/MacOS/huxerui_macos_native_tests \
+            'MacNativeWindowCloseWaitsForKeyDispatchToReturn'
+      - name: Build framework, suites, examples, and standalone headers
+        run: |
+          cmake --build build --parallel 3 --target \
+            huxerui_unit_tests huxerui_runtime_tests huxerui_ui_tests huxerui_library_tests \
+            huxerui_codegen_tests huxerui_codegen_runtime_tests huxerui_macos_tests \
+            huxerui_header_checks huxerui_macos_header_checks \
+            example_multi_window example_window_relationship
+      - name: Common and codegen suites
+        run: |
+          ctest --test-dir build --output-on-failure -L common
+          ctest --test-dir build --output-on-failure -R '^HuxerUICodegen(Tests|RuntimeTests)$'
+      - name: AppKit platform suites
+        run: ctest --test-dir build --output-on-failure -R '^HuxerUIMacOSTests$'
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-multi-window-${{ matrix.runner }}-${{ matrix.linkage }}
+          path: |
+            build/Testing/Temporary/
+            build/bin/huxerui_macos_native_tests.app/
+            build/bin/huxerui_macos_native_tests.app.dSYM/
+            ~/Library/Logs/DiagnosticReports/huxerui_macos_native_tests*
