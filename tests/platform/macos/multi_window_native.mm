@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #include <catch2/catch_amalgamated.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -193,7 +194,21 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
     record.handle->Show();
     record.handle->Close();
   }
-  for (const auto& watch : scenario.watches) REQUIRE(watch->Released());
+  // AppKit and main-queue blocks release their final autoreleased references on a later native turn.
+  const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  bool released = false;
+  do {
+    @autoreleasepool {
+      [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                            beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+      released = std::all_of(scenario.watches.begin(), scenario.watches.end(),
+                             [](const auto& watch) { return watch->Released(); });
+    }
+  } while (!released && std::chrono::steady_clock::now() < release_deadline);
+  for (std::size_t index = 0; index != scenario.watches.size(); ++index) {
+    INFO(index);
+    REQUIRE(scenario.watches[index]->Released());
+  }
 }
 
 } // namespace
@@ -256,10 +271,12 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
       {
         const NSUInteger baseline = NSApplication.sharedApplication.windows.count;
         bool rejected = false;
-        try {
-          static_cast<void>(scenario.application->OpenWindow({.title = "Invalid", .title_bar_height = -1.0F}));
-        } catch (const std::invalid_argument&) {
-          rejected = true;
+        @autoreleasepool {
+          try {
+            static_cast<void>(scenario.application->OpenWindow({.title = "Invalid", .title_bar_height = -1.0F}));
+          } catch (const std::invalid_argument&) {
+            rejected = true;
+          }
         }
         scenario.Check(rejected, "Invalid window options were accepted");
         scenario.Check(NSApplication.sharedApplication.windows.count == baseline,
