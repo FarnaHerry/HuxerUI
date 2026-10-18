@@ -132,7 +132,7 @@ int main() {
 
     // Version floors match cmake/platform/Linux.cmake.
     for (std::string_view m : { "gtk4 >= 4.14", "epoxy >= 1.5",
-                                "gio-2.0", "libsoup-3.0 >= 3.0" }) {
+                                "gio-2.0", "libsoup-3.0 >= 3.0", "x11" }) {
         if (!probe(m, libdir)) return 1;
     }
     return 0;
