@@ -50,9 +50,76 @@ function(_huxerui_configure_ios_app_core target_name)
                 "${HUXERUI_IOS_LINK_ARGUMENT}\n"
         )
     endforeach ()
+    # iOS 的 app 目标编译为静态库：它自己的 PRIVATE 链接依赖（应用引入的
+    # 三方静态库与平台 flag）只记录在目标的 LINK_LIBRARIES 里，Xcode 侧
+    # 拿不到，必须一并写进 link.rsp，否则宿主链接时全部符号未定义。
+    # 有产物的目标写成带引号的 $<TARGET_FILE:>，由 file(GENERATE) 求值；
+    # INTERFACE 目标没有产物、只承载 usage requirements，跳过；其余条目
+    # （flag、条件 genex）原样透传给 file(GENERATE) 按平台求值。
+    set(HUXERUI_IOS_APP_LINK_QUEUE "${target_name}")
+    set(HUXERUI_IOS_APP_LINK_VISITED "")
+    set(HUXERUI_IOS_APP_LINK_ENTRIES "")
+    while (HUXERUI_IOS_APP_LINK_QUEUE)
+        list(GET HUXERUI_IOS_APP_LINK_QUEUE 0 HUXERUI_IOS_LINK_SOURCE)
+        list(REMOVE_AT HUXERUI_IOS_APP_LINK_QUEUE 0)
+        list(APPEND HUXERUI_IOS_APP_LINK_VISITED "${HUXERUI_IOS_LINK_SOURCE}")
+        set(HUXERUI_IOS_SOURCE_ITEMS "")
+        foreach (HUXERUI_IOS_LINK_PROPERTY LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(HUXERUI_IOS_SOURCE_PROPERTY
+                    "${HUXERUI_IOS_LINK_SOURCE}" "${HUXERUI_IOS_LINK_PROPERTY}"
+            )
+            if (HUXERUI_IOS_SOURCE_PROPERTY
+                    AND NOT HUXERUI_IOS_SOURCE_PROPERTY MATCHES "-NOTFOUND$")
+                list(APPEND HUXERUI_IOS_SOURCE_ITEMS ${HUXERUI_IOS_SOURCE_PROPERTY})
+            endif ()
+        endforeach ()
+        foreach (HUXERUI_IOS_LINK_ITEM IN LISTS HUXERUI_IOS_SOURCE_ITEMS)
+            if (HUXERUI_IOS_LINK_ITEM MATCHES "^\\$<LINK_ONLY:(.+)>$")
+                set(HUXERUI_IOS_LINK_ITEM "${CMAKE_MATCH_1}")
+            endif ()
+            if (HUXERUI_IOS_LINK_ITEM MATCHES "^(\\$|-|/)")
+                list(APPEND HUXERUI_IOS_APP_LINK_ENTRIES "${HUXERUI_IOS_LINK_ITEM}")
+            elseif (TARGET "${HUXERUI_IOS_LINK_ITEM}")
+                get_target_property(HUXERUI_IOS_ITEM_TYPE
+                        "${HUXERUI_IOS_LINK_ITEM}" TYPE
+                )
+                set(HUXERUI_IOS_ITEM_NAME "${HUXERUI_IOS_LINK_ITEM}")
+                if (NOT HUXERUI_IOS_ITEM_TYPE OR HUXERUI_IOS_ITEM_TYPE MATCHES "-NOTFOUND$")
+                    # ALIAS 目标读不到 TYPE，顺着 ALIASED_TARGET 找本体。
+                    get_target_property(HUXERUI_IOS_ITEM_ALIASED
+                            "${HUXERUI_IOS_LINK_ITEM}" ALIASED_TARGET
+                    )
+                    if (HUXERUI_IOS_ITEM_ALIASED
+                            AND NOT HUXERUI_IOS_ITEM_ALIASED MATCHES "-NOTFOUND$")
+                        set(HUXERUI_IOS_ITEM_NAME "${HUXERUI_IOS_ITEM_ALIASED}")
+                        get_target_property(HUXERUI_IOS_ITEM_TYPE
+                                "${HUXERUI_IOS_ITEM_ALIASED}" TYPE
+                        )
+                    endif ()
+                endif ()
+                if (HUXERUI_IOS_ITEM_TYPE MATCHES
+                        "^(STATIC_LIBRARY|SHARED_LIBRARY|UNKNOWN_LIBRARY|MODULE_LIBRARY)$")
+                    list(APPEND HUXERUI_IOS_APP_LINK_ENTRIES
+                            "\"$<TARGET_FILE:${HUXERUI_IOS_ITEM_NAME}>\"")
+                endif ()
+                if (NOT "${HUXERUI_IOS_ITEM_NAME}" IN_LIST HUXERUI_IOS_APP_LINK_VISITED)
+                    list(APPEND HUXERUI_IOS_APP_LINK_QUEUE "${HUXERUI_IOS_ITEM_NAME}")
+                endif ()
+            elseif (NOT HUXERUI_IOS_LINK_ITEM MATCHES "NOTFOUND$")
+                list(APPEND HUXERUI_IOS_APP_LINK_ENTRIES "${HUXERUI_IOS_LINK_ITEM}")
+            endif ()
+        endforeach ()
+    endwhile ()
+    foreach (HUXERUI_IOS_LINK_ARGUMENT IN LISTS HUXERUI_IOS_APP_LINK_ENTRIES)
+        string(APPEND HUXERUI_IOS_LINK_OPTIONS_CONTENT
+                "${HUXERUI_IOS_LINK_ARGUMENT}\n"
+        )
+    endforeach ()
     file(MAKE_DIRECTORY "${HUXERUI_IOS_CORE_DIRECTORY}")
-    file(WRITE "${HUXERUI_IOS_LINK_OPTIONS_FILE}"
-            "${HUXERUI_IOS_LINK_OPTIONS_CONTENT}"
+    # file(GENERATE) 而不是 file(WRITE)：条目里的 $<TARGET_FILE:> 与条件
+    # genex 只能在 generate 阶段按平台/产物求值。
+    file(GENERATE OUTPUT "${HUXERUI_IOS_LINK_OPTIONS_FILE}"
+            CONTENT "${HUXERUI_IOS_LINK_OPTIONS_CONTENT}"
     )
 
     set(HUXERUI_IOS_CORE_INPUTS
