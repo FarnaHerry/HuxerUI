@@ -114,12 +114,6 @@ NSCursor* MacPointerCursor(huxerui::PointerCursorKind kind) {
 }
 @end
 
-// Upstream clang (the mcpp toolchain) does not expose NSWindow's canBecomeKey property
-// selector to [super ...] messages against this SDK, so the gate below declares it.
-@interface NSWindow (HuxerUIKeyGate)
-- (BOOL)canBecomeKey;
-@end
-
 @interface HuxerUIView : NSView {
 @public
   huxerui::detail::MacUiWindow* huxeruiWindow;
@@ -1081,8 +1075,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 /// A window blocked by a window-level modal refuses key status so input stays with the modal chain.
-- (BOOL)canBecomeKey {
-  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKey];
+- (BOOL)canBecomeKeyWindow {
+  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKeyWindow];
 }
 
 @end
