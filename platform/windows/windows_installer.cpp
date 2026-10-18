@@ -71,6 +71,42 @@ DWORD InstallerExitCode(HRESULT result) {
   return static_cast<DWORD>(result);
 }
 
+// Compares two Burn-style numeric versions ("1", "1.2", "1.2.3.0"). Missing trailing fields count
+// as zero; any non-numeric field makes the pair incomparable and reports false without touching
+// the output.
+bool TryIsVersionOlder(const std::string& candidate, const std::string& current, bool* older) {
+  auto parse = [](const std::string& text, unsigned long long (&fields)[4]) {
+    std::size_t begin = 0;
+    int count = 0;
+    while (true) {
+      const std::size_t end = text.find('.', begin);
+      const std::string field = end == std::string::npos ? text.substr(begin) : text.substr(begin, end - begin);
+      if (field.empty() || count == 4 ||
+          !std::all_of(field.begin(), field.end(), [](char digit) { return digit >= '0' && digit <= '9'; })) {
+        return false;
+      }
+      fields[count++] = std::stoull(field);
+      if (end == std::string::npos) {
+        return true;
+      }
+      begin = end + 1;
+    }
+  };
+  unsigned long long left[4] = {};
+  unsigned long long right[4] = {};
+  if (!parse(candidate, left) || !parse(current, right)) {
+    return false;
+  }
+  for (int index = 0; index < 4; ++index) {
+    if (left[index] != right[index]) {
+      *older = left[index] < right[index];
+      return true;
+    }
+  }
+  *older = false;
+  return true;
+}
+
 std::optional<std::filesystem::path> ChooseInstallerDestination(HWND owner, const std::filesystem::path& initial) {
   ComPtr<IFileOpenDialog> dialog;
   HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
@@ -296,6 +332,7 @@ public:
       Fail(result);
       return;
     }
+    CoalesceDetectedProduct();
     Mutate([](windows::InstallerStatus& status) {
       status.phase = windows::InstallerPhase::Ready;
       status.progress = 0.0F;
@@ -305,6 +342,45 @@ public:
 
   void NewerVersionDetected() {
     Mutate([](windows::InstallerStatus& status) { status.product = windows::InstallerProductState::NewerVersion; });
+  }
+
+  // Called with the version of a forward-compatible related registration. Burn reports
+  // equal-version bundles through this callback too, so the comparison — not the callback —
+  // decides between NewerVersion (a real downgrade blocker) and SameVersion (this exact release
+  // already installed).
+  void ForwardCompatibleBundleDetected(std::string version) {
+    bool older = false;
+    if (!TryIsVersionOlder(version, bundle_version_, &older) || older) {
+      // Incomparable version strings keep the conservative reading and treat the registration as
+      // newer, so an interactive run still lands on an explanatory page.
+      NewerVersionDetected();
+      return;
+    }
+    SameVersionDetected();
+  }
+
+  void SameVersionDetected() {
+    Mutate([](windows::InstallerStatus& status) {
+      if (status.product != windows::InstallerProductState::NewerVersion) {
+        status.product = windows::InstallerProductState::SameVersion;
+      }
+    });
+  }
+
+  // Records a registered related bundle with the same UpgradeCode. DetectionComplete promotes an
+  // older registration to Present so an interactive run offers an upgrade instead of a fresh
+  // install page.
+  void RelatedBundleDetected(BOOTSTRAPPER_RELATION_TYPE relation, std::string version) {
+    if (relation != BOOTSTRAPPER_RELATION_UPGRADE) {
+      return;
+    }
+    registered_version_ = std::move(version);
+    registered_version_seen_ = true;
+  }
+
+  // Written once by OnCreate before the engine starts detecting; read on the engine thread only.
+  void SetBundleVersion(std::string version) {
+    bundle_version_ = std::move(version);
   }
 
   void ApplyStarted() {
@@ -433,6 +509,23 @@ private:
   void Start(windows::InstallerAction action, windows::InstallerInstallOptions options);
   void Quit(DWORD exit_code);
 
+  // Related-bundle callbacks and package detection interleave; once the engine finishes detection
+  // this settles the remaining combination: a registered older llm-switch promotes Absent to
+  // Present (upgrade page). SameVersion comes from package detection of this exact build, and
+  // NewerVersion from the forward-compatible comparison, both of which land immediately.
+  void CoalesceDetectedProduct() {
+    bool older = false;
+    if (!registered_version_seen_ || !TryIsVersionOlder(registered_version_, bundle_version_, &older) || !older) {
+      return;
+    }
+    Mutate([](windows::InstallerStatus& status) {
+      if (status.product == windows::InstallerProductState::Unknown ||
+          status.product == windows::InstallerProductState::Absent) {
+        status.product = windows::InstallerProductState::Present;
+      }
+    });
+  }
+
   // Asks the installer window to close on the UI thread. Commanded runs end through this path so
   // the platform application returns and the engine shutdown is never left waiting for the UI
   // thread; UiExited then performs the single engine quit with the terminal status mapped to an
@@ -470,7 +563,7 @@ private:
       std::lock_guard lock(mutex_);
       product = status_.product;
     }
-    if (*action == windows::InstallerAction::Repair && product != windows::InstallerProductState::Present) {
+    if (*action == windows::InstallerAction::Repair && !InstallerRepairIsMeaningful(product)) {
       CloseInstallerWindow();
       return;
     }
@@ -540,6 +633,11 @@ private:
   BOOTSTRAPPER_DISPLAY command_display_ = BOOTSTRAPPER_DISPLAY_UNKNOWN;
   BOOTSTRAPPER_RELATION_TYPE command_relation_ = BOOTSTRAPPER_RELATION_NONE;
   bool bundle_registered_ = false;
+  // Detection inputs written by engine-thread callbacks and read by DetectionComplete on the same
+  // thread, so they need no mutex under Burn's single detection thread.
+  std::string bundle_version_;
+  std::string registered_version_;
+  bool registered_version_seen_ = false;
   std::shared_ptr<StateCell<windows::InstallerStatus>> status_cell_;
   UiThreadDispatcher dispatcher_;
   HuxerUIBootstrapperApplication* application_ = nullptr;
@@ -565,7 +663,11 @@ public:
     if (pCommand != nullptr) {
       session_->SetCommand(pCommand->action, pCommand->display, pCommand->relationType);
     }
-    return CBootstrapperApplicationBase::OnCreate(pEngine, pCommand);
+    const HRESULT created = CBootstrapperApplicationBase::OnCreate(pEngine, pCommand);
+    if (SUCCEEDED(created)) {
+      session_->SetBundleVersion(EngineVariableString(L"WixBundleVersion"));
+    }
+    return created;
   }
 
   STDMETHODIMP OnStartup() override {
@@ -594,6 +696,14 @@ public:
     return CBootstrapperApplicationBase::OnDetectPackageComplete(package, result, state, cached);
   }
 
+  STDMETHODIMP OnDetectRelatedBundle(const wchar_t* bundle, BOOTSTRAPPER_RELATION_TYPE relation,
+                                     const wchar_t* tag, BOOL per_machine, const wchar_t* version,
+                                     BOOL missing_from_cache, BOOL* cancel) override {
+    session_->RelatedBundleDetected(relation, WideToUtf8(version));
+    return CBootstrapperApplicationBase::OnDetectRelatedBundle(bundle, relation, tag, per_machine, version,
+                                                               missing_from_cache, cancel);
+  }
+
   STDMETHODIMP OnDetectComplete(HRESULT result, BOOL eligible_for_cleanup) override {
     session_->DetectionComplete(result);
     return CBootstrapperApplicationBase::OnDetectComplete(result, eligible_for_cleanup);
@@ -603,9 +713,10 @@ public:
                                                const wchar_t* tag, BOOL per_machine, const wchar_t* version,
                                                BOOL missing_from_cache, BOOL* cancel) override {
     // Forward-compatible detection must not hijack a commanded run; the engine already chose
-    // its action (the callback also fires for equal-version related bundles).
+    // its action. The callback also fires for equal-version related bundles, so the session
+    // compares versions: only a genuinely newer registration reports NewerVersion.
     if (!session_->CommandPreemptsInteraction()) {
-      session_->NewerVersionDetected();
+      session_->ForwardCompatibleBundleDetected(WideToUtf8(version));
     }
     return CBootstrapperApplicationBase::OnDetectForwardCompatibleBundle(bundle, relation, tag, per_machine, version,
                                                                          missing_from_cache, cancel);
@@ -728,6 +839,23 @@ public:
                                ErrorMessage(result));
     }
     return value != 0;
+  }
+
+  // Reads one engine string variable with the two-call size probe. A missing variable yields an
+  // empty string instead of an error: WixBundleVersion is absent in layout/design runs.
+  std::string EngineVariableString(const wchar_t* variable) {
+    SIZE_T length = 0;
+    if (FAILED(m_pEngine->GetVariableString(variable, nullptr, &length)) || length == 0) {
+      return {};
+    }
+    std::wstring value(length, L'\0');
+    if (FAILED(m_pEngine->GetVariableString(variable, value.data(), &length))) {
+      return {};
+    }
+    while (!value.empty() && value.back() == L'\0') {
+      value.pop_back();
+    }
+    return WideToUtf8(value.c_str());
   }
 
   HRESULT SetInstallFolder(const std::filesystem::path& destination) {

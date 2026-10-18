@@ -47,15 +47,16 @@ InstallerCommandedAction(BOOTSTRAPPER_ACTION action, BOOTSTRAPPER_DISPLAY displa
   }
 }
 
-// Maps a detected package state to the observable product state. A superseded package during a
-// commanded run still owns a live registration that must be removed — the related bundle asked to
-// uninstall itself detects its own MSI as superseded while the newer MSI is being installed — so
-// only interactive runs are gated behind NewerVersion.
+// Maps a detected package state to the observable product state. PRESENT means the detected
+// ProductCode belongs to this exact release build, so it reports SameVersion. A superseded package
+// during a commanded run still owns a live registration that must be removed — the related bundle
+// asked to uninstall itself detects its own MSI as superseded while the newer MSI is being
+// installed — so only interactive runs are gated behind NewerVersion.
 [[nodiscard]] inline windows::InstallerProductState
 InstallerProductStateForPackage(BOOTSTRAPPER_PACKAGE_STATE package_state, bool preempts) {
   switch (package_state) {
   case BOOTSTRAPPER_PACKAGE_STATE_PRESENT:
-    return windows::InstallerProductState::Present;
+    return windows::InstallerProductState::SameVersion;
   case BOOTSTRAPPER_PACKAGE_STATE_ABSENT:
     return windows::InstallerProductState::Absent;
   case BOOTSTRAPPER_PACKAGE_STATE_OBSOLETE:
@@ -90,13 +91,21 @@ enum class InstallerTerminalAction {
   return preempts ? InstallerTerminalAction::CloseWindow : InstallerTerminalAction::None;
 }
 
+// A commanded repair reinstalls the detected registration; it applies to this exact build
+// (SameVersion) and to a different, older registration (Present) alike.
+[[nodiscard]] inline bool InstallerRepairIsMeaningful(windows::InstallerProductState product) {
+  return product == windows::InstallerProductState::Present ||
+         product == windows::InstallerProductState::SameVersion;
+}
+
 // A commanded uninstall is meaningful while the product is present or while the bundle still owns
 // registration or cache entries. The engine can skip bundle cleanup under elevation or restart
 // conditions, so the Add/Remove entry may survive the MSI itself and a plain absent-product check
 // would strand it.
 [[nodiscard]] inline bool InstallerUninstallIsMeaningful(windows::InstallerProductState product,
                                                          bool bundle_registered) {
-  return product == windows::InstallerProductState::Present || bundle_registered;
+  return product == windows::InstallerProductState::Present ||
+         product == windows::InstallerProductState::SameVersion || bundle_registered;
 }
 
 } // namespace huxerui::detail
