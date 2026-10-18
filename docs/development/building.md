@@ -102,6 +102,8 @@ See [Android execution](../guide/testing.md#android-execution) for the resource 
 
 ## Runtime profiling
 
+For native Windows paint-resource comparisons, use the separate [Windows Paint Benchmark](windows-paint-benchmark.md), which measures submission and GPU timestamps without swap-chain presentation.
+
 Source builds default to `HUXERUI_ENABLE_PROFILING=ON`, making private Runtime diagnostics available to source applications and repository examples.
 The option is independent of Debug and Release; use an optimized build for performance measurements.
 Existing build directories retain their cached value; pass `-DHUXERUI_ENABLE_PROFILING=ON` explicitly to enable diagnostics in a directory previously configured with the option off.

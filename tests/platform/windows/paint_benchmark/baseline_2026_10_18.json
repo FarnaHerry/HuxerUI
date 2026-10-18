@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-18",
+  "cpu": [
+    {
+      "Name": "13th Gen Intel(R) Core(TM) i5-13500H",
+      "NumberOfCores": 12,
+      "NumberOfLogicalProcessors": 16
+    }
+  ],
+  "adapter": "Intel(R) Iris(R) Xe Graphics",
+  "driver": "32.0.101.5972",
+  "os": {
+    "Caption": "Microsoft Windows 11 专业版",
+    "Version": "10.0.26300",
+    "BuildNumber": "26300"
+  },
+  "compiler": "MSVC 19.51.36252.0 x64",
+  "configuration": "Release",
+  "optimization": "/O2 /Ob2 /DNDEBUG",
+  "power_scheme": "Balanced",
+  "affinity_or_clock_lock": false,
+  "baseline_commit": "fa04cb45bd1f405e0c6a06073b2be1db539b8661",
+  "optimized_head": "fa04cb45bd1f405e0c6a06073b2be1db539b8661",
+  "optimized_uncommitted": true,
+  "baseline_renderer_sha256": "AFC7E14B21C079D131FD4E2B25A2C5108CA08D6BBEB5DEE5B36CDEF916858B73",
+  "optimized_renderer_sha256": "A0EBB1AA88C91B6FF3DB7D173C0E6FC10415CB709FA90CA69FBF28FF3D70EF84",
+  "harness_sha256": "3B6FE325AE76CA13F39D76D7B212C9733A3D1505B532F5687CC08BBE94BCC3D1",
+  "viewport_dips": [
+    1280,
+    720
+  ],
+  "dpi": [
+    96,
+    144
+  ],
+  "rounds": 5,
+  "warmup": 64,
+  "samples_per_round": 160,
+  "measured_samples": 25600,
+  "matched_pixel_pairs": 80,
+  "rejected_gpu_queries": 0,
+  "summary": "baseline_2026_10_18.csv",
+  "raw_run_directory": "build/check/paint-benchmark-runs/20261018-193104",
+  "scope": "Offscreen paint replay; no swap-chain presentation, Runtime, layout, scene recording, or VRAM accounting",
+  "memory_probe": [
+    {
+      "variant": "baseline",
+      "dpi": 96,
+      "warmup": 512,
+      "samples": 512,
+      "private_before_mib": 147.15234375,
+      "private_after_mib": 134.6953125,
+      "checksum": "4623938215710827045"
+    },
+    {
+      "variant": "optimized",
+      "dpi": 96,
+      "warmup": 512,
+      "samples": 512,
+      "private_before_mib": 129.19140625,
+      "private_after_mib": 117.0390625,
+      "checksum": "4623938215710827045"
+    }
+  ],
+  "framework_archive_sha256": "F402516AC1AC5A277360F352BFA79A88D943038E44E7A5CF374DE4DA726E7BB3",
+  "framework_profiling_compiled": true
+}

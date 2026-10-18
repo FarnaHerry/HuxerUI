@@ -295,6 +295,21 @@ struct Win32Renderer::State {
     ComPtr<ID2D1PathGeometry> geometry;
   };
 
+  struct PathShadowMask {
+    Path path;
+    PathFillRule fill_rule = PathFillRule::NonZero;
+    float blur_radius = 0.0F;
+    ComPtr<ID2D1CommandList> commands;
+    ComPtr<ID2D1Geometry> exterior_clip;
+  };
+
+  struct CachedGradient {
+    std::vector<GradientStop> stops;
+    ComPtr<ID2D1GradientStopCollection> collection;
+    ComPtr<ID2D1LinearGradientBrush> linear;
+    ComPtr<ID2D1RadialGradientBrush> radial;
+  };
+
   struct CachedImage {
     std::uint64_t identity = 0;
     std::size_t byte_size = 0;
@@ -1131,6 +1146,8 @@ struct Win32Renderer::State {
 
   void DiscardShadowResources() noexcept {
     shadow_masks_.clear();
+    path_shadow_masks_.clear();
+    path_shadow_elements_ = 0;
     shadow_effect_.Reset();
     shadow_brush_.Reset();
     shadow_clip_layer_.Reset();
@@ -1197,6 +1214,8 @@ struct Win32Renderer::State {
     DiscardShadowResources();
     ResetExternalTextureResources();
     path_geometries_.clear();
+    gradients_.clear();
+    gradient_stop_count_ = 0;
     images_.clear();
     image_cache_bytes_ = 0;
     brush_.Reset();
@@ -1822,38 +1841,72 @@ struct Win32Renderer::State {
   }
 
   ComPtr<ID2D1LinearGradientBrush> CreateLinearGradientBrush(Rect rect, const LinearGradient& value) {
-    const ComPtr<ID2D1GradientStopCollection> stops = CreateGradientStops(value.stops);
-    if (!stops) {
-      return {};
+    CachedGradient* cached = GradientFor(value.stops);
+    ComPtr<ID2D1LinearGradientBrush> gradient = cached ? cached->linear : nullptr;
+    if (!gradient) {
+      const auto stops = cached ? cached->collection : CreateGradientStops(value.stops);
+      if (!stops || FAILED(device_context_->CreateLinearGradientBrush(
+                        D2D1::LinearGradientBrushProperties(D2D1::Point2F(value.start.x, value.start.y),
+                                                            D2D1::Point2F(value.end.x, value.end.y)),
+                        stops.Get(), gradient.GetAddressOf()))) {
+        return {};
+      }
+      if (cached) {
+        cached->linear = gradient;
+      }
     }
-    ComPtr<ID2D1LinearGradientBrush> gradient;
-    if (FAILED(device_context_->CreateLinearGradientBrush(
-            D2D1::LinearGradientBrushProperties(
-                D2D1::Point2F(value.start.x, value.start.y), D2D1::Point2F(value.end.x, value.end.y)
-            ),
-            stops.Get(),
-            gradient.GetAddressOf()))) {
-      return {};
-    }
+    gradient->SetStartPoint(D2D1::Point2F(value.start.x, value.start.y));
+    gradient->SetEndPoint(D2D1::Point2F(value.end.x, value.end.y));
     gradient->SetTransform(ToD2DTransform(ResolveGradientTransform(rect, value)));
     return gradient;
   }
 
   ComPtr<ID2D1RadialGradientBrush> CreateRadialGradientBrush(Rect rect, const RadialGradient& value) {
-    const ComPtr<ID2D1GradientStopCollection> stops = CreateGradientStops(value.stops);
-    if (!stops) {
-      return {};
+    CachedGradient* cached = GradientFor(value.stops);
+    ComPtr<ID2D1RadialGradientBrush> gradient = cached ? cached->radial : nullptr;
+    if (!gradient) {
+      const auto stops = cached ? cached->collection : CreateGradientStops(value.stops);
+      if (!stops || FAILED(device_context_->CreateRadialGradientBrush(
+                        D2D1::RadialGradientBrushProperties(D2D1::Point2F(value.center.x, value.center.y),
+                                                            D2D1::Point2F(), value.radius.width, value.radius.width),
+                        stops.Get(), gradient.GetAddressOf()))) {
+        return {};
+      }
+      if (cached) {
+        cached->radial = gradient;
+      }
     }
-    ComPtr<ID2D1RadialGradientBrush> gradient;
-    if (FAILED(device_context_->CreateRadialGradientBrush(
-            D2D1::RadialGradientBrushProperties(
-                D2D1::Point2F(value.center.x, value.center.y), D2D1::Point2F(), value.radius.width, value.radius.width
-            ),
-            stops.Get(), gradient.GetAddressOf()))) {
-      return {};
-    }
+    gradient->SetCenter(D2D1::Point2F(value.center.x, value.center.y));
+    gradient->SetRadiusX(value.radius.width);
+    gradient->SetRadiusY(value.radius.width);
     gradient->SetTransform(ToD2DTransform(ResolveGradientTransform(rect, value)));
     return gradient;
+  }
+
+  CachedGradient* GradientFor(const std::vector<GradientStop>& stops) {
+    const auto existing = std::find_if(gradients_.begin(), gradients_.end(),
+                                       [&](const CachedGradient& entry) { return entry.stops == stops; });
+    if (existing != gradients_.end()) {
+      std::rotate(existing, existing + 1, gradients_.end());
+      return &gradients_.back();
+    }
+    constexpr std::size_t maximum_gradients = 64;
+    constexpr std::size_t maximum_gradient_stops = 4096;
+    if (stops.size() > maximum_gradient_stops) {
+      return nullptr;
+    }
+    auto collection = CreateGradientStops(stops);
+    if (!collection) {
+      return nullptr;
+    }
+    while (!gradients_.empty() &&
+           (gradients_.size() >= maximum_gradients || gradient_stop_count_ + stops.size() > maximum_gradient_stops)) {
+      gradient_stop_count_ -= gradients_.front().stops.size();
+      gradients_.erase(gradients_.begin());
+    }
+    gradients_.push_back({stops, std::move(collection), {}, {}});
+    gradient_stop_count_ += stops.size();
+    return &gradients_.back();
   }
 
   ComPtr<ID2D1Brush> CreateBrush(Rect bounds, const Brush& brush) {
@@ -2481,47 +2534,12 @@ struct Win32Renderer::State {
       return;
     }
 
-    ComPtr<ID2D1CommandList> commands;
-    if (FAILED(shadow_context_->CreateCommandList(commands.GetAddressOf()))) {
-      return;
-    }
-    shadow_context_->SetTarget(commands.Get());
-    shadow_context_->BeginDraw();
-    shadow_context_->SetTransform(D2D1::Matrix3x2F::Identity());
-    shadow_context_->FillGeometry(geometry.Get(), shadow_brush_.Get());
-    const HRESULT draw_result = shadow_context_->EndDraw();
-    shadow_context_->SetTarget(nullptr);
-    if (FAILED(draw_result) || FAILED(commands->Close())) {
+    const PathShadowMask mask = PathShadowMaskFor(command, geometry.Get());
+    if (!mask.commands) {
       return;
     }
 
-    const Rect bounds = command.path.Bounds();
-    ComPtr<ID2D1RectangleGeometry> outer;
-    ComPtr<ID2D1PathGeometry> exterior;
-    ComPtr<ID2D1GeometrySink> exterior_sink;
-    if (FAILED(d2d_factory_->CreateRectangleGeometry(
-            D2D1::RectF(
-                bounds.x - command.blur_radius,
-                bounds.y - command.blur_radius,
-                bounds.x + bounds.width + command.blur_radius,
-                bounds.y + bounds.height + command.blur_radius
-            ),
-            outer.GetAddressOf()
-        )) ||
-        FAILED(d2d_factory_->CreatePathGeometry(exterior.GetAddressOf())) ||
-        FAILED(exterior->Open(exterior_sink.GetAddressOf())) ||
-        FAILED(outer->CombineWithGeometry(
-            geometry.Get(),
-            D2D1_COMBINE_MODE_EXCLUDE,
-            nullptr,
-            D2D1_DEFAULT_FLATTENING_TOLERANCE,
-            exterior_sink.Get()
-        )) ||
-        FAILED(exterior_sink->Close())) {
-      return;
-    }
-
-    shadow_effect_->SetInput(0, commands.Get());
+    shadow_effect_->SetInput(0, mask.commands.Get());
     if (FAILED(shadow_effect_->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, command.blur_radius / 3.0F)) ||
         FAILED(shadow_effect_->SetValue(
             D2D1_SHADOW_PROP_COLOR,
@@ -2536,7 +2554,7 @@ struct Win32Renderer::State {
     device_context_->PushLayer(
         D2D1::LayerParameters1(
             D2D1::InfiniteRect(),
-            exterior.Get(),
+            mask.exterior_clip.Get(),
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             D2D1::Matrix3x2F::Identity(),
             1.0F,
@@ -2549,6 +2567,63 @@ struct Win32Renderer::State {
     device_context_->PopLayer();
     device_context_->SetTransform(previous);
     shadow_effect_->SetInput(0, nullptr);
+  }
+
+  PathShadowMask PathShadowMaskFor(const DrawPathShadowCommand& command, ID2D1Geometry* geometry) {
+    const auto existing = std::find_if(path_shadow_masks_.begin(), path_shadow_masks_.end(), [&](const auto& entry) {
+      return entry.fill_rule == command.fill_rule && entry.blur_radius == command.blur_radius &&
+             entry.path == command.path;
+    });
+    if (existing != path_shadow_masks_.end()) {
+      std::rotate(existing, existing + 1, path_shadow_masks_.end());
+      return path_shadow_masks_.back();
+    }
+
+    ComPtr<ID2D1CommandList> commands;
+    if (FAILED(shadow_context_->CreateCommandList(commands.GetAddressOf()))) {
+      return {};
+    }
+    shadow_context_->SetTarget(commands.Get());
+    shadow_context_->BeginDraw();
+    shadow_context_->SetTransform(D2D1::Matrix3x2F::Identity());
+    shadow_context_->FillGeometry(geometry, shadow_brush_.Get());
+    const HRESULT draw_result = shadow_context_->EndDraw();
+    shadow_context_->SetTarget(nullptr);
+    if (FAILED(draw_result) || FAILED(commands->Close())) {
+      return {};
+    }
+
+    const Rect bounds = command.path.Bounds();
+    ComPtr<ID2D1RectangleGeometry> outer;
+    ComPtr<ID2D1PathGeometry> exterior;
+    ComPtr<ID2D1GeometrySink> exterior_sink;
+    if (FAILED(d2d_factory_->CreateRectangleGeometry(
+            D2D1::RectF(bounds.x - command.blur_radius, bounds.y - command.blur_radius,
+                        bounds.x + bounds.width + command.blur_radius, bounds.y + bounds.height + command.blur_radius),
+            outer.GetAddressOf())) ||
+        FAILED(d2d_factory_->CreatePathGeometry(exterior.GetAddressOf())) ||
+        FAILED(exterior->Open(exterior_sink.GetAddressOf())) ||
+        FAILED(outer->CombineWithGeometry(geometry, D2D1_COMBINE_MODE_EXCLUDE, nullptr,
+                                          D2D1_DEFAULT_FLATTENING_TOLERANCE, exterior_sink.Get())) ||
+        FAILED(exterior_sink->Close())) {
+      return {};
+    }
+
+    // Color and offset are applied during replay; changing either can reuse the same immutable mask.
+    PathShadowMask mask{command.path, command.fill_rule, command.blur_radius, commands, exterior};
+    constexpr std::size_t maximum_path_shadow_masks = 32;
+    constexpr std::size_t maximum_path_shadow_elements = 32768;
+    const std::size_t elements = InternalAccess::Elements(command.path).size();
+    if (elements <= maximum_path_shadow_elements) {
+      while (!path_shadow_masks_.empty() && (path_shadow_masks_.size() >= maximum_path_shadow_masks ||
+                                             path_shadow_elements_ + elements > maximum_path_shadow_elements)) {
+        path_shadow_elements_ -= InternalAccess::Elements(path_shadow_masks_.front().path).size();
+        path_shadow_masks_.erase(path_shadow_masks_.begin());
+      }
+      path_shadow_masks_.push_back(mask);
+      path_shadow_elements_ += elements;
+    }
+    return mask;
   }
 
   ShadowMask* ShadowMaskFor(const ResolvedShadow& shadow, float blur_radius) {
@@ -2778,6 +2853,10 @@ struct Win32Renderer::State {
   ComPtr<ID2D1Effect> shadow_effect_;
   ComPtr<ID2D1Layer> shadow_clip_layer_;
   std::vector<ShadowMask> shadow_masks_;
+  std::vector<PathShadowMask> path_shadow_masks_;
+  std::size_t path_shadow_elements_ = 0;
+  std::vector<CachedGradient> gradients_;
+  std::size_t gradient_stop_count_ = 0;
   std::vector<CachedPathGeometry> path_geometries_;
   std::vector<CachedImage> images_;
   std::size_t image_cache_bytes_ = 0;
@@ -2798,6 +2877,30 @@ struct Win32Renderer::State {
 Win32Renderer::Win32Renderer() : state_(std::make_unique<State>()) {}
 
 Win32Renderer::~Win32Renderer() = default;
+
+std::vector<std::uint32_t> Win32Renderer::ReadPixels() {
+  if (!state_->scene_target_) {
+    return {};
+  }
+  const D2D1_SIZE_U size = state_->scene_target_->GetPixelSize();
+  const auto properties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                                                  state_->scene_target_->GetPixelFormat());
+  ComPtr<ID2D1Bitmap1> readback;
+  ThrowIfFailed(state_->device_context_->CreateBitmap(size, nullptr, 0, &properties, readback.GetAddressOf()),
+                "HuxerUI could not create the Windows readback bitmap");
+  ThrowIfFailed(readback->CopyFromBitmap(nullptr, state_->scene_target_.Get(), nullptr),
+                "HuxerUI could not read the Windows retained scene");
+  std::vector<std::uint32_t> pixels(static_cast<std::size_t>(size.width) * size.height);
+  D2D1_MAPPED_RECT mapped{};
+  ThrowIfFailed(readback->Map(D2D1_MAP_OPTIONS_READ, &mapped), "HuxerUI could not map the Windows readback bitmap");
+  for (UINT32 row = 0; row < size.height; ++row) {
+    const auto* source =
+        reinterpret_cast<const std::uint32_t*>(mapped.bits + static_cast<std::size_t>(row) * mapped.pitch);
+    std::copy_n(source, size.width, pixels.data() + static_cast<std::size_t>(row) * size.width);
+  }
+  ThrowIfFailed(readback->Unmap(), "HuxerUI could not unmap the Windows readback bitmap");
+  return pixels;
+}
 
 void Win32Renderer::Initialize() {
   state_->InitializeFactories();
@@ -2843,6 +2946,8 @@ void Win32Renderer::DpiChanged(HWND window, float dpi) {
   if (state_->shadow_context_) {
     state_->shadow_context_->SetDpi(dpi, dpi);
     state_->shadow_masks_.clear();
+    state_->path_shadow_masks_.clear();
+    state_->path_shadow_elements_ = 0;
   }
   state_->DiscardSizeDependentResources();
   state_->force_full_repaint_ = true;

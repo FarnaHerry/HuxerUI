@@ -336,6 +336,13 @@ The retained scene changes command ownership; it does not create a renderer-spec
 Platform renderers traverse `RenderScene`, maintain the platform transform and clip stacks, and replay only the records referenced by the scene.
 They may cache platform text, brush, path, or image resources by record and command revision.
 
+The Windows renderer uses Direct2D on a hardware D3D11 device when available, with WARP as the software fallback.
+Its gradient cache shares native stop collections and linear/radial brushes by stop values, updating geometry and sampling transforms at each draw; it retains at most 64 entries and 4096 stops in total.
+Its Path shadow cache retains native command lists and exterior clip geometry by Path, fill rule, and blur radius, while color and offset remain replay inputs; it retains at most 32 entries and 32768 Path elements in total.
+Entries exceeding those budgets render without entering the cache, and cache hits refresh recency before eviction.
+Device resource recreation clears both caches, and a DPI change clears recorded shadow masks.
+Shadow blur remains a native Direct2D effect; caching avoids repeated recording and geometry construction rather than retaining a preblurred bitmap.
+
 ## PaintContext and pure paint
 
 All drawing is recorded through `PaintContext`:

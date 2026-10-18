@@ -23,6 +23,7 @@ User guides describe the current public SDK, development guides cover this repos
 ## Framework development
 
 - [Building HuxerUI](development/building.md): configure, build, test, and run repository examples.
+- [Windows Paint Benchmark](development/windows-paint-benchmark.md): reproduce native renderer A/B timing, pixel checks, and memory measurements.
 - [Downstream integration](development/farna-integration.md): the `farna/main` patch inventory, validation, and adoption.
 - [Developing Multi-Window](development/multi-window.md): the multi-window extension status, validation, behavioral notes, and desktop porting checklist.
 - [Farna graphics TODO](development/farna-graphics-todo.md): downstream-only future work for compositing, glass primitives, and backend qualification; not an upstream roadmap.
