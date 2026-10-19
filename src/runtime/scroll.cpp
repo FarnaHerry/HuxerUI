@@ -333,7 +333,12 @@ void NotifyScrollNodeActivity(MountedNode& node, ScrollSource source, ScrollPhas
 }
 
 float ScrollNodeBy(MountedNode& node, float delta, ScrollSource source) {
-  if (!node.interaction.enabled || !IsScrollContainer(node) || !AllowsScrollSource(node, source)) {
+  // Disabled scroll containers reject every user-driven source, but programmatic
+  // controller scrolls stay available: Enabled(false) means "never interacted with",
+  // not "cannot be driven" — overlays use it for paint-only rails they move via
+  // ScrollController::ScrollTo (e.g. sticky chat avatars).
+  if ((!node.interaction.enabled && source != ScrollSource::Programmatic) ||
+      !IsScrollContainer(node) || !AllowsScrollSource(node, source)) {
     return 0.0F;
   }
   // User input and reveal operations supersede any unfinished programmatic item-alignment correction.
