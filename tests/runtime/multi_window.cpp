@@ -4,6 +4,10 @@
 #include <limits>
 #include <string>
 #include <thread>
+#include <atomic>
+#include <mutex>
+
+#include "application/window_internal.h"
 
 namespace huxerui::test {
 
@@ -62,6 +66,44 @@ void ResetMultiWindowGlobals() {
   secondary_handle.reset();
   captured_application.reset();
 }
+
+struct RetirementCounts {
+  int destroyed = 0;
+  bool inside_discard = false;
+  bool destroyed_inside_discard = false;
+};
+
+class ReclaimingWindow final : public TestPlatform {
+public:
+  explicit ReclaimingWindow(RetirementCounts& counts) : counts_(counts) {}
+  ~ReclaimingWindow() override {
+    ++counts_.destroyed;
+    counts_.destroyed_inside_discard |= counts_.inside_discard;
+  }
+  void DiscardHost() override {
+    counts_.inside_discard = true;
+    TestPlatform::DiscardHost();
+    const auto service = detail::InternalAccess::WindowServiceOf(*this);
+    service->ReleaseRetiredWindow();
+    service->ReleaseRetiredWindow();
+    counts_.inside_discard = false;
+  }
+private:
+  RetirementCounts& counts_;
+};
+
+class ReclaimingRuntime final : public TestPlatform {
+public:
+  explicit ReclaimingRuntime(RetirementCounts& counts) : counts_(counts) {}
+  std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
+      std::uint32_t ordinal) override {
+    auto window = std::make_unique<ReclaimingWindow>(counts_);
+    detail::InternalAccess::InitializeWindow(*window, *this, options, ordinal);
+    return window;
+  }
+private:
+  RetirementCounts& counts_;
+};
 
 } // namespace
 
@@ -201,6 +243,71 @@ TEST_CASE("ApplicationHandleOpenWindowReportsDisconnectedService") {
     REQUIRE(captured_application.has_value());
   }
   REQUIRE_THROWS_AS(captured_application->OpenWindow({}), std::logic_error);
+}
+
+TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
+  RetirementCounts counts;
+  ReclaimingRuntime owner(counts);
+  Application application{[]() -> View { return Spacer(); }, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  std::vector<WindowHandle> retired;
+  for (int index = 0; index < 1000; ++index) {
+    auto window = owner.OpenWindow({});
+    window.Retire();
+    REQUIRE(counts.destroyed == index);
+    owner.RunPlatformModuleTasks();
+    REQUIRE(counts.destroyed == index + 1);
+    retired.push_back(window);
+  }
+  auto replacement = owner.OpenWindow({});
+  for (const auto& window : retired) {
+    window.Show();
+    window.Close();
+    window.Retire();
+    REQUIRE_FALSE(window.Position().has_value());
+  }
+  owner.RunPlatformModuleTasks();
+  REQUIRE(counts.destroyed == 1000);
+  replacement.Retire();
+  owner.RunPlatformModuleTasks();
+  REQUIRE(counts.destroyed == 1001);
+  auto parent = owner.OpenWindow({});
+  auto child = owner.OpenWindow({}, {.owner = parent});
+  auto grandchild = owner.OpenWindow({}, {.owner = child});
+  parent.Retire();
+  owner.RunPlatformModuleTasks();
+  REQUIRE(counts.destroyed == 1004);
+  REQUIRE_FALSE(child.Position().has_value());
+  REQUIRE_FALSE(grandchild.Position().has_value());
+  REQUIRE_FALSE(counts.destroyed_inside_discard);
+}
+
+TEST_CASE("RuntimeOpenWindowRetirementMayRaceApplicationShutdown") {
+  std::mutex mutex;
+  std::vector<std::function<void()>> tasks;
+  TestPlatform owner([&](std::function<void()> callback) {
+    std::lock_guard lock(mutex);
+    tasks.push_back(std::move(callback));
+  });
+  Application application{[]() -> View { return Spacer(); }, {.show_debug_overlay = false}};
+  RuntimeLifetime lifetime(application, owner);
+  auto window = owner.OpenWindow({});
+  std::atomic<int> submissions{0};
+  std::atomic<bool> stopped{false};
+  std::thread worker([&] {
+    while (!stopped.load()) {
+      window.Retire();
+      ++submissions;
+    }
+    window.Retire();
+  });
+  while (submissions.load() < 100) std::this_thread::yield();
+  detail::InternalAccess::RetireRuntime(owner);
+  stopped = true;
+  worker.join();
+  REQUIRE(submissions.load() >= 100);
+  for (auto& task : tasks) REQUIRE_NOTHROW(task());
+  REQUIRE_NOTHROW(window.Retire());
 }
 
 } // namespace huxerui::test

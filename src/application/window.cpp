@@ -8,6 +8,7 @@
 #include <huxerui/modifier.h>
 
 #include "huxerui_builtin_resources.h"
+#include "internal_access.h"
 #include "runtime/ui_window_internal.h"
 #include "window_internal.h"
 #include "application_internal.h"
@@ -293,17 +294,39 @@ void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owne
 
 void WindowService::Retire() {
   const auto state = application_.lock();
-  if (!state || state->owner == nullptr) {
+  if (!state) {
     return;
   }
-  Runtime* const runtime = state->owner;
+  const std::weak_ptr<ApplicationRuntimeState> application = state;
   const std::weak_ptr<WindowService> weak = weak_from_this();
   // Queue the retirement so it runs after the current callback returns: retiring synchronously from inside
   // pointer, semantic, or lifecycle dispatch would tear down the structures that dispatch still references.
-  state->Post([runtime, weak] {
-    if (const auto service = weak.lock()) {
-      runtime->RetireWindow(*service);
+  state->Post([application, weak] {
+    const auto state = application.lock();
+    if (const auto service = weak.lock(); state && state->owner && service) {
+      state->owner->RetireWindow(*service);
     }
+  });
+}
+
+void WindowService::ReleaseRetiredWindow() {
+  const auto state = application_.lock();
+  if (!state) return;
+  state->RequireThread();
+  if (ui_window_ != nullptr) {
+    throw std::logic_error("HuxerUI cannot release a window before shared retirement");
+  }
+  if (state->phase != ApplicationRuntimeState::Phase::Running) return;
+  const std::weak_ptr<ApplicationRuntimeState> application = state;
+  const std::weak_ptr<WindowService> weak = weak_from_this();
+  state->Post([application, weak] {
+    const auto state = application.lock();
+    const auto service = weak.lock();
+    if (!state || !service || service->ui_window_ != nullptr) return;
+    std::erase_if(state->windows, [&](const auto& window) {
+      return InternalAccess::WindowServiceOf(*window) == service;
+    });
+    std::erase_if(state->uis, [](const auto& ui) { return ui.expired(); });
   });
 }
 

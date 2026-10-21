@@ -59,6 +59,10 @@ public:
   /// Requests retirement of this window through the Runtime after the current callback returns. See
   /// Runtime::RetireWindow. Safe to call from any thread; ignored when the window or the application has retired.
   void Retire();
+  /// Acknowledges that a retired native host has detached every callback borrowing its UiWindow.
+  /// Queues release of the Runtime-owned window after the current native callback returns. Call on the application
+  /// thread after shared retirement; retained WindowHandles remain disconnected and cannot target a replacement.
+  void ReleaseRetiredWindow();
   [[nodiscard]] bool HandleRequest(WindowCommand command);
   [[nodiscard]] std::function<void()>
   ConnectRequest(WindowCommand command, std::function<bool()> handler);

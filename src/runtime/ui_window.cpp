@@ -1314,6 +1314,7 @@ void UiWindow::Retire() noexcept {
     state_->pointer_.reset();
   }
   state_->semantics_.reset();
+  state_->frame_commit_ = {};
   state_->layer_controller_.Disconnect();
 
   if (state_->window_service_) {

@@ -25,6 +25,10 @@
 #include <vector>
 
 #include <huxerui/huxerui.h>
+#include <huxerui/linux/external_texture.h>
+
+#include "linux_external_texture_internal.h"
+#include "application/application_internal.h"
 
 namespace huxerui::test {
 namespace {
@@ -89,6 +93,7 @@ struct NativeScenario {
   std::map<std::uint32_t, WindowRecord> records;
   std::optional<ApplicationHandle> application;
   std::shared_ptr<SharedCounter> shared;
+  std::weak_ptr<detail::ApplicationRuntimeState> runtime;
   std::vector<std::unique_ptr<NativeWatch>> watches;
   std::function<bool()> advance;
   std::function<View(const WindowIdentity&)> content;
@@ -188,6 +193,7 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
             }},
             .show_debug_overlay = false,
             .application_hooks = {[&scenario](ApplicationContext& context) {
+              scenario.runtime = detail::CurrentApplicationRuntime();
               scenario.shared = std::make_shared<SharedCounter>();
               context.Provide(scenario.shared);
             }},
@@ -217,6 +223,145 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
 }
 
 } // namespace
+
+TEST_CASE("LinuxNativeRetirementReleasesRenderedFramesAndReopens", "[.][linux-native-retire]") {
+  NativeScenario scenario;
+  bool retire_all = false;
+  SECTION("Another window stays alive") {}
+  SECTION("No windows remain before reopening") { retire_all = true; }
+  std::shared_ptr<linux::PixelTexture> texture;
+  std::weak_ptr<const detail::LinuxPixelFrame> frame;
+  const std::vector<std::byte> pixels(128U * 128U * 4U, std::byte{0xFF});
+  auto publish = [&] {
+    texture = std::make_shared<linux::PixelTexture>(Size{128.0F, 128.0F});
+    texture->Publish({.pixel_width = 128, .pixel_height = 128, .bytes_per_row = 128U * 4U, .pixels = pixels});
+    frame = detail::GetPixelFrame(*texture);
+  };
+  publish();
+  std::uint32_t ordinal = 0;
+  int stage = 0;
+  scenario.content = [&](const WindowIdentity& identity) -> View {
+    if (identity.ordinal == ordinal && texture) return Image(texture).With(Frame{128.0F, 128.0F});
+    return Text("application stays alive");
+  };
+  scenario.advance = [&] {
+    if (stage == 0) {
+      if (!scenario.records.contains(ordinal) || frame.use_count() < 2) return false;
+      scenario.Watch(ordinal == 0 ? "HuxerUI native primary" : "HuxerUI native reopened");
+      texture.reset();
+      if (retire_all && ordinal == 0) scenario.records.at(1).handle->Retire();
+      scenario.records.at(ordinal).handle->Retire();
+      stage = 1;
+    } else if (stage == 1) {
+      if (scenario.records.at(ordinal).unmounts == 0) return false;
+      scenario.Check(frame.expired(), "Retired window retained its rendered pixel frame");
+      if (!scenario.watches.back()->Released()) return false;
+      const auto runtime = scenario.runtime.lock();
+      scenario.Check(runtime && runtime->windows.size() == (retire_all ? 0U : 1U),
+                     "Retired C++ windows remained owned by the application");
+      scenario.Check(scenario.records.at(1).unmounts == (retire_all ? 1 : 0),
+                     "Retirement changed the other window's lifetime");
+      if (ordinal != 0) return true;
+      scenario.shared->value = 7;
+      ordinal = 2;
+      publish();
+      static_cast<void>(scenario.application->OpenWindow({
+          .title = "HuxerUI native reopened", .key = "reopened", .initial_size = {320.0F, 240.0F},
+      }));
+      stage = 0;
+    }
+    return false;
+  };
+  RunScenario(scenario);
+  REQUIRE(scenario.records.at(2).shared_value == 7);
+}
+
+TEST_CASE("LinuxNativeDestroyedHostReleasesItsCppWindow", "[.][linux-native-retire]") {
+  NativeScenario scenario;
+  bool destroyed = false;
+  scenario.advance = [&] {
+    if (!destroyed) {
+      if (!scenario.records.contains(1)) return false;
+      scenario.Watch("HuxerUI native extra");
+      auto native = scenario.watches.back()->Window();
+      gtk_window_destroy(native.get());
+      destroyed = true;
+      return false;
+    }
+    const auto runtime = scenario.runtime.lock();
+    return runtime && runtime->windows.size() == 1 && scenario.records.at(1).unmounts == 1 &&
+        scenario.watches.back()->Released();
+  };
+  RunScenario(scenario);
+}
+
+TEST_CASE("LinuxNativeRenderFailureDefersHostCleanup", "[.][linux-native-retire]") {
+  NativeScenario scenario;
+  bool fail = false;
+  scenario.content = [&](const WindowIdentity& identity) -> View {
+    if (fail && identity.ordinal == 1) throw std::runtime_error("HuxerUI native retirement render failure");
+    return Text("render failure cleanup");
+  };
+  scenario.advance = [&] {
+    if (scenario.records.contains(1) && !fail) {
+      scenario.Watch("HuxerUI native extra");
+      fail = true;
+      ++scenario.shared->value;
+    }
+    return false;
+  };
+  RunScenario(scenario, "HuxerUI native retirement render failure");
+}
+
+TEST_CASE("LinuxNativeRetirementDetachesRetainedGtkCallbacks", "[.][linux-native-retire]") {
+  NativeScenario scenario;
+  std::unique_ptr<GtkWindow, decltype(&g_object_unref)> native{nullptr, g_object_unref};
+  std::unique_ptr<GtkWidget, decltype(&g_object_unref)> canvas{nullptr, g_object_unref};
+  std::vector<std::unique_ptr<GObject, decltype(&g_object_unref)>> controllers;
+  int stage = 0;
+  scenario.advance = [&] {
+    if (stage == 0) {
+      if (!scenario.records.contains(1)) return false;
+      scenario.Watch("HuxerUI native extra");
+      native = scenario.watches.back()->Window();
+      canvas.reset(GTK_WIDGET(g_object_ref(gtk_window_get_child(native.get()))));
+      GListModel* model = gtk_widget_observe_controllers(canvas.get());
+      for (guint index = 0; index < g_list_model_get_n_items(model); ++index) {
+        controllers.emplace_back(G_OBJECT(g_list_model_get_item(model, index)), g_object_unref);
+      }
+      g_object_unref(model);
+      scenario.records.at(1).handle->Retire();
+      stage = 1;
+      return false;
+    }
+    const auto runtime = scenario.runtime.lock();
+    if (!runtime || runtime->windows.size() != 1) return false;
+    for (auto& controller : controllers) {
+      if (GTK_IS_EVENT_CONTROLLER_KEY(controller.get())) {
+        gboolean handled = FALSE;
+        g_signal_emit_by_name(controller.get(), "key-pressed", GDK_KEY_Escape, 9U, GdkModifierType{}, &handled);
+        scenario.Check(!handled, "Retired key controller still handled input");
+      }
+      if (GTK_IS_EVENT_CONTROLLER_FOCUS(controller.get())) {
+        g_signal_emit_by_name(controller.get(), "enter");
+        g_signal_emit_by_name(controller.get(), "leave");
+      }
+    }
+    GtkSnapshot* snapshot = gtk_snapshot_new();
+    GTK_WIDGET_GET_CLASS(canvas.get())->snapshot(canvas.get(), snapshot);
+    g_object_unref(snapshot);
+    GTK_WIDGET_GET_CLASS(canvas.get())->size_allocate(canvas.get(), 100, 100, -1);
+    g_object_notify(G_OBJECT(canvas.get()), "scale-factor");
+    g_object_notify(G_OBJECT(native.get()), "is-active");
+    scenario.records.at(1).handle->Show();
+    scenario.records.at(1).handle->Retire();
+    controllers.clear();
+    canvas.reset();
+    native.reset();
+    return true;
+  };
+  RunScenario(scenario);
+}
 
 #ifdef GDK_WINDOWING_X11
 namespace {

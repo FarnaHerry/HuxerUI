@@ -584,6 +584,18 @@ TEST_CASE("WindowHandleBecomesInactiveAfterRuntimeDestruction") {
   REQUIRE(platform.window_commands.empty());
 }
 
+TEST_CASE("WindowRetirementReleasesItsLastSemanticFrame") {
+  TestPlatform platform;
+  UiWindow window(WindowContentApp, platform);
+  window.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  std::weak_ptr<const SemanticFrame> frame = window.BuildCommit().semantic_frame;
+  REQUIRE(!frame.expired());
+
+  detail::InternalAccess::RetireWindow(platform);
+
+  REQUIRE(frame.expired());
+}
+
 namespace {
 std::size_t lifecycle_window_slot = 0;
 std::vector<WindowHandle> lifecycle_windows;

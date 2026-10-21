@@ -1,5 +1,9 @@
 #include "linux_internal.h"
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 #include <gtk/gtk.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/x11/gdkx.h>
@@ -35,6 +39,7 @@
 #include <huxerui/window.h>
 
 #include "io/file_internal.h"
+#include "internal_access.h"
 #include "io/http_internal.h"
 #include "linux_file_internal.h"
 #include "linux_file_picker_internal.h"
@@ -54,6 +59,27 @@ namespace huxerui::detail {
 namespace {
 
 constexpr float kDipsPerScrollStep = 40.0F;
+
+struct LinuxWindowReference {
+  GWeakRef window;
+  explicit LinuxWindowReference(GtkWindow* native) { g_weak_ref_init(&window, native); }
+  ~LinuxWindowReference() { g_weak_ref_clear(&window); }
+};
+
+unsigned long X11WindowId(GtkWindow* window) noexcept {
+#ifdef GDK_WINDOWING_X11
+  if (window != nullptr) {
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window));
+    if (surface != nullptr && GDK_IS_X11_SURFACE(surface)) {
+      G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+      return gdk_x11_surface_get_xid(surface);
+      G_GNUC_END_IGNORE_DEPRECATIONS
+    }
+  }
+#endif
+  return 0;
+}
+
 const char* LinuxPointerCursorName(PointerCursorKind kind) noexcept {
   switch (kind) {
   case PointerCursorKind::Default:
@@ -777,19 +803,27 @@ public:
   }
 
   std::shared_ptr<FilePickerTransport> CreateFilePickerTransport() override {
-    return CreateLinuxFilePickerTransport([this] { return X11WindowId(); });
+    auto reference = std::make_shared<LinuxWindowReference>(window_);
+    return CreateLinuxFilePickerTransport([reference] {
+      std::unique_ptr<GtkWindow, decltype(&g_object_unref)> window{
+          GTK_WINDOW(g_weak_ref_get(&reference->window)), g_object_unref};
+      return X11WindowId(window.get());
+    });
   }
 
   bool CanDiscardHost() const override {
     return window_ != nullptr;
   }
 
-  /// Destroys the GTK window after shared retirement; the synchronous "destroy" signal runs the remaining
-  /// native cleanup through Destroyed. Wayland surfaces are destroyed the same way, positions just were never set.
+  /// Detaches native facilities while the widget tree is alive, before GTK disposes the window.
   void DiscardHost() override {
-    if (window_ != nullptr) {
-      gtk_window_destroy(window_);
+    Cleanup();
+#if defined(__GLIBC__)
+    // A headless application can stay alive indefinitely; return the retired UI's free heap pages now.
+    if (g_list_model_get_n_items(gtk_window_get_toplevels()) == 0) {
+      static_cast<void>(malloc_trim(0));
     }
+#endif
   }
 
   /// Reports the window origin in logical screen coordinates on X11. Wayland compositors own placement by
@@ -949,12 +983,7 @@ public:
       static_cast<LinuxRuntime&>(ApplicationRuntime()).RecordWindowFailure(failure_);
       ApplicationRuntime().RequestShutdown();
     }
-    if (window_ != nullptr) {
-      GtkWindow* window = window_;
-      window_ = nullptr;
-      drawing_area_ = nullptr;
-      gtk_window_destroy(window);
-    }
+    // The queued shutdown detaches native facilities after this failing callback returns.
   }
 
 private:
@@ -1070,6 +1099,7 @@ private:
 
     g_signal_connect(window_, "close-request", G_CALLBACK(CloseRequested), this);
     g_signal_connect(window_, "destroy", G_CALLBACK(Destroyed), this);
+    g_signal_connect(window_, "unrealize", G_CALLBACK(WindowUnrealized), this);
     g_signal_connect(window_, "map", G_CALLBACK(WindowMapped), this);
     g_signal_connect(window_, "unmap", G_CALLBACK(WindowUnmapped), this);
     g_signal_connect(window_, "notify::is-active", G_CALLBACK(WindowActiveChanged), this);
@@ -1359,18 +1389,28 @@ private:
     });
   }
 
-  unsigned long X11WindowId() const noexcept {
-#ifdef GDK_WINDOWING_X11
-    if (window_ != nullptr) {
-      GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
-      if (surface != nullptr && GDK_IS_X11_SURFACE(surface)) {
-        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-        return gdk_x11_surface_get_xid(surface);
-        G_GNUC_END_IGNORE_DEPRECATIONS
-      }
+  void DetachCanvasCallbacks() noexcept {
+    if (drawing_area_ == nullptr) return;
+    auto* canvas = reinterpret_cast<HuxerUICanvas*>(drawing_area_);
+    canvas->snapshot = nullptr;
+    canvas->allocate = nullptr;
+    canvas->data = nullptr;
+    g_signal_handlers_disconnect_by_data(drawing_area_, this);
+    GListModel* controllers = gtk_widget_observe_controllers(drawing_area_);
+    for (guint index = 0; index < g_list_model_get_n_items(controllers); ++index) {
+      GObject* controller = G_OBJECT(g_list_model_get_item(controllers, index));
+      g_signal_handlers_disconnect_by_data(controller, this);
+      g_object_unref(controller);
     }
-#endif
-    return 0;
+    g_object_unref(controllers);
+  }
+
+  void QueueRetiredWindowRelease() {
+    if (release_requested_) return;
+    if (const auto service = InternalAccess::WindowServiceOf(*this)) {
+      release_requested_ = true;
+      service->ReleaseRetiredWindow();
+    }
   }
 
   void Cleanup() noexcept {
@@ -1378,12 +1418,15 @@ private:
     // Native facilities must release while the widget tree is still alive: the IM client and platform
     // views detach through live widgets, so a post-destroy release would touch finalized objects.
     ReleaseNativeFacilities();
+    DetachCanvasCallbacks();
     if (window_ != nullptr) {
       GtkWindow* window = window_;
+      g_signal_handlers_disconnect_by_data(window, this);
       window_ = nullptr;
       drawing_area_ = nullptr;
       gtk_window_destroy(window);
     }
+    QueueRetiredWindowRelease();
   }
 
   /// Releases the per-window native subsystems while the widget tree can still serve detach calls.
@@ -1481,15 +1524,9 @@ private:
       self.ApplicationRuntime().RequestShutdown();
       return TRUE;
     }
-    // Runtime-opened windows retire independently. GTK4 defers the native dispose of gtk_window_destroy,
-    // so the shared teardown runs here — owned transients first, then this window — and the later
-    // "destroy" emission finds everything already retired and releases only the remaining references.
+    // Retire owned transients first, then detach this host before GTK's deferred native disposal.
     self.ApplicationRuntime().RetireOwned(self);
-    self.Retire();
-    self.ReleaseNativeFacilities();
-    if (self.window_ != nullptr) {
-      gtk_window_destroy(self.window_);
-    }
+    self.Cleanup();
     return TRUE;
   }
 
@@ -1497,6 +1534,7 @@ private:
     auto& self = *static_cast<LinuxUiWindow*>(data);
     self.text_input_.Reset();
     if (self.drawing_area_ != nullptr && GTK_WIDGET(self.drawing_area_) == widget) {
+      self.DetachCanvasCallbacks();
       self.drawing_area_ = nullptr;
     }
   }
@@ -1507,19 +1545,30 @@ private:
     auto& self = *static_cast<LinuxUiWindow*>(data);
     self.CancelPointer();
     self.key_tracker_.Reset();
-    self.toplevel_ = nullptr;
-    self.toplevel_state_handler_ = 0;
-    self.window_ = nullptr;
-    self.drawing_area_ = nullptr;
     self.Retire();
     self.ReleaseNativeFacilities();
+    self.DetachCanvasCallbacks();
+    if (self.window_ != nullptr) g_signal_handlers_disconnect_by_data(self.window_, &self);
+    self.window_ = nullptr;
+    self.drawing_area_ = nullptr;
+    self.QueueRetiredWindowRelease();
   }
 
   static void WindowMapped(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    self.text_input_.SetClientWidget(self.drawing_area_);
+    self.text_input_.SetFocus(gtk_widget_has_focus(self.drawing_area_));
     self.AttachToplevelState();
     self.ApplyPendingInitialPosition();
     self.UpdateLifecycleState();
+  }
+
+  static void WindowUnrealized(GtkWidget*, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    // GTK's destroy emission follows native disposal; detach IM delegates before unrealize destroys them.
+    self.text_input_.SetFocus(false);
+    self.text_input_.SetClientWidget(nullptr);
+    self.DetachToplevelState();
   }
 
   static void WindowUnmapped(GtkWidget*, gpointer data) {
@@ -1807,6 +1856,7 @@ private:
   bool primary_ = false;
   bool minimized_ = false;
   bool native_facilities_released_ = false;
+  bool release_requested_ = false;
   std::optional<Point> pending_initial_position_;
   bool performing_minimize_ = false;
   bool performing_close_ = false;

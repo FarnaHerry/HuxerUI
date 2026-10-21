@@ -150,7 +150,8 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   std::vector<std::weak_ptr<HttpOperationState>> http_operations;
   std::shared_ptr<TaskScopeState> tasks;
   std::vector<std::weak_ptr<UiExecutionState>> uis;
-  /// Native windows created through Runtime::OpenWindow, owned until retirement clears them before services.
+  /// Native windows created through Runtime::OpenWindow. Hosts acknowledge detached callbacks before deferred
+  /// object release; application shutdown clears any remaining windows before services.
   std::vector<std::unique_ptr<UiWindow>> windows;
   /// Next creation order assigned to a window; zero is the initial window.
   std::uint32_t next_window_ordinal = 0;
