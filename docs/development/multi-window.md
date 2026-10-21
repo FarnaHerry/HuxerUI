@@ -98,3 +98,18 @@ build\check\bin\Release\huxerui_runtime_tests.exe "MultiWindow*,RuntimeOpenWindo
 ```
 
 Linux and macOS hosts use the same targets after a normal configure; see [Building HuxerUI](building.md) for toolchain selection.
+
+The separate hidden `[linux-native-drag]` case drives actual X11 pointer input through dynamically loaded XTest.
+It covers a cross-window typed drop, source retirement during native transport, and a subsequent ordinary click without synthetic target Down events.
+Run it with an X11 display and libXtst available:
+
+```bash
+GDK_BACKEND=x11 build/bin/huxerui_linux_tests "[linux-native-drag]"
+```
+
+Unlike the `[linux-native]` cases, this invocation omits `G_DEBUG=fatal-warnings`: retiring the source during live X11 transport makes GTK 4 leave its IM multicontext delegate dangling, and teardown prints one GLib `g_object_unref` critical per affected window after the assertions pass.
+It skips on Wayland and when XTest is unavailable; a skip does not validate native Wayland dragging.
+Use an isolated X11 display without window-manager animations for deterministic XTest placement and clicks; a rootful nested Xwayland server is suitable.
+For example, start `Xwayland -displayfd 1 -geometry 1280x800 -shm -ac -nolisten tcp`, then use its reported display number in DISPLAY for the native test process and stop that server afterward.
+The shared `[window-drag]` Runtime cases exercise transport-independent scopes, target geometry, snapshots, callback context, Runtime isolation, modality, and lifecycle cleanup.
+`example_multi_window` includes opted-in sources and targets for manual backend validation.

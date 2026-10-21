@@ -799,6 +799,7 @@ class SceneTransitionService;
 struct ViewSpec;
 class RecomposeScope;
 class VirtualMeasureSession;
+class WindowDrag;
 
 } // namespace detail
 
@@ -840,6 +841,11 @@ public:
   /// Requests the cursor represented by the PointerCursorKind argument on this native window.
   /// Called on the application thread; the default implementation ignores the request on hosts without pointer cursors.
   virtual void SetPointerCursor(PointerCursorKind) {}
+  /// Starts host transport for an accepted application-scoped mouse drag. Framework use only.
+  /// The retained operation belongs to the original Runtime; native callbacks use its private normalized contract.
+  /// Return false without retaining the operation when unsupported. Shared recognition and local delivery continue.
+  /// Native implementations must not synchronously complete the operation before returning.
+  virtual bool BeginWindowDrag(std::shared_ptr<detail::WindowDrag>) { return false; }
   /// Creates native text measurement/layout state for attributed content on the application thread.
   /// @param text Attributed content to retain or copy into the layout.
   /// @param style Resolved default typography used where spans do not override it.
@@ -1126,6 +1132,7 @@ private:
   friend class detail::ApplicationService;
   friend class detail::FileDropReceiver;
   friend class detail::PointerInteraction;
+  friend class detail::WindowDrag;
   friend class detail::RecomposeScope;
   friend class detail::SceneTransitionService;
   friend class detail::SemanticTree;

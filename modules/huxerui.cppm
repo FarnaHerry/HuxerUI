@@ -98,6 +98,7 @@ export namespace huxerui {
     using huxerui::Divider;
     using huxerui::DividerStyle;
     using huxerui::DragDropResult;
+    using huxerui::DragDropScope;
     using huxerui::DragEvent;
     using huxerui::DragEvents;
     using huxerui::DragGesture;

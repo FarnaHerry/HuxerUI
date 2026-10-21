@@ -574,6 +574,8 @@ HuxerUI wins Down
 
 Ownership never transfers across the PlatformView boundary after Down.
 Platform adapters keep host-level delivery active until physical Up, Cancel, capture loss, or device loss; shared Runtime alone chooses the gesture owner.
+An application-scoped DragSource may start private native drag transport after acceptance; the original source sequence remains the only recognized owner, while receiver windows dispatch typed drop events rather than raw pointer input.
+Native completion retires the original sequence once, and source removal cancels transport under the existing quarantine and teardown rules.
 
 ## Layers
 
@@ -604,6 +606,7 @@ Captured Environment affects the layer's mounted declarations and event handlers
 The final button Up completes the owner and removes the session.
 Platform Cancel, capture loss, window deactivation, or device loss first terminates pointer ownership and then removes the session.
 UiWindow retirement discards sessions before mounted nodes without invoking application callbacks during teardown.
+An application-scoped transfer dismisses its receiver preview immediately and queues Exited to a still-mounted receiver after teardown, without invoking a source callback.
 
 Disable, subtree deactivation, modifier removal, incompatible replacement, or unmount terminates recognition without retaining callbacks from declarations that no longer exist.
 If the recognized modifier remains mounted, an accepted recognizer receives Canceled.

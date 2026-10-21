@@ -1515,6 +1515,10 @@ The complete interaction-state, indication, visual-fill, and retained paint cont
 The repeated-tap, long-press, drag, recognition, and pointer-ownership model is specified separately in [Gesture Recognition and Arbitration Design](gestures.md).
 In-process typed transfer builds on that ownership path and is specified in [Typed Drag-and-Drop Design](drag-drop.md).
 
+Application-scoped typed drag-and-drop retains the original PointerSession while a private host transport delivers target-relative updates to another attachment of the same Runtime.
+The receiver reuses its committed hit route and typed drop dispatch under its own execution context, without synthesizing physical pointer input or creating a second recognizer.
+Transport and source/receiver retirement rules are specified in [Typed Drag-and-Drop](drag-drop.md#application-scoped-transfers).
+
 Pointer input follows one shared pipeline:
 
 ```text

@@ -18,12 +18,14 @@ target_sources(huxerui_linux_tests PRIVATE
         resident_effects.cpp
         text_input.cpp
         window_chrome.cpp
+        window_drag_native.cpp
 )
 target_include_directories(huxerui_linux_tests PRIVATE
         "${HUXERUI_PROJECT_DIR}/examples/platform_module"
         "$<TARGET_PROPERTY:huxerui_core_objects,INCLUDE_DIRECTORIES>"
 )
 target_link_libraries(huxerui_linux_tests PRIVATE
+        ${CMAKE_DL_LIBS}
         PkgConfig::HUXERUI_GTK4
         PkgConfig::HUXERUI_EPOXY
         PkgConfig::HUXERUI_GIO
@@ -32,3 +34,4 @@ target_include_directories(huxerui_linux_tests PRIVATE "${HUXERUI_PROJECT_DIR}/p
 target_compile_definitions(huxerui_linux_tests PRIVATE
         HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE="${HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE}"
 )
+_huxerui_append_resource_package_input(huxerui_linux_tests "${HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE}")

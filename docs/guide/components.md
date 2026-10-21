@@ -595,6 +595,21 @@ return CardView(card)
     });
 ```
 
+For transfers between windows of the same application, opt in on both declarations:
+
+```cpp
+DragSource(CardTransfer{card.id}).Scope(DragDropScope::Application)
+DropTarget::Accepts<CardTransfer>().Scope(DragDropScope::Application)
+```
+
+The default scope is Window.
+Application scope currently supports mouse transfers on Linux; other hosts and devices keep same-window behavior.
+Use the receiver's existing Entered, Moved, Exited, and Dropped events for feedback and authoritative data changes.
+Receiver events use receiver-window coordinates and never synthesize a press or start another gesture.
+Native transport may stop producing source position updates, so source termination carries its latest valid source-window drag snapshot.
+Removing the source node or retiring its window cancels the transfer; keep them alive until completion when showing a provisional merge in another window.
+The optional preview follows the pointer over participating HuxerUI windows and disappears outside them.
+
 Use a long-press DragGesture configuration for reorder behavior inside scrolling content.
 Typed DragSource/DropTarget transfers are in-process; native files, URLs, and PlatformView targets are not inferred from an application payload.
 Use [FileDropTarget](files.md#receiving-dropped-files) to receive external ordinary files through the separate host-owned file-drop lifecycle.
