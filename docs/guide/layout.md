@@ -104,6 +104,8 @@ That displacement never changes controller metrics or the authoritative content 
 
 Use `ViewEvents::ScrollInput` only when a View needs the raw wheel or trackpad update before default scrolling, such as a zoomable canvas.
 Returning true consumes the complete two-dimensional update; returning false leaves it to built-in scrolling.
+`ScrollInputEvent::kind` distinguishes `Wheel` from `Touchpad`; a touchpad gesture reports `Begin`, `Update`, and `End` or `Cancel` through `phase`, while a wheel reports independent updates.
+Only `Update` carries touchpad distance, and consuming a terminal phase does not prevent the gesture from closing.
 Touch dragging remains pointer input and does not emit `ScrollInputEvent`.
 
 ## RefreshBox
@@ -138,7 +140,7 @@ The built-in indicator, pull resistance, maximum displacement, trigger distance,
 ## IndexedPages and Pager
 
 Use `IndexedPages` when peer pages should retain local state and switch immediately under an external selection control.
-Use `Pager` when the same retained pages also need animated controlled changes and direct one-page dragging.
+Use `Pager` when the same retained pages also need animated controlled changes and direct one-page dragging or touchpad paging.
 
 ```cpp
 return Pager(
@@ -161,9 +163,11 @@ Pager never owns the selected index.
 A short or canceled drag, or a rejected selection proposal, settles back to the original index, so successive Settled events can contain the same index.
 Retargeting an unfinished animation reports only the final settled target, not the interrupted target.
 Initial mount and stationary recomposition do not emit Settled; the event describes component layout, not acknowledgement that a frame reached the display.
-Set `DragEnabled(false)` to keep programmatic and accessibility paging while disabling direct pointer paging.
+Set `DragEnabled(false)` to keep programmatic and accessibility paging while disabling direct pointer and touchpad paging.
 `Reverse()` applies an explicit direction inversion; it is not a replacement for natural layout direction.
-Pager does not map wheel or trackpad distance to page changes.
+Continuous touchpad input moves Pager with the gesture and proposes one adjacent page on release; cancellation rebounds.
+Inner horizontal scrolling consumes its available distance before Pager receives any remainder.
+Discrete mouse wheels do not change pages.
 
 ## ScrollController
 

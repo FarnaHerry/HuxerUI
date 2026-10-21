@@ -28,6 +28,7 @@ std::optional<ScrollInputEvent> received_scroll_input;
 ScrollController scroll_input_controller;
 ScrollController cross_axis_outer_scroll;
 ScrollController cross_axis_inner_scroll;
+ScrollController pager_inner_scroll;
 ScrollController hook_outer_scroll;
 ScrollController hook_inner_scroll;
 ScrollController activity_scroll;
@@ -300,6 +301,26 @@ View InteractivePagerApp() {
       .OnSettled([](std::size_t index) { pager_settlements.push_back(index); });
 }
 
+View NestedTouchpadPagerApp() {
+  auto selected = UseState<std::size_t>(1);
+  auto inner = UseScrollController();
+  interactive_pager_page = selected;
+  pager_inner_scroll = inner;
+  return Pager(
+             {
+                 Text("Previous"),
+                 ScrollView {
+                   Spacer().With(huxerui::Frame{160.0F, 80.0F}),
+                 }.ScrollAxis(Axis::Horizontal).Controller(inner).With(huxerui::Frame{100.0F, 80.0F}),
+                 Text("Next"),
+             },
+             selected
+  ).OnChanged([selected](std::size_t index) {
+    pager_proposals.push_back(index);
+    selected = index;
+  });
+}
+
 View ReversedVerticalPagerApp() {
   auto selected = UseState<std::size_t>(1);
   reversed_pager_page = selected;
@@ -540,6 +561,26 @@ TEST_CASE("Scroll input may consume the complete platform update before default 
   const Point boundary_consumption = runtime.HandleScrollInput({{50.0F, 40.0F}, 0.0F, -20.0F});
   REQUIRE(boundary_consumption == Point{});
   REQUIRE(runtime.RootNode()->scroll_state->overscroll_offset == 0.0F);
+}
+
+TEST_CASE("Scroll input handlers observe continuous touchpad lifecycle phases") {
+  consume_scroll_input = false;
+  received_scroll_input.reset();
+  TestPlatform platform;
+  UiWindow runtime{ScrollInputApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 100.0F}});
+  runtime.BuildFrame();
+
+  for (ScrollInputPhase phase : {ScrollInputPhase::Begin, ScrollInputPhase::Update,
+                                 ScrollInputPhase::End}) {
+    const ScrollInputEvent input{
+        {50.0F, 40.0F}, 0.0F, phase == ScrollInputPhase::Update ? 20.0F : 0.0F,
+        {}, ScrollInputKind::Touchpad, phase,
+    };
+    static_cast<void>(runtime.HandleScrollInput(input));
+    REQUIRE(received_scroll_input == input);
+  }
+  REQUIRE(scroll_input_controller.Offset() == 20.0F);
 }
 
 TEST_CASE("Diagonal scroll input coordinates each axis independently") {
@@ -1005,6 +1046,180 @@ TEST_CASE("Pager uses direct drag without mapping wheel input and honors DragEna
   runtime.HandlePointerEvent({PointerEventType::Up, 302, {80.0F, 40.0F}, PointerDeviceKind::Mouse});
   runtime.BuildFrame();
   REQUIRE(pager_proposals == std::vector<std::size_t>{2});
+  REQUIRE(runtime.HandleScrollInput({
+      {50.0F, 40.0F}, -60.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::Update,
+  }) == Point{});
+  static_cast<void>(runtime.HandleScrollInput({
+      {50.0F, 40.0F}, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::End,
+  }));
+  REQUIRE(pager_proposals == std::vector<std::size_t>{2});
+}
+
+TEST_CASE("Pager follows continuous touchpad input and settles through controlled proposals") {
+  pager_proposals.clear();
+  pager_settlements.clear();
+  accept_pager_proposals = true;
+  TestPlatform platform;
+  UiWindow runtime{InteractivePagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+  const auto input = [&](ScrollInputPhase phase, float delta_x) {
+    return runtime.HandleScrollInput({
+        {50.0F, 40.0F}, delta_x, 0.0F, {}, ScrollInputKind::Touchpad, phase,
+    });
+  };
+
+  REQUIRE(input(ScrollInputPhase::Begin, 0.0F) == Point{});
+  REQUIRE(input(ScrollInputPhase::Update, 60.0F) == Point{60.0F, 0.0F});
+  runtime.BuildFrame();
+  REQUIRE(runtime.RootNode()->children[2]->PresentationBounds().x == Catch::Approx(40.0F));
+  REQUIRE(pager_proposals.empty());
+  REQUIRE(input(ScrollInputPhase::End, 0.0F) == Point{});
+  runtime.BuildFrame();
+  REQUIRE(pager_proposals == std::vector<std::size_t>{2});
+  REQUIRE(interactive_pager_page.Get() == 2);
+  for (int frame = 0; frame < 6; ++frame) {
+    platform.AdvanceTime(0.25);
+    runtime.BuildFrame();
+  }
+  REQUIRE(pager_settlements == std::vector<std::size_t>{2});
+}
+
+TEST_CASE("Pager touchpad input rebounds on short, reversed, canceled, and rejected gestures") {
+  const std::string scenario = GENERATE("short", "reversed", "canceled", "rejected");
+  CAPTURE(scenario);
+  pager_proposals.clear();
+  pager_settlements.clear();
+  accept_pager_proposals = scenario != "rejected";
+  TestPlatform platform;
+  UiWindow runtime{InteractivePagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+  const auto input = [&](ScrollInputPhase phase, float delta_x) {
+    return runtime.HandleScrollInput({
+        {50.0F, 40.0F}, delta_x, 0.0F, {}, ScrollInputKind::Touchpad, phase,
+    });
+  };
+
+  static_cast<void>(input(ScrollInputPhase::Begin, 0.0F));
+  static_cast<void>(input(ScrollInputPhase::Update, scenario == "short" ? 20.0F : 60.0F));
+  if (scenario == "reversed") {
+    static_cast<void>(input(ScrollInputPhase::Update, -50.0F));
+  }
+  static_cast<void>(input(scenario == "canceled" ? ScrollInputPhase::Cancel : ScrollInputPhase::End, 0.0F));
+  for (int frame = 0; frame < 6; ++frame) {
+    runtime.BuildFrame();
+    platform.AdvanceTime(0.25);
+  }
+  REQUIRE(pager_proposals == (scenario == "rejected" ? std::vector<std::size_t>{2}
+                                                     : std::vector<std::size_t>{}));
+  REQUIRE(interactive_pager_page.Get() == 1);
+  REQUIRE(runtime.RootNode()->children[1]->PresentationBounds().x == Catch::Approx(0.0F));
+  REQUIRE(pager_settlements == std::vector<std::size_t>{1});
+}
+
+TEST_CASE("Pager touchpad velocity can commit below the distance threshold") {
+  pager_proposals.clear();
+  accept_pager_proposals = true;
+  TestPlatform platform;
+  UiWindow runtime{InteractivePagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+  const auto input = [&](ScrollInputPhase phase, float delta_x) {
+    return runtime.HandleScrollInput({
+        {50.0F, 40.0F}, delta_x, 0.0F, {}, ScrollInputKind::Touchpad, phase,
+    });
+  };
+
+  static_cast<void>(input(ScrollInputPhase::Begin, 0.0F));
+  static_cast<void>(input(ScrollInputPhase::Update, 10.0F));
+  platform.AdvanceTime(0.01);
+  static_cast<void>(input(ScrollInputPhase::Update, 10.0F));
+  static_cast<void>(input(ScrollInputPhase::End, 0.0F));
+  runtime.BuildFrame();
+  REQUIRE(pager_proposals == std::vector<std::size_t>{2});
+}
+
+TEST_CASE("Pager touchpad input reverses an unfinished settle animation without a presentation jump") {
+  pager_proposals.clear();
+  accept_pager_proposals = true;
+  TestPlatform platform;
+  UiWindow runtime{InteractivePagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+  const auto input = [&](ScrollInputPhase phase, float delta_x) {
+    return runtime.HandleScrollInput({
+        {50.0F, 40.0F}, delta_x, 0.0F, {}, ScrollInputKind::Touchpad, phase,
+    });
+  };
+
+  static_cast<void>(input(ScrollInputPhase::Begin, 0.0F));
+  static_cast<void>(input(ScrollInputPhase::Update, 60.0F));
+  static_cast<void>(input(ScrollInputPhase::End, 0.0F));
+  runtime.BuildFrame();
+  runtime.BuildFrame();
+  platform.AdvanceTime(0.05);
+  runtime.BuildFrame();
+  REQUIRE(pager_proposals == std::vector<std::size_t>{2});
+  const float before = runtime.RootNode()->children[2]->PresentationBounds().x;
+  static_cast<void>(input(ScrollInputPhase::Begin, 0.0F));
+  REQUIRE(input(ScrollInputPhase::Update, -60.0F) == Point{-60.0F, 0.0F});
+  runtime.BuildFrame();
+  REQUIRE(runtime.RootNode()->children[2]->PresentationBounds().x == Catch::Approx(before + 60.0F));
+  static_cast<void>(input(ScrollInputPhase::End, 0.0F));
+  runtime.BuildFrame();
+  REQUIRE(pager_proposals == std::vector<std::size_t>{2, 1});
+  REQUIRE(interactive_pager_page.Get() == 1);
+}
+
+TEST_CASE("Nested horizontal touchpad scrolling passes only boundary remainder to Pager") {
+  pager_proposals.clear();
+  TestPlatform platform;
+  UiWindow runtime{NestedTouchpadPagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+  const auto input = [&](ScrollInputPhase phase, float delta_x, float delta_y = 0.0F) {
+    return runtime.HandleScrollInput({
+        {50.0F, 40.0F}, delta_x, delta_y, {}, ScrollInputKind::Touchpad, phase,
+    });
+  };
+
+  static_cast<void>(input(ScrollInputPhase::Begin, 0.0F));
+  REQUIRE(input(ScrollInputPhase::Update, 40.0F) == Point{40.0F, 0.0F});
+  REQUIRE(pager_inner_scroll.Offset() == 40.0F);
+  REQUIRE(runtime.RootNode()->scroll_state->offset_x == 100.0F);
+  REQUIRE(input(ScrollInputPhase::Update, 40.0F) == Point{40.0F, 0.0F});
+  REQUIRE(pager_inner_scroll.Offset() == 60.0F);
+  REQUIRE(runtime.RootNode()->scroll_state->offset_x == 120.0F);
+  REQUIRE(input(ScrollInputPhase::Update, 0.0F, 30.0F) == Point{});
+  static_cast<void>(input(ScrollInputPhase::End, 0.0F));
+  runtime.BuildFrame();
+  REQUIRE(pager_proposals.empty());
+}
+
+TEST_CASE("Pager leaves edge touchpad displacement and ordinary wheel input unconsumed") {
+  pager_proposals.clear();
+  TestPlatform platform;
+  UiWindow runtime{InteractivePagerApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 80.0F}});
+  runtime.BuildFrame();
+  REQUIRE(runtime.HandleScrollInput({{50.0F, 40.0F}, 60.0F, 0.0F}) == Point{});
+  REQUIRE(runtime.HandleScrollInput({{50.0F, 40.0F}, 0.0F, 60.0F}) == Point{});
+  interactive_pager_page = 0;
+  runtime.BuildFrame();
+  platform.AdvanceTime(0.25);
+  runtime.BuildFrame();
+  runtime.BuildFrame();
+  static_cast<void>(runtime.HandleScrollInput({
+      {50.0F, 40.0F}, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::Begin,
+  }));
+  REQUIRE(runtime.HandleScrollInput({
+      {50.0F, 40.0F}, -40.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::Update,
+  }) == Point{});
+  static_cast<void>(runtime.HandleScrollInput({
+      {50.0F, 40.0F}, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::End,
+  }));
+  REQUIRE(pager_proposals.empty());
 }
 
 TEST_CASE("Pager changes page after dragging one quarter of its width") {

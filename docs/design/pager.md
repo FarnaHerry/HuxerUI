@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Pager presents one controlled page from an ordered retained set and supports animated programmatic selection and direct one-page dragging.
+Pager presents one controlled page from an ordered retained set and supports animated programmatic selection, direct one-page dragging, and continuous touchpad paging.
 
 It complements rather than replaces the existing page containers:
 
@@ -38,7 +38,7 @@ If the application commits it, Pager settles to the new page; if it does not, Pa
 Changing the selected index programmatically animates without emitting `Changed`.
 
 `ScrollAxis` selects horizontal or vertical paging.
-`DragEnabled(false)` disables Pager's direct pointer gesture without disabling controlled changes or accessibility paging.
+`DragEnabled(false)` disables Pager's direct pointer and touchpad gestures without disabling controlled changes or accessibility paging.
 `Reverse` is an additional direction inversion after natural layout direction is resolved.
 The current layout-direction model resolves horizontal paging as left-to-right; a future inherited layout direction composes with `Reverse` rather than changing its meaning.
 
@@ -55,7 +55,7 @@ Stable keys, local State, Lifecycle, TaskScope, NodeExtension identity, TextFiel
 One private retained extension on the Pager root owns only transient paging state:
 
 - The last displayed controlled index.
-- Direct-drag and release phase.
+- Direct-input and release phase.
 - The adjacent page participating in the current drag.
 - Normalized settle animation progress.
 - The current viewport extent and local slot coordinates.
@@ -93,7 +93,10 @@ Once Pager wins a same-axis direct sequence, pointer delivery, cancellation, dis
 
 The mounted scroll state has a generic allowed-source policy.
 Ordinary ScrollView accepts all existing scroll sources.
-Pager accepts only direct drag through its scroll offset; wheel, trackpad, scrollbar, controller, focus reveal, drag-and-drop auto-scroll, and generic momentum do not silently become free-distance paging.
+Pager accepts direct drag and continuous touchpad input through its scroll offset; discrete wheel, scrollbar, controller, focus reveal, drag-and-drop auto-scroll, and generic momentum do not silently become free-distance paging.
+Each touchpad update first gives an inner same-axis scroll container its available distance, then passes only the unconsumed remainder to Pager.
+At the first or last page, Pager leaves unavailable movement unconsumed.
+Touchpad cancellation rebounds, and touchpad input may reverse an in-progress settle animation from its current presentation offset.
 
 Pager consumes release velocity through its retained extension and chooses at most one adjacent target from displacement and velocity.
 The settle animation uses the current Theme motion duration and resolves immediately under reduced motion.
@@ -122,5 +125,5 @@ Disabling direct drag during an active gesture returns to the controlled page wi
 
 ## Unsupported behavior
 
-Pager does not currently provide lazy page creation, page eviction, wheel paging, keyboard page shortcuts, automatic focus reveal across pages, overscroll effects, infinite wrapping, variable page extents, or public transition progress.
+Pager does not currently provide lazy page creation, page eviction, discrete wheel paging, keyboard page shortcuts, automatic focus reveal across pages, overscroll effects, infinite wrapping, variable page extents, or public transition progress.
 These capabilities require separate product contracts rather than additional flags on the initial component.

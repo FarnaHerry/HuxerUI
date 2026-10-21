@@ -243,7 +243,21 @@ struct HoverEvent {
   bool operator==(const HoverEvent&) const = default;
 };
 
-/// Carries one platform-recognized wheel or trackpad update before default scrolling.
+/// Identifies whether scroll input is a discrete wheel update or a continuous touchpad gesture.
+enum class ScrollInputKind {
+  Wheel,
+  Touchpad,
+};
+
+/// Identifies the lifecycle of a continuous touchpad gesture.
+enum class ScrollInputPhase {
+  Begin,
+  Update,
+  End,
+  Cancel,
+};
+
+/// Carries one platform-recognized wheel update or touchpad gesture phase before default scrolling.
 ///
 /// Touch dragging remains pointer input and does not produce this event.
 struct ScrollInputEvent {
@@ -255,6 +269,10 @@ struct ScrollInputEvent {
   float delta_y = 0.0F;
   /// Keyboard modifiers active during the update.
   KeyModifiers modifiers{};
+  /// Input device class. Wheel retains one-update scrolling semantics.
+  ScrollInputKind kind = ScrollInputKind::Wheel;
+  /// Continuous gesture phase; ignored for Wheel input.
+  ScrollInputPhase phase = ScrollInputPhase::Update;
 
   bool operator==(const ScrollInputEvent&) const = default;
 };
@@ -495,7 +513,8 @@ struct ViewEvents {
   /// receiving Move, Up, or Cancel until the sequence ends.
   struct PointerIntercept : Event<bool(const PointerEvent&)> {};
 
-  /// Offers one platform wheel or trackpad update to the deepest enabled bound View before default scrolling.
+  /// Offers one platform wheel update or touchpad gesture phase to the deepest enabled bound View
+  /// before default scrolling.
   ///
   /// Return true to consume both axes or false to run the built-in nested scroll transaction. The event is direct and
   /// does not bubble, capture, or join pointer-sequence ownership.

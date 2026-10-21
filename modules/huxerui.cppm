@@ -365,6 +365,8 @@ export namespace huxerui {
     using huxerui::ScrollBarStyle;
     using huxerui::ScrollController;
     using huxerui::ScrollInputEvent;
+    using huxerui::ScrollInputKind;
+    using huxerui::ScrollInputPhase;
     using huxerui::ScrollMetrics;
     using huxerui::ScrollPhase;
     using huxerui::ScrollPhysics;

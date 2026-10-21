@@ -51,6 +51,8 @@ namespace {
 constexpr UINT kRenderMessage = WM_APP + 1;
 constexpr UINT kWindowCommandMessage = WM_APP + 3;
 constexpr UINT_PTR kFrameTimer = 1;
+constexpr UINT_PTR kTouchpadScrollTimer = 2;
+constexpr UINT kTouchpadScrollIdleMs = 120;
 constexpr float kDipsPerInch = 96.0F;
 
 enum class MouseTrackingArea {
@@ -1325,6 +1327,34 @@ private:
     mouse_tracking_window_ = mouse_tracking_area_ == MouseTrackingArea::None ? nullptr : tracked_window;
   }
 
+  std::optional<LRESULT> HandleWheelInput(LPARAM position, WPARAM parameter, bool horizontal) {
+    const int raw_delta = GET_WHEEL_DELTA_WPARAM(parameter);
+    const float delta = static_cast<float>(raw_delta);
+    const Point point = ScreenPoint(position);
+    // Wheel messages have no device identity or release phase; sub-notch updates use an idle-ended gesture.
+    const bool precise = std::abs(raw_delta) < WHEEL_DELTA || touchpad_scroll_active_;
+    if (precise && !touchpad_scroll_active_) {
+      touchpad_scroll_active_ = true;
+      static_cast<void>(UiWindow::HandleScrollInput({
+          point, 0.0F, 0.0F, CurrentKeyModifiers(), ScrollInputKind::Touchpad, ScrollInputPhase::Begin,
+      }));
+    }
+    const Point consumed = UiWindow::HandleScrollInput({
+        point, horizontal ? delta : 0.0F, horizontal ? 0.0F : -delta, CurrentKeyModifiers(),
+        precise ? ScrollInputKind::Touchpad : ScrollInputKind::Wheel,
+    });
+    if (precise) {
+      touchpad_last_position_ = point;
+      if (SetTimer(window_, kTouchpadScrollTimer, kTouchpadScrollIdleMs, nullptr) == 0) {
+        touchpad_scroll_active_ = false;
+        static_cast<void>(UiWindow::HandleScrollInput({
+            point, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::End,
+        }));
+      }
+    }
+    return consumed.x != 0.0F || consumed.y != 0.0F ? std::optional<LRESULT>{0} : std::nullopt;
+  }
+
   std::optional<LRESULT> HandleClientPointerMessage(HWND source, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
     case WM_CANCELMODE:
@@ -1418,16 +1448,10 @@ private:
       }
       return 0;
     case WM_MOUSEWHEEL: {
-      const float delta =
-          static_cast<float>(GET_WHEEL_DELTA_WPARAM(w_param)) / static_cast<float>(WHEEL_DELTA) * 120.0F;
-      const Point consumed = UiWindow::HandleScrollInput({ScreenPoint(l_param), 0.0F, -delta, CurrentKeyModifiers()});
-      return consumed.x != 0.0F || consumed.y != 0.0F ? std::optional<LRESULT>{0} : std::nullopt;
+      return HandleWheelInput(l_param, w_param, false);
     }
     case WM_MOUSEHWHEEL: {
-      const float delta =
-          static_cast<float>(GET_WHEEL_DELTA_WPARAM(w_param)) / static_cast<float>(WHEEL_DELTA) * 120.0F;
-      const Point consumed = UiWindow::HandleScrollInput({ScreenPoint(l_param), delta, 0.0F, CurrentKeyModifiers()});
-      return consumed.x != 0.0F || consumed.y != 0.0F ? std::optional<LRESULT>{0} : std::nullopt;
+      return HandleWheelInput(l_param, w_param, true);
     }
     default:
       return std::nullopt;
@@ -1730,6 +1754,16 @@ private:
       ExecuteWindowCommand(static_cast<WindowCommand>(w_param));
       return 0;
     case WM_TIMER:
+      if (w_param == kTouchpadScrollTimer) {
+        KillTimer(window, kTouchpadScrollTimer);
+        if (touchpad_scroll_active_) {
+          touchpad_scroll_active_ = false;
+          static_cast<void>(UiWindow::HandleScrollInput({
+              touchpad_last_position_, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::End,
+          }));
+        }
+        return 0;
+      }
       if (w_param == kFrameTimer) {
         KillTimer(window, kFrameTimer);
         timer_armed_ = false;
@@ -1864,12 +1898,14 @@ private:
   PointerCursorKind pointer_cursor_kind_ = PointerCursorKind::Default;
   HWND mouse_tracking_window_ = nullptr;
   bool pointer_down_ = false;
+  bool touchpad_scroll_active_ = false;
   bool dispatching_pointer_event_ = false;
   bool pointer_cancel_deferred_ = false;
   bool performing_close_ = false;
   bool input_blocked_ = false;
   bool enabled_before_input_block_ = true;
   Point last_pointer_position_;
+  Point touchpad_last_position_;
   Win32Accessibility accessibility_;
   Win32TextInput text_input_;
   std::exception_ptr failure_;

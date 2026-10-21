@@ -29,7 +29,7 @@ enum class ScrollAlignment {
 enum class ScrollSource {
   /// Direct pointer dragging of scrollable content.
   Drag,
-  /// A platform-recognized wheel or trackpad update.
+  /// A discrete platform-recognized wheel update.
   Wheel,
   /// Retained motion after direct input ends.
   Momentum,
@@ -45,6 +45,8 @@ enum class ScrollSource {
   FocusReveal,
   /// Drag-and-drop edge auto-scrolling.
   DragDrop,
+  /// A continuous platform-recognized touchpad gesture.
+  Touchpad,
 };
 
 /// Identifies the lifecycle phase of transient scroll activity.
@@ -90,6 +92,8 @@ struct ScrollActivity {
   float delta = 0.0F;
   /// Metrics after applying the change.
   ScrollMetrics metrics;
+  /// Release velocity in logical pixels per second on an End notification.
+  float release_velocity = 0.0F;
 
   bool operator==(const ScrollActivity&) const = default;
 };

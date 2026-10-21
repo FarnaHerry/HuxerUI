@@ -1516,7 +1516,8 @@ public:
   Pager ScrollAxis(Axis axis) &&;
   /// Applies an additional direction inversion after the natural layout direction is resolved.
   Pager Reverse(bool reverse = true) &&;
-  /// Enables or disables direct pointer paging without affecting controlled selection or accessibility actions.
+  /// Enables or disables direct pointer and touchpad paging without affecting controlled selection
+  /// or accessibility actions.
   Pager DragEnabled(bool enabled) &&;
 
   /// Handles a requested controlled selected-index change.

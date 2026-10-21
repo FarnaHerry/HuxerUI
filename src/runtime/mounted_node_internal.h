@@ -627,7 +627,8 @@ bool ScrollNodeRectIntoView(MountedNode& node, Rect& rect);
 ScrollMetrics ResolveScrollMetrics(const MountedNode& node) noexcept;
 const ScrollPhysics& ResolveScrollPhysics(const MountedNode& node);
 void ValidateScrollPhysics(const ScrollPhysics& physics);
-void NotifyScrollNodeActivity(MountedNode& node, ScrollSource source, ScrollPhase phase, float delta);
+void NotifyScrollNodeActivity(MountedNode& node, ScrollSource source, ScrollPhase phase, float delta,
+                              float release_velocity = 0.0F);
 void StopScrollNodeMotion(MountedNode& node, ScrollPhase phase = ScrollPhase::Cancel);
 float ApplyScrollTransaction(const std::vector<MountedNode*>& route, Axis axis, float delta, ScrollSource source,
                              std::vector<std::uint64_t>* direct_activity_nodes = nullptr,

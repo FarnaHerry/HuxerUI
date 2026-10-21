@@ -67,7 +67,7 @@ Scroll recognition and the existing NodeExtension pointer capability are recogni
 
 Hover and `ScrollInputEvent` remain outside pointer recognition because neither represents an owned Down-to-Up pointer sequence.
 Hover performs an ordinary stateless hit test only when no active pointer delivery owns the event.
-`ScrollInputEvent` is a platform-recognized wheel or trackpad delta and enters the nested scroll transaction without competing with Drag.
+`ScrollInputEvent` is a platform-recognized discrete wheel update or continuous touchpad phase and enters the nested scroll transaction without competing with Drag.
 Its complete ownership and consumption contract is defined by [Scrolling](scrolling.md).
 
 ## Pointer buttons and chords

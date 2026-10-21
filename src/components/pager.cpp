@@ -163,15 +163,22 @@ public:
   }
 
   void OnScrollActivity(ViewNode& node, const ScrollActivity& activity) override {
-    if (activity.source != ScrollSource::Drag || activity.axis != behavior_.axis) {
+    if ((activity.source != ScrollSource::Drag && activity.source != ScrollSource::Touchpad) ||
+        activity.axis != behavior_.axis) {
       return;
     }
     auto& mounted = static_cast<detail::MountedNode&>(node);
     if (activity.phase == ScrollPhase::Begin) {
+      if (mode_ == Mode::Animating) {
+        displayed_index_ = behavior_.selected_index;
+        anchor_offset_ = animation_target_offset_;
+        layout_ready_ = false;
+      }
       mode_ = Mode::Dragging;
       settlement_pending_ = false;
       drag_target_.reset();
       release_velocity_ = 0.0F;
+      UpdateAllowedSources(mounted);
       InvalidateLayout(mounted);
       return;
     }
@@ -184,13 +191,16 @@ public:
       return;
     }
     if (activity.phase == ScrollPhase::End && mode_ == Mode::Dragging) {
+      if (activity.source == ScrollSource::Touchpad) {
+        release_velocity_ = activity.release_velocity;
+      }
       mode_ = Mode::AwaitingCommit;
       proposal_emitted_ = false;
       detail::InternalAccess::RequestFrame(*mounted.ui_window);
       return;
     }
     if (activity.phase == ScrollPhase::Cancel && mode_ == Mode::Dragging) {
-      BeginAnimation(mounted, displayed_index_);
+      BeginAnimation(mounted, behavior_.selected_index);
     }
   }
 
@@ -302,6 +312,7 @@ public:
       progress_.Set(0.0F);
       progress_.AnimateTo(1.0F, behavior_.animation);
       layout_ready_ = true;
+      UpdateAllowedSources(node);
     } else if (mode_ == Mode::Animating && extent_changed) {
       animation_start_offset_ = static_cast<float>(plan.anchor_slot) * extent +
                                 animation_initial_displacement_ * extent;
@@ -320,8 +331,9 @@ private:
     Animating,
   };
 
-  static constexpr std::uint32_t DragSourceMask() {
-    return 1U << static_cast<std::uint32_t>(ScrollSource::Drag);
+  static constexpr std::uint32_t DirectSourceMask() {
+    return (1U << static_cast<std::uint32_t>(ScrollSource::Drag)) |
+           (1U << static_cast<std::uint32_t>(ScrollSource::Touchpad));
   }
 
   void ConfigureScrollState(detail::MountedNode& node) {
@@ -337,8 +349,15 @@ private:
   }
 
   void UpdateAllowedSources(detail::MountedNode& node) const {
-    const bool allows_drag = behavior_.drag_enabled && (mode_ == Mode::Stable || mode_ == Mode::Dragging);
-    node.scroll_state->allowed_sources = allows_drag ? DragSourceMask() : 0U;
+    std::uint32_t sources = 0U;
+    if (behavior_.drag_enabled) {
+      if (mode_ == Mode::Stable || mode_ == Mode::Dragging) {
+        sources = DirectSourceMask();
+      } else if (mode_ == Mode::Animating && layout_ready_) {
+        sources = 1U << static_cast<std::uint32_t>(ScrollSource::Touchpad);
+      }
+    }
+    node.scroll_state->allowed_sources = sources;
   }
 
   void InvalidateLayout(detail::MountedNode& node) {

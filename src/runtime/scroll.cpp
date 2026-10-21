@@ -323,12 +323,14 @@ ScrollMetrics ResolveScrollMetrics(const MountedNode& node) noexcept {
   };
 }
 
-void NotifyScrollNodeActivity(MountedNode& node, ScrollSource source, ScrollPhase phase, float delta) {
+void NotifyScrollNodeActivity(MountedNode& node, ScrollSource source, ScrollPhase phase, float delta,
+                              float release_velocity) {
   if (!node.ui_window) {
     return;
   }
   InternalAccess::NotifyScrollActivity(
-      *node.ui_window, node, ScrollActivity{source, phase, ScrollAxis(node), delta, ResolveScrollMetrics(node)}
+      *node.ui_window, node,
+      ScrollActivity{source, phase, ScrollAxis(node), delta, ResolveScrollMetrics(node), release_velocity}
   );
 }
 
@@ -698,12 +700,12 @@ std::vector<MountedNode*> ScrollCandidates(const std::vector<MountedNode*>& rout
   return candidates;
 }
 
-void BeginDirectActivity(MountedNode& node, std::vector<std::uint64_t>* activity_nodes) {
+void BeginDirectActivity(MountedNode& node, ScrollSource source, std::vector<std::uint64_t>* activity_nodes) {
   if (!activity_nodes || std::ranges::find(*activity_nodes, node.identity) != activity_nodes->end()) {
     return;
   }
   activity_nodes->push_back(node.identity);
-  NotifyScrollNodeActivity(node, ScrollSource::Drag, ScrollPhase::Begin, 0.0F);
+  NotifyScrollNodeActivity(node, source, ScrollPhase::Begin, 0.0F);
 }
 
 float ConsumeExistingOverscroll(MountedNode& node, float available,
@@ -716,7 +718,7 @@ float ConsumeExistingOverscroll(MountedNode& node, float available,
   const float requested_change = available * resistance;
   const float applied_change = std::abs(requested_change) <= std::abs(current) ? requested_change : -current;
   const float consumed = applied_change / resistance;
-  BeginDirectActivity(node, activity_nodes);
+  BeginDirectActivity(node, ScrollSource::Drag, activity_nodes);
   node.scroll_state->overscroll_offset += applied_change;
   if (std::abs(node.scroll_state->overscroll_offset) < scroll_consumption_epsilon) {
     node.scroll_state->overscroll_offset = 0.0F;
@@ -740,7 +742,7 @@ float ApplyTerminalOverscroll(MountedNode& node, float available,
   if (applied == 0.0F) {
     return 0.0F;
   }
-  BeginDirectActivity(node, activity_nodes);
+  BeginDirectActivity(node, ScrollSource::Drag, activity_nodes);
   node.scroll_state->overscroll_offset = next;
   NotifyScrollNodeActivity(node, ScrollSource::Drag, ScrollPhase::Update, applied);
   return applied / resistance;
@@ -788,7 +790,7 @@ float ApplyScrollTransaction(const std::vector<MountedNode*>& route, Axis axis, 
     if (std::abs(remaining) < scroll_consumption_epsilon || !CanScrollNode(**candidate, remaining)) {
       continue;
     }
-    BeginDirectActivity(**candidate, direct_activity_nodes);
+    BeginDirectActivity(**candidate, source, direct_activity_nodes);
     remaining -= ScrollNodeBy(**candidate, remaining, source);
   }
 

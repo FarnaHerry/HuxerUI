@@ -490,6 +490,20 @@ struct UiWindow::State {
   State(UiWindow& owner, const Application& application, const WindowOptions& window_options);
   ~State();
 
+  struct TouchpadScrollSample {
+    double timestamp = 0.0;
+    float velocity = 0.0F;
+    bool has_timestamp = false;
+  };
+
+  struct TouchpadScrollSession {
+    bool active = false;
+    std::vector<std::uint64_t> route;
+    std::vector<std::uint64_t> horizontal_nodes;
+    std::vector<std::uint64_t> vertical_nodes;
+    std::unordered_map<std::uint64_t, TouchpadScrollSample> samples;
+  };
+
   UiWindow& owner_;
   std::shared_ptr<detail::ApplicationRuntimeState> application_;
   std::shared_ptr<detail::UiExecutionState> ui_execution_;
@@ -515,6 +529,7 @@ struct UiWindow::State {
   GestureSettings gesture_settings_;
   ScrollPhysics default_scroll_physics_;
   std::unique_ptr<detail::MountedNode> mounted_root_;
+  TouchpadScrollSession touchpad_scroll_;
   std::vector<std::weak_ptr<detail::RecomposeScope>> lifecycle_commits_;
   std::vector<detail::LifecycleCleanup> retired_lifecycle_cleanups_;
   std::vector<std::shared_ptr<detail::TaskScopeState>> retired_task_scopes_;

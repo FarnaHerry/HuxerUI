@@ -1718,6 +1718,16 @@ void UiWindow::RequestFrameAfter(double delay_seconds) {
 }
 
 void UiWindow::NotifyScrollActivity(detail::MountedNode& node, const ScrollActivity& activity) {
+  if (activity.source == ScrollSource::Touchpad && activity.phase == ScrollPhase::Update) {
+    auto& sample = state_->touchpad_scroll_.samples[node.identity];
+    const double timestamp = Now();
+    const double elapsed = timestamp - sample.timestamp;
+    if (sample.has_timestamp && elapsed > 0.0 && elapsed <= 0.1) {
+      sample.velocity = activity.delta / static_cast<float>(elapsed);
+    }
+    sample.timestamp = timestamp;
+    sample.has_timestamp = true;
+  }
   DispatchScrollActivity(node, activity);
   state_->text_->NotifyScrollActivity(node, activity);
   RequestFrame();
@@ -2423,19 +2433,87 @@ Point UiWindow::HandleScrollInput(const ScrollInputEvent& event) {
     throw std::invalid_argument("HuxerUI scroll input values must be finite");
   }
 
-  std::vector<detail::MountedNode*> route;
-  if (!BuildPointerRoute(*state_->mounted_root_, event.position, route) || route.empty() ||
-      route.back()->kind == detail::NodeKind::PlatformView) {
+  auto& touchpad = state_->touchpad_scroll_;
+  const auto finish_touchpad = [&](ScrollPhase phase) {
+    if (!touchpad.active) {
+      return;
+    }
+    auto previous = std::exchange(touchpad, {});
+    const double timestamp = Now();
+    const auto finish_axis = [&](const std::vector<std::uint64_t>& identities) {
+      for (std::uint64_t identity : identities) {
+        detail::MountedNode* node = FindNode(*state_->mounted_root_, identity);
+        if (!node || !node->scroll_state) {
+          continue;
+        }
+        float velocity = 0.0F;
+        if (phase == ScrollPhase::End) {
+          if (const auto sample = previous.samples.find(identity); sample != previous.samples.end() &&
+              sample->second.has_timestamp && timestamp - sample->second.timestamp <= 0.2) {
+            velocity = sample->second.velocity;
+          }
+        }
+        NotifyScrollNodeActivity(*node, ScrollSource::Touchpad, phase, 0.0F, velocity);
+      }
+    };
+    finish_axis(previous.horizontal_nodes);
+    finish_axis(previous.vertical_nodes);
+  };
+
+  const bool terminal_touchpad = event.kind == ScrollInputKind::Touchpad &&
+                                 (event.phase == ScrollInputPhase::End ||
+                                  event.phase == ScrollInputPhase::Cancel);
+  if (terminal_touchpad && !touchpad.active) {
     return {};
+  }
+  if (touchpad.active && (event.kind == ScrollInputKind::Wheel || event.phase == ScrollInputPhase::Begin)) {
+    finish_touchpad(ScrollPhase::Cancel);
+  }
+
+  std::vector<detail::MountedNode*> route;
+  if (event.kind == ScrollInputKind::Touchpad && touchpad.active) {
+    detail::MountedNode* node = state_->mounted_root_.get();
+    for (std::size_t index = 0; index < touchpad.route.size(); ++index) {
+      const std::uint64_t identity = touchpad.route[index];
+      if (index != 0) {
+        const auto child = std::ranges::find_if(node->children, [identity](const auto& candidate) {
+          return candidate->identity == identity;
+        });
+        node = child == node->children.end() ? nullptr : child->get();
+      }
+      if (!node || node->identity != identity) {
+        finish_touchpad(ScrollPhase::Cancel);
+        return {};
+      }
+      route.push_back(node);
+    }
+  } else {
+    if (!BuildPointerRoute(*state_->mounted_root_, event.position, route) || route.empty() ||
+        route.back()->kind == detail::NodeKind::PlatformView) {
+      return {};
+    }
+    if (event.kind == ScrollInputKind::Touchpad) {
+      touchpad.active = true;
+      for (const detail::MountedNode* node : route) {
+        touchpad.route.push_back(node->identity);
+      }
+    }
   }
   detail::InteractionOriginScope interaction_origin(state_->current_interaction_origin_, event.position, true);
   for (auto target = route.rbegin(); target != route.rend(); ++target) {
     if ((*target)->interaction.enabled && HasEventBinding<ViewEvents::ScrollInput>((*target)->event_bindings)) {
       if (EmitEvent<ViewEvents::ScrollInput>((*target)->event_bindings, event).value_or(false)) {
-        return {event.delta_x, event.delta_y};
+        if (!terminal_touchpad) {
+          return {event.delta_x, event.delta_y};
+        }
       }
       break;
     }
+  }
+
+  if (terminal_touchpad) {
+    finish_touchpad(event.phase == ScrollInputPhase::End ? ScrollPhase::End : ScrollPhase::Cancel);
+    return {};
   }
 
   Point consumed;
@@ -2447,6 +2525,10 @@ Point UiWindow::HandleScrollInput(const ScrollInputEvent& event) {
       if (node->interaction.enabled && IsScrollContainer(*node) && ScrollAxis(*node) == axis) {
         StopScrollNodeMotion(*node);
       }
+    }
+    if (event.kind == ScrollInputKind::Touchpad) {
+      auto& active_nodes = axis == Axis::Horizontal ? touchpad.horizontal_nodes : touchpad.vertical_nodes;
+      return ApplyScrollTransaction(route, axis, delta, ScrollSource::Touchpad, &active_nodes);
     }
     return ApplyScrollTransaction(route, axis, delta, ScrollSource::Wheel);
   };

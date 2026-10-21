@@ -1698,7 +1698,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
   const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
   const float scale = event.hasPreciseScrollingDeltas ? 1.0F : 12.0F;
-  const huxerui::Point consumed = huxeruiWindow->HandleScrollInput({
+  huxerui::ScrollInputEvent input{
       {
           static_cast<float>(point.x),
           static_cast<float>(point.y),
@@ -1711,7 +1711,24 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
           (event.modifierFlags & NSEventModifierFlagOption) != 0,
           (event.modifierFlags & NSEventModifierFlagCommand) != 0,
       },
-  });
+  };
+  if (event.momentumPhase == NSEventPhaseNone && event.phase != NSEventPhaseNone &&
+      event.phase != NSEventPhaseMayBegin) {
+    input.kind = huxerui::ScrollInputKind::Touchpad;
+    if (event.phase == NSEventPhaseBegan) {
+      huxerui::ScrollInputEvent begin = input;
+      begin.delta_x = 0.0F;
+      begin.delta_y = 0.0F;
+      begin.phase = huxerui::ScrollInputPhase::Begin;
+      static_cast<void>(huxeruiWindow->HandleScrollInput(begin));
+    } else if (event.phase == NSEventPhaseEnded || event.phase == NSEventPhaseCancelled) {
+      input.phase = event.phase == NSEventPhaseEnded ? huxerui::ScrollInputPhase::End
+                                                    : huxerui::ScrollInputPhase::Cancel;
+      input.delta_x = 0.0F;
+      input.delta_y = 0.0F;
+    }
+  }
+  const huxerui::Point consumed = huxeruiWindow->HandleScrollInput(input);
   if (consumed.x == 0.0F && consumed.y == 0.0F) {
     [super scrollWheel:event];
   }

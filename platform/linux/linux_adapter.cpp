@@ -977,12 +977,11 @@ private:
     g_signal_connect(motion, "leave", G_CALLBACK(PointerLeft), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), motion);
 
-    GtkEventController* scroll = gtk_event_controller_scroll_new(
-        static_cast<GtkEventControllerScrollFlags>(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES |
-                                                   GTK_EVENT_CONTROLLER_SCROLL_DISCRETE)
-    );
+    GtkEventController* scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
     gtk_event_controller_set_propagation_phase(scroll, GTK_PHASE_CAPTURE);
+    g_signal_connect(scroll, "scroll-begin", G_CALLBACK(ScrollBegan), this);
     g_signal_connect(scroll, "scroll", G_CALLBACK(Scrolled), this);
+    g_signal_connect(scroll, "scroll-end", G_CALLBACK(ScrollEnded), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), scroll);
 
     GtkEventController* key = gtk_event_controller_key_new();
@@ -1562,6 +1561,31 @@ private:
     self.ApplyPointerCursor();
   }
 
+  static bool IsTouchpadScroll(GtkEventControllerScroll* controller) {
+    GdkDevice* device = gtk_event_controller_get_current_event_device(GTK_EVENT_CONTROLLER(controller));
+    return device != nullptr && gdk_device_get_source(device) == GDK_SOURCE_TOUCHPAD;
+  }
+
+  static void ScrollBegan(GtkEventControllerScroll* controller, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    self.touchpad_scroll_active_ = self.IsInitialized() && IsTouchpadScroll(controller);
+    if (self.touchpad_scroll_active_) {
+      static_cast<void>(self.UiWindow::HandleScrollInput({
+          self.last_pointer_position_, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::Begin,
+      }));
+    }
+  }
+
+  static void ScrollEnded(GtkEventControllerScroll*, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    if (self.touchpad_scroll_active_ && self.IsInitialized()) {
+      static_cast<void>(self.UiWindow::HandleScrollInput({
+          self.last_pointer_position_, 0.0F, 0.0F, {}, ScrollInputKind::Touchpad, ScrollInputPhase::End,
+      }));
+    }
+    self.touchpad_scroll_active_ = false;
+  }
+
   static gboolean Scrolled(GtkEventControllerScroll* controller, double dx, double dy, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     if (self.IsInitialized()) {
@@ -1570,12 +1594,19 @@ private:
       }
       GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
       const GdkModifierType state = event ? gdk_event_get_modifier_state(event) : GdkModifierType{};
+      const bool touchpad = IsTouchpadScroll(controller) ||
+                            (event != nullptr && gdk_scroll_event_get_unit(event) == GDK_SCROLL_UNIT_SURFACE);
+      const float scale = gtk_event_controller_scroll_get_unit(controller) == GDK_SCROLL_UNIT_WHEEL
+                              ? kDipsPerScrollStep : 1.0F;
       const Point consumed = self.UiWindow::HandleScrollInput({
           self.last_pointer_position_,
-          static_cast<float>(dx * kDipsPerScrollStep),
-          static_cast<float>(dy * kDipsPerScrollStep),
+          static_cast<float>(dx) * scale,
+          static_cast<float>(dy) * scale,
           TranslateModifiers(state),
+          touchpad ? ScrollInputKind::Touchpad : ScrollInputKind::Wheel,
+          ScrollInputPhase::Update,
       });
+      self.touchpad_scroll_active_ = touchpad;
       return consumed.x != 0.0F || consumed.y != 0.0F;
     }
     return FALSE;
@@ -1624,6 +1655,7 @@ private:
 
   GtkWindow* window_ = nullptr;
   GtkWidget* drawing_area_ = nullptr;
+  bool touchpad_scroll_active_ = false;
   GdkToplevel* toplevel_ = nullptr;
   gulong toplevel_state_handler_ = 0;
   LinuxRenderer renderer_;

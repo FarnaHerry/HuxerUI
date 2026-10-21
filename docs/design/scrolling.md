@@ -15,7 +15,7 @@ Platform adapters normalize host input and report Runtime's consumption result; 
 
 ## Platform scroll input
 
-`ScrollInputEvent` represents one platform-recognized wheel or trackpad update:
+`ScrollInputEvent` represents a discrete wheel update or one phase of a continuous touchpad gesture:
 
 ```cpp
 struct ScrollInputEvent {
@@ -23,11 +23,18 @@ struct ScrollInputEvent {
   float delta_x;
   float delta_y;
   KeyModifiers modifiers;
+  ScrollInputKind kind;
+  ScrollInputPhase phase;
 };
 ```
 
 `position` is in window logical coordinates and `delta_x` and `delta_y` are the requested content-offset changes in logical pixels.
 Touch dragging remains a pointer gesture and never produces `ScrollInputEvent`.
+`Wheel` retains the existing independent-update behavior.
+`Touchpad` reports `Begin`, `Update`, `End`, or `Cancel`; only updates carry displacement.
+Runtime retains the hit route for the gesture, sends Begin/Update/End activity to each mounted scroll container that actually consumes an axis, and derives release velocity from its recent consumed offsets.
+It keeps the two axes independent, so a vertical update cannot start horizontal paging.
+Cancellation never submits a page proposal.
 
 The deepest enabled View with `ViewEvents::ScrollInput` receives the complete input directly:
 
@@ -37,13 +44,18 @@ return canvas.On<ViewEvents::ScrollInput>([](const ScrollInputEvent& event) {
 });
 ```
 
-Returning true consumes both axes and suppresses built-in scrolling.
+Returning true consumes both axes and suppresses built-in scrolling for that update.
 Returning false runs default scroll coordination.
 The event does not capture, bubble, or join pointer-sequence arbitration.
 
 `UiWindow::HandleScrollInput()` returns the actual two-dimensional delta consumed by HuxerUI.
 Platform adapters suppress their host default only when at least one axis was consumed.
 An unconsumed wheel update remains available to a native parent, browser page, or platform default.
+End and Cancel return zero after notifying the mounted consumers.
+
+GTK uses continuous scroll begin/end signals and preserves surface-pixel deltas; wheel-unit deltas retain the existing 40-DIP step.
+AppKit uses the gesture phase for direct input and leaves the separate momentum phase as ordinary scroll input, so momentum cannot request another Pager page.
+Win32 wheel messages do not expose reliable device identity or an end phase; sub-notch deltas start a gesture that ends after 120 milliseconds idle, while ordinary notch messages outside that gesture retain wheel behavior.
 
 ## Nested scroll transaction
 
