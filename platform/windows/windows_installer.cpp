@@ -225,6 +225,11 @@ public:
     SchedulePublish();
   }
 
+  void BindHeadless(HuxerUIBootstrapperApplication& application) {
+    std::lock_guard lock(mutex_);
+    application_ = &application;
+  }
+
   void Install(windows::InstallerInstallOptions options);
   [[nodiscard]] std::optional<std::filesystem::path> ChooseDestination(const std::filesystem::path& initial) const;
   void Repair();
@@ -242,6 +247,10 @@ public:
   // interactive pages and must proceed on their own.
   [[nodiscard]] bool CommandPreemptsInteraction() const {
     return detail::InstallerCommandPreemptsInteraction(command_action_, command_display_, command_relation_);
+  }
+
+  [[nodiscard]] bool RunsHeadless() const {
+    return detail::InstallerRunsHeadless(command_display_);
   }
 
   void Cancel();
@@ -388,10 +397,9 @@ public:
       }
       prompt_response_ = windows::InstallerPromptChoice::Cancel;
       prompt_condition_.notify_all();
-      // Commanded runs finish by closing the UI window so the platform application returns before
-      // the engine shutdown waits for the UI thread; there is no user left to dismiss a page.
-      should_quit = ui_closed_;
-      should_close = CommandPreemptsInteraction();
+      // Headless runs quit directly; commanded runs with a window close it first.
+      should_quit = ui_closed_ || RunsHeadless();
+      should_close = !RunsHeadless() && CommandPreemptsInteraction();
     }
     SchedulePublish();
     if (should_quit) {
@@ -445,6 +453,11 @@ public:
     }
   }
 
+  [[nodiscard]] bool UiLoopExited() const {
+    std::lock_guard lock(mutex_);
+    return ui_closed_;
+  }
+
   void Fail(HRESULT result, std::string message = {}) {
     bool should_quit = false;
     bool should_close = false;
@@ -459,7 +472,7 @@ public:
       // while planning was active, UiExited skipped that quit on purpose (the plan was still
       // running) and this path must issue it directly or the engine waits forever.
       const detail::InstallerTerminalAction terminal =
-          detail::InstallerTerminalActionFor(ui_closed_, CommandPreemptsInteraction());
+          detail::InstallerTerminalActionFor(ui_closed_, CommandPreemptsInteraction(), RunsHeadless());
       should_quit = terminal == detail::InstallerTerminalAction::QuitEngine;
       should_close = terminal == detail::InstallerTerminalAction::CloseWindow;
     }
@@ -492,12 +505,13 @@ private:
     });
   }
 
-  // Asks the installer window to close on the UI thread. Commanded runs end through this path so
-  // the platform application returns and the engine shutdown is never left waiting for the UI
-  // thread; UiExited then performs the single engine quit with the terminal status mapped to an
-  // exit code. Dropping the engine quit when no window is attached yet is safe: RunUi always ends
-  // in UiExited, which retries the quit there.
+  // Commanded runs without a window quit directly. With a window, close it on the UI thread so
+  // the platform application returns before Burn shuts down; UiExited then performs the quit.
   void CloseInstallerWindow() {
+    if (RunsHeadless()) {
+      Quit(0);
+      return;
+    }
     UiThreadDispatcher dispatcher;
     HWND window = nullptr;
     {
@@ -522,6 +536,9 @@ private:
     const std::optional<windows::InstallerAction> action =
         InstallerCommandedAction(command_action_, command_display_, command_relation_);
     if (!action.has_value()) {
+      if (RunsHeadless()) {
+        Fail(E_NOTIMPL, "HuxerUI Windows installer does not support this unattended action");
+      }
       return;
     }
     windows::InstallerProductState product = windows::InstallerProductState::Unknown;
@@ -637,13 +654,30 @@ public:
   }
 
   STDMETHODIMP OnStartup() override {
+    if (session_->RunsHeadless()) {
+      AddRef();
+      HANDLE worker = CreateThread(nullptr, 0, RunHeadless, this, 0, nullptr);
+      if (worker == nullptr) {
+        const HRESULT result = HRESULT_FROM_WIN32(GetLastError());
+        Release();
+        return result;
+      }
+      CloseHandle(worker);
+      return S_OK;
+    }
     ui_thread_ = CreateThread(nullptr, 0, RunUi, this, 0, nullptr);
     return ui_thread_ == nullptr ? HRESULT_FROM_WIN32(GetLastError()) : S_OK;
   }
 
   STDMETHODIMP OnShutdown(BOOTSTRAPPER_SHUTDOWN_ACTION* action) override {
     if (ui_thread_ != nullptr) {
-      WaitForSingleObject(ui_thread_, INFINITE);
+      // UiExited calls Engine::Quit after the window loop returns. Burn can synchronously enter
+      // OnShutdown from that call, while the UI thread is still inside Quit. Waiting for the
+      // thread here then waits for the very call that cannot return until OnShutdown finishes.
+      // The UI loop is already gone in this case; RunUi keeps this BA alive across Quit.
+      if (!session_->UiLoopExited()) {
+        WaitForSingleObject(ui_thread_, INFINITE);
+      }
       CloseHandle(ui_thread_);
       ui_thread_ = nullptr;
     }
@@ -840,10 +874,24 @@ public:
   }
 
   void Quit(DWORD exit_code) {
+    AddRef();
     m_pEngine->Quit(exit_code);
+    Release();
   }
 
 private:
+  static DWORD WINAPI RunHeadless(void* context) {
+    auto& application = *static_cast<HuxerUIBootstrapperApplication*>(context);
+    const std::shared_ptr<WindowsInstallerSession> session = application.session_;
+    session->BindHeadless(application);
+    const HRESULT result = application.Detect(nullptr);
+    if (FAILED(result)) {
+      session->Fail(result);
+    }
+    application.Release();
+    return 0;
+  }
+
   /// Runs the installer application's native UI loop on its dedicated application thread.
   /// @param context Bootstrapper instance kept alive until the UI thread exits.
   /// @return Native UI exit code, also reported to the installer session for shutdown coordination.
@@ -867,7 +915,12 @@ private:
     } catch (...) {
       application.session_->Fail(E_FAIL, "HuxerUI Windows installer interface failed");
     }
-    application.session_->UiExited(exit_code);
+    // Quit may synchronously run OnShutdown and OnDestroy. Keep both objects alive until it
+    // returns; neither the UI thread nor the session may use a destroyed BA during that call.
+    const std::shared_ptr<WindowsInstallerSession> session = application.session_;
+    application.AddRef();
+    session->UiExited(exit_code);
+    application.Release();
     return exit_code;
   }
 
@@ -934,7 +987,7 @@ void WindowsInstallerSession::Start(windows::InstallerAction action, windows::In
     cancel_requested_ = false;
   }
   SchedulePublish();
-  if (application == nullptr || window == nullptr) {
+  if (application == nullptr || (window == nullptr && !RunsHeadless())) {
     Fail(E_UNEXPECTED, "HuxerUI Windows installer engine is not attached");
     return;
   }
@@ -981,7 +1034,7 @@ void WindowsInstallerSession::PlanComplete(HRESULT result) {
   }
   if (canceled) {
     SchedulePublish();
-    if (ui_closed) {
+    if (ui_closed || RunsHeadless()) {
       Quit(ERROR_INSTALL_USEREXIT);
     } else if (CommandPreemptsInteraction()) {
       CloseInstallerWindow();
@@ -992,7 +1045,7 @@ void WindowsInstallerSession::PlanComplete(HRESULT result) {
     Fail(result);
     return;
   }
-  if (application == nullptr || window == nullptr) {
+  if (application == nullptr || (window == nullptr && !RunsHeadless())) {
     Fail(E_UNEXPECTED, "HuxerUI Windows installer engine is not attached");
     return;
   }
