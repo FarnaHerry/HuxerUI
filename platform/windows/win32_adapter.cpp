@@ -1987,7 +1987,9 @@ WindowsUiWindow* WindowsRuntime::WindowFor(HWND window) const noexcept {
 }
 
 int WindowsRuntime::RunWindowsApplication(const Application& application) {
-  static_cast<void>(OpenWindow(application.options.window));
+  if (application.options.create_initial_window) {
+    static_cast<void>(OpenWindow(application.options.window));
+  }
   for (const WindowOptions& extra : application.options.extra_windows) {
     static_cast<void>(OpenWindow(extra));
   }

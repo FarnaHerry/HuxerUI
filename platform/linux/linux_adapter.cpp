@@ -439,11 +439,13 @@ public:
     ObserveWindows();
   }
 
-  /// Creates the initial and extra windows through the shared OpenWindow path, then runs the GTK main loop
-  /// until shutdown. The initial window keeps the historical close behavior of requesting application shutdown;
+  /// Creates the configured startup windows through OpenWindow, then runs the GTK main loop even without windows
+  /// until shutdown. The first window keeps the historical close behavior of requesting application shutdown;
   /// windows created later retire independently. Rethrows the first recorded window failure after the loop.
   int RunApplication(const Application& application) {
-    static_cast<void>(OpenWindow(application.options.window));
+    if (application.options.create_initial_window) {
+      static_cast<void>(OpenWindow(application.options.window));
+    }
     for (const WindowOptions& extra : application.options.extra_windows) {
       static_cast<void>(OpenWindow(extra));
     }

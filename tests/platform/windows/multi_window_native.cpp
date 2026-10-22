@@ -97,7 +97,111 @@ struct RunnerGuard {
   }
 };
 
+struct StartupWindowState {
+  std::atomic<int> windows{0};
+  std::atomic<int> compositions{0};
+  std::atomic<bool> timer_completed{false};
+  std::optional<WindowHandle> delayed;
+};
+
+View StartupWindowApp() {
+  ++UseService<StartupWindowState>()->compositions;
+  return Spacer();
+}
+
 } // namespace
+
+TEST_CASE("Win32StartupCanDeferTheInitialWindowWithoutStoppingApplicationDispatch", "[.][win32-native-startup]") {
+  AppOptions options;
+  int expected_startup_windows = 0;
+  bool open_later = true;
+  SECTION("Default startup still opens the initial window") { expected_startup_windows = 1; }
+  SECTION("Application starts without a UI") { options.create_initial_window = false; }
+  SECTION("Explicit extra windows are independent of the initial window") {
+    options.create_initial_window = false;
+    options.extra_windows.push_back({.title = "HuxerUI explicit extra", .initial_size = {240.0F, 160.0F}});
+    expected_startup_windows = 1;
+  }
+  SECTION("Application can quit without ever creating a UI") {
+    options.create_initial_window = false;
+    open_later = false;
+  }
+  {
+    std::lock_guard lock(test_state_mutex);
+    captured_application.reset();
+    application_dispatch = {};
+  }
+  primary_window.store(nullptr);
+  runner_failure = nullptr;
+  runner_finished.store(false);
+  auto state = std::make_shared<StartupWindowState>();
+  const std::string initial_title = "HuxerUI startup initial " + std::to_string(GetCurrentProcessId());
+  const std::string delayed_title = "HuxerUI startup delayed " + std::to_string(GetCurrentProcessId());
+  const std::wstring delayed_title_wide(delayed_title.begin(), delayed_title.end());
+  options.window = {.title = initial_title, .initial_size = {240.0F, 160.0F}};
+  options.show_debug_overlay = false;
+  options.application_hooks.push_back([state](ApplicationContext& context) {
+    context.Provide(state);
+    const auto tasks = UseApplicationTaskScope();
+    {
+      std::lock_guard lock(test_state_mutex);
+      captured_application = UseApplication();
+      application_dispatch = [tasks](std::function<void()> callback) { tasks.Post(std::move(callback)); };
+    }
+    tasks.Launch([state]() -> Task<void> {
+      co_await Delay(std::chrono::milliseconds(100));
+      state->timer_completed.store(true);
+    });
+  });
+  options.window_hooks.push_back([state](WindowContext&) { ++state->windows; });
+  const Application application{StartupWindowApp, std::move(options)};
+  RunnerGuard guard;
+  guard.runner = std::thread([&application] {
+    try {
+      static_cast<void>(detail::RunWin32PlatformApplication(application));
+    } catch (...) {
+      runner_failure = std::current_exception();
+    }
+    runner_finished.store(true);
+  });
+  PumpUntil([&] { return state->timer_completed.load() || runner_finished.load(); }, "windowless application timer");
+  if (runner_finished.load()) {
+    guard.runner.join();
+    if (runner_failure) std::rethrow_exception(runner_failure);
+  }
+  REQUIRE_FALSE(runner_finished.load());
+  REQUIRE(state->windows.load() == expected_startup_windows);
+  const std::wstring initial_title_wide(initial_title.begin(), initial_title.end());
+  REQUIRE((FindWindowByTitle(initial_title_wide) != nullptr) == application.options.create_initial_window);
+  if (expected_startup_windows == 0) REQUIRE(state->compositions.load() == 0);
+
+  ApplicationHandle handle = [&] {
+    std::lock_guard lock(test_state_mutex);
+    return *captured_application;
+  }();
+  UiThreadDispatcher post = [&] {
+    std::lock_guard lock(test_state_mutex);
+    return application_dispatch;
+  }();
+  if (open_later) {
+    for (int cycle = 0; cycle != 2; ++cycle) {
+      post([handle, state, delayed_title] {
+        state->delayed = handle.OpenWindow({.title = delayed_title, .initial_size = {240.0F, 160.0F}});
+      });
+      PumpUntil([&] { return FindWindowByTitle(delayed_title_wide) != nullptr; }, "the delayed window");
+      const HWND native = FindWindowByTitle(delayed_title_wide);
+      PumpUntil([&] { return state->windows.load() == expected_startup_windows + cycle + 1; }, "window initialization");
+      post([state] { state->delayed->Retire(); });
+      PumpUntil([native] { return !IsWindow(native); }, "delayed window retirement");
+      REQUIRE_FALSE(runner_finished.load());
+    }
+  }
+  post([handle] { handle.Quit(); });
+  PumpUntil([] { return runner_finished.load(); }, "explicit application shutdown");
+  guard.runner.join();
+  if (runner_failure) std::rethrow_exception(runner_failure);
+  REQUIRE(state->windows.load() == expected_startup_windows + (open_later ? 2 : 0));
+}
 
 // Hidden: creates real top-level windows and Direct3D devices, so it runs only on demand through the
 // [win32-native] tag instead of the default platform test pass.
