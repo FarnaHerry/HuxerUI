@@ -32,6 +32,7 @@ ScrollController pager_inner_scroll;
 ScrollController hook_outer_scroll;
 ScrollController hook_inner_scroll;
 ScrollController activity_scroll;
+ScrollController disabled_rail_scroll;
 ScrollController refresh_content_scroll;
 State<bool> disableable_scroll_enabled;
 State<bool> refresh_box_refreshing;
@@ -699,6 +700,49 @@ TEST_CASE("Disabling an active scroll clears overscroll and cancels direct activ
   runtime.BuildFrame();
   REQUIRE(runtime.RootNode()->scroll_state->overscroll_offset == 0.0F);
   REQUIRE_FALSE(runtime.RootNode()->interaction.enabled);
+}
+
+View DisabledProgrammaticRailApp() {
+  auto rail = UseScrollController();
+  disabled_rail_scroll = rail;
+  // The inner rail mirrors overlay usage: Enabled(false) hides it from every user
+  // gesture while a controller drives it programmatically (paint-only translation).
+  return ScrollView {
+    Column {
+      ScrollView {
+        Spacer().With(huxerui::Frame{.width = 60.0F, .height = 160.0F}),
+      }
+          .Controller(rail)
+          .With(huxerui::Frame{.height = 80.0F}, Enabled(false)),
+      Spacer().With(huxerui::Frame{.width = 60.0F, .height = 240.0F}),
+    }.With(Spacing(8.0F)),
+  }.With(huxerui::Frame{.width = 100.0F, .height = 300.0F});
+}
+
+TEST_CASE("Disabled scroll containers reject input but keep programmatic controller scrolls") {
+  TestPlatform platform;
+  UiWindow runtime{DisabledProgrammaticRailApp, platform};
+  runtime.SetWindowMetrics({.viewport = {100.0F, 300.0F}});
+  runtime.BuildFrame();
+
+  const auto* rail = runtime.RootNode();
+  while (rail != nullptr && !(rail->scroll_state && !rail->interaction.enabled)) {
+    rail = rail->children.empty() ? nullptr : rail->children.front().get();
+  }
+  REQUIRE(rail != nullptr);
+  REQUIRE(rail->scroll_state->offset_y == 0.0F);
+
+  // Touch drags over the rail must not move it while it is disabled.
+  runtime.HandlePointerEvent({PointerEventType::Down, 201, {30.0F, 40.0F}, PointerDeviceKind::Touch});
+  runtime.HandlePointerEvent({PointerEventType::Move, 201, {30.0F, 80.0F}, PointerDeviceKind::Touch});
+  runtime.HandlePointerEvent({PointerEventType::Up, 201, {30.0F, 80.0F}, PointerDeviceKind::Touch});
+  REQUIRE(rail->scroll_state->offset_y == 0.0F);
+
+  // Programmatic controller scrolls stay available and move the disabled rail.
+  REQUIRE(disabled_rail_scroll.ScrollTo(30.0F));
+  REQUIRE(disabled_rail_scroll.Offset() == 30.0F);
+  runtime.BuildFrame();
+  REQUIRE(rail->scroll_state->offset_y == 30.0F);
 }
 
 TEST_CASE("Reduced motion clears released overscroll without retained settlement") {
