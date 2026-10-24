@@ -1,11 +1,11 @@
 # Farna TODO: Floating Windows and Desktop Assistant Capabilities
 
 Owner: Farna.
-Status: Windows floating-window baseline and assistant-orb example implemented; broader qualification and optional services remain future work.
+Status: Windows, Linux, and macOS floating-window implementations and the assistant-orb example delivered; broader qualification and optional services remain future work.
 
 This backlog extracts reusable framework requirements from animated desktop companions and character-based assistants.
 It belongs to the Farna fork and its [downstream integration policy](farna-integration.md), not to an upstream release plan.
-The current implementation follows the separately approved Windows desktop-pet scope; unchecked work below still requires its own scope.
+The current implementation follows the separately approved Windows desktop-pet scope and the Linux/macOS port of its window contract; unchecked work below still requires its own scope.
 Future capability descriptions are planning terms, not approved C++ declarations or platform support promises.
 
 ## Current delivery and remaining work
@@ -26,7 +26,7 @@ The example does not acquire audio or connect to a model service.
 
 The layered renderer reads back the complete small surface on every presented frame; it is limited to 4096 pixels per dimension and 16 million pixels in total.
 PlatformView hosting is unavailable on this path; ordinary opaque windows retain their existing presentation paths.
-The new utility policies are implemented on Windows only; other hosts retain explicit unavailable behavior.
+The utility policies are implemented on Windows, on Linux through the GTK adapter with its capability set split truthfully between the X11 and Wayland backends, and on macOS through AppKit; mobile and Web hosts retain explicit unavailable behavior.
 The P0 checklist below retains the broader acceptance scope and must not be interpreted as a claim that every desktop backend or device has passed it.
 
 ### Validation and distribution
@@ -36,13 +36,15 @@ The P0 checklist below retains the broader acceptance scope and must not be inte
 - The module-shell freshness check and CMake/mcpp build-parity check cover the shared declaration and build boundaries; gdi32 was already present in the mcpp Windows link interface.
 - A temporary Windows 10/11 x64 portable ZIP contains the executable, resources, licenses, and matching app-local Release CRT; profiling is disabled, extracted file hashes match, and startup succeeds from an unrelated working directory with a system-only PATH.
 - The ZIP remains a local build artifact; clean-machine execution, physical mixed-DPI displays, touch/pen, accessibility, fullscreen interaction, and actual Windows 7 execution are not qualified by that startup check.
-- Linux, macOS, mobile, and Web builds were unavailable on this Windows host; no equivalent native support is claimed.
+- Linux validation ran locally on Fedora (GTK 4.22, Wayland session with XWayland): full Ninja build with tests and examples, all four common suites, the Linux platform suite including the new per-backend native floating-window tests, and a desktop-pet smoke run; one pre-existing bidi caret test failure and one pre-existing runtime-dependency segfault were verified against a pristine base checkout.
+- macOS validation ran through the `macos-multi-window` workflow on both runners (macos-15 static, macos-15-intel shared): native suite including the two new floating-window scenarios, common and codegen suites, and the desktop-pet example build all passed; interactive behavior beyond CI (dragging behind other applications, Space and full-screen transitions, multiple displays) remains unqualified.
+- Mobile and Web builds remain unavailable on these hosts; no equivalent native support is claimed for them.
 
 ### Next priorities
 
 1. Qualify mixed-DPI movement, display removal, saved-position recovery, and fullscreen/topmost behavior on real Windows desktops.
 2. Add display-change observation and independently shaped input regions through the existing window owners when their contracts are agreed.
-3. Select a second desktop backend and port the same capability/result contract with its own native tests.
+3. Extend real-desktop qualification to the Linux and macOS ports: mixed-DPI movement, display changes, and the interactive macOS scenarios beyond automated CI.
 4. Choose optional animation decoding, audio, capture, or model integration only from concrete application demand; these remain separate from the visual demo.
 
 ## Research basis and boundaries
@@ -71,8 +73,8 @@ The following mechanisms already own substantial parts of the required behavior:
 | Capability | Current evidence | Planning consequence |
 | --- | --- | --- |
 | Runtime-created windows, ownership, modality, and retirement | [app.h](../../include/huxerui/app.h), [window.h](../../include/huxerui/window.h), [multi-window design](../design/multi-window.md), [relationship design](../design/window-relationship.md) | Extend the existing window contract; do not introduce a companion host or a second event loop |
-| Custom chrome, utility presentation, and native dragging | [window.h](../../include/huxerui/window.h), [window-chrome design](../design/window-chrome.md), [window tests](../../tests/runtime/window.cpp) | Windows adds transparent utility surfaces, passive display, and native move requests; other hosts require separate implementations and qualification |
-| Placement, runtime geometry, and work areas | [window.h](../../include/huxerui/window.h), [platform placement guide](../guide/platforms.md#native-window-placement) | Windows exposes native geometry requests and work-area snapshots; Linux/X11 retains initial placement, while Wayland and the macOS preview retain their explicit limits; display-change observation remains future work |
+| Custom chrome, utility presentation, and native dragging | [window.h](../../include/huxerui/window.h), [window-chrome design](../design/window-chrome.md), [window tests](../../tests/runtime/window.cpp) | Windows, Linux, and macOS implement transparent utility surfaces with backend-honest capability reporting; further hosts require their own implementations and qualification |
+| Placement, runtime geometry, and work areas | [window.h](../../include/huxerui/window.h), [platform placement guide](../guide/platforms.md#native-window-placement) | Windows, macOS, and Linux/X11 expose native geometry requests and work-area snapshots; Wayland owns placement and activation by protocol and reports them unavailable; display-change observation remains future work |
 | Tray, visibility commands, close interception, and application quit | [app.h](../../include/huxerui/app.h), [tray design](../design/system-tray.md), [tray tests](../../tests/runtime/system_tray.cpp) | Reuse the tray; qualify availability and recovery rather than build another tray system |
 | Retained animation, delayed frame requests, gestures, and reduced motion | [modifier.h](../../include/huxerui/modifier.h), [animation.h](../../include/huxerui/animation.h), [animation design](../design/animation.md), [gesture design](../design/gestures.md) | Character behavior belongs in a library or application using existing scheduling and interaction |
 | Immutable external frames and pixel publication | [external_texture.h](../../include/huxerui/external_texture.h), [implementation](../../src/graphics/external_texture.cpp), [Windows](../../include/huxerui/windows/external_texture.h), [Linux](../../include/huxerui/linux/external_texture.h), [macOS](../../include/huxerui/macos/external_texture.h) | Feed decoded or rendered frames through ExternalTexture; publication does not require per-frame recomposition |
