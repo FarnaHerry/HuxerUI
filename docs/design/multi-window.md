@@ -41,8 +41,14 @@ The platform virtual constructs the platform `UiWindow`, creates the native wind
 
 `ApplicationHandle::OpenWindow(const WindowOptions&)` forwards to `Runtime::OpenWindow` on the application thread and exists so a captured `ApplicationHandle` can open windows outside composition, matching the existing handle contract.
 
-The platform application entry creates the initial window by calling `Runtime::OpenWindow` with `AppOptions::window` instead of constructing its platform window inline, so startup and runtime windows share one path.
-`AppOptions::extra_windows` lists additional windows opened in declaration order immediately after the Runtime starts; an empty list preserves single-window startup.
+The desktop application entry creates the initial window by calling `Runtime::OpenWindow` with `AppOptions::window` when `AppOptions::create_initial_window` is true, its default value, so startup and runtime windows share one path.
+Setting the flag to false skips native window creation, renderer initialization, window hooks, and root composition for that window.
+`AppOptions::extra_windows` lists independent windows opened in declaration order immediately after the Runtime starts, including when initial-window creation is disabled.
+With initial-window creation disabled and no extra windows, application hooks, services, tasks, timers, activation dispatch, and the native event loop still run without a UiWindow.
+Later application work may open a window through the existing `ApplicationHandle::OpenWindow` API; work launched in application hooks remains queued until installation has finished.
+Skipping the initial window does not consume a window ordinal: the first window actually created has ordinal zero and retains first-window close behavior, whether it comes from `extra_windows` or a later `OpenWindow` call.
+Explicit retirement remains independent of whole-application shutdown, including after windowless startup.
+Mobile, Web, and embedded attachments are platform-owned and do not consult this desktop startup flag.
 
 ## Per-window options and content selection
 

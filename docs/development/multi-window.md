@@ -24,6 +24,7 @@ Use the existing MSVC Release build with examples and tests enabled.
 | Common CTest label | Unit, Runtime, UI, and Library suites, including window configuration and coordinate-range validation |
 | `huxerui_windows_tests` | Win32 platform behavior |
 | `huxerui_windows_tests [win32-native]` | Native lifecycle, client-origin round trips with both chrome modes, and native handle release |
+| `huxerui_windows_tests [win32-native-startup]` | Default and windowless startup, independent extra windows, timers without a UI, delayed window creation and retirement, and windowless exit |
 | `huxerui_header_checks` | Standalone public headers |
 | `example_multi_window`, `example_window_relationship` | Public application API and window relationships |
 

@@ -311,6 +311,60 @@ TEST_CASE("System tray rejects vector icons without replacing its raster present
   REQUIRE(platform.system_tray_transport->presentation->tooltip == original->tooltip);
 }
 
+TEST_CASE("System tray starts without a UI and opens windows on activation") {
+  ResetSystemTrayState();
+  TestPlatform platform;
+  platform.system_tray_transport = std::make_shared<TestSystemTrayTransport>();
+  const auto transport = platform.system_tray_transport;
+  transport->available = true;
+  std::optional<WindowHandle> window;
+  bool timer_completed = false;
+  Application application(SystemTrayApp, {
+      .create_initial_window = false,
+      .show_debug_overlay = false,
+      .application_hooks = {[&](ApplicationContext&) {
+        const auto application = UseApplication();
+        const auto tray = application.SystemTray();
+        tray.OnActivate([application, &window] {
+          window = application.OpenWindow({.title = "Deferred window"});
+        });
+        tray.Show(TrayIcon(), {.menu = {MenuItem("Quit", [application] { application.Quit(); })}});
+        UseApplicationTaskScope().Launch([&]() -> Task<void> {
+          co_await Delay(std::chrono::seconds(1));
+          timer_completed = true;
+        });
+      }},
+  });
+  RuntimeLifetime runtime(application, platform);
+  REQUIRE(transport->show_count == 1);
+  REQUIRE(platform.created_windows.empty());
+  REQUIRE(tray_compositions == 0);
+  platform.RunPlatformModuleTasks();
+  platform.AdvanceTime(1);
+  platform.RunPlatformModuleTasks();
+  REQUIRE(timer_completed);
+  REQUIRE(platform.requested_frames == 0);
+
+  for (std::size_t cycle = 0; cycle != 2; ++cycle) {
+    transport->Activate();
+    platform.RunPlatformModuleTasks();
+    REQUIRE(platform.created_windows.size() == cycle + 1);
+    REQUIRE(window.has_value());
+    REQUIRE(tray_compositions == static_cast<int>(cycle));
+    platform.created_windows.back()->BuildFrame();
+    REQUIRE(tray_compositions == static_cast<int>(cycle + 1));
+    window->Retire();
+    platform.RunPlatformModuleTasks();
+    REQUIRE(platform.application_quit_requests == 0);
+    REQUIRE(transport->hide_count == 0);
+  }
+
+  const auto presentation = *transport->presentation;
+  transport->Invoke(presentation.generation, presentation.menu.front().command);
+  platform.RunPlatformModuleTasks();
+  REQUIRE(platform.application_quit_requests == 1);
+}
+
 TEST_CASE("System tray survives UI retirement and replacement") {
   ResetSystemTrayState();
   TestPlatform platform;

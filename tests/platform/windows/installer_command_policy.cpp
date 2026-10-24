@@ -18,6 +18,13 @@ constexpr BOOTSTRAPPER_RELATION_TYPE kNoRelation = BOOTSTRAPPER_RELATION_NONE;
 
 } // namespace
 
+TEST_CASE("installer display selects a window only when useful", "[installer][windows]") {
+  CHECK(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_EMBEDDED));
+  CHECK(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_NONE));
+  CHECK_FALSE(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_PASSIVE));
+  CHECK_FALSE(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_FULL));
+}
+
 TEST_CASE("installer command preemption recognises unattended runs", "[installer][windows]") {
   CHECK_FALSE(detail::InstallerCommandPreemptsInteraction(kInteractiveAction, kInteractiveDisplay, kNoRelation));
 
@@ -130,6 +137,11 @@ TEST_CASE("terminal events quit the engine when the window already exited", "[in
   SECTION("commanded runs with a live window close it so UiExited quits once") {
     CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/false, /*preempts=*/true) ==
           detail::InstallerTerminalAction::CloseWindow);
+  }
+
+  SECTION("headless runs quit without waiting for a window") {
+    CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/false, /*preempts=*/true, /*headless=*/true) ==
+          detail::InstallerTerminalAction::QuitEngine);
   }
 
   SECTION("an exited window after a failed plan must still quit the engine") {

@@ -367,8 +367,13 @@ private:
 
 /// Configures application installation and the initial defaults shared by its UiWindow attachments.
 struct AppOptions {
-  /// Initial native-window configuration.
+  /// Initial native-window configuration, also available to application-owned delayed creation.
   WindowOptions window{};
+  /// Whether desktop RunApplication creates window at startup. False skips its native attachment and composition;
+  /// application hooks, services, tasks, and the event loop still start. Use ApplicationHandle::OpenWindow later.
+  /// extra_windows remain independent; leave that list empty to start without any UI windows.
+  /// Platform-owned mobile, Web, and embedded attachments ignore this desktop startup policy.
+  bool create_initial_window = true;
   /// Additional windows opened in declaration order immediately after the application starts.
   /// Windows created here share the initial window's creation path and may select distinct content through
   /// WindowOptions::key. An empty list preserves single-window startup.

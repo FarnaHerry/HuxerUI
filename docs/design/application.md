@@ -106,12 +106,16 @@ platform launch input
     -> normalize ApplicationActivation
     -> construct Runtime with startup activation
     -> install the application service and run application_hooks
-    -> compose the application root
-    -> read ApplicationHandle::StartupActivation()
-    -> commit the first UI frame
+    -> optionally create desktop startup windows
+    -> dispatch application tasks and later activations, even without a window
+    -> compose each created window's application root
+    -> commit its first UI frame
 ```
 
 Runtime defaults to `LaunchActivation` when a platform host does not supply another value. A URL, file collection, or notification identifier selected as startup input is validated before the first composition. The startup value never changes after construction.
+
+`StartupActivation()` is also available during application hooks, so a desktop application using `AppOptions::create_initial_window = false` may route startup input without composing a root.
+It may enqueue application work that later creates the appropriate window through `OpenWindow`; the startup value remains available after that delayed creation and is never replayed to the subsequent activation handler.
 
 Some native systems expose a launch-causing input only through a delegate callback after application launch.
 Such input does not retroactively replace `StartupActivation()`; the platform shell queues it and submits it through the subsequent activation path after Runtime construction.

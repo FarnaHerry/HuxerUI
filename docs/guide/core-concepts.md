@@ -236,6 +236,30 @@ Tray declarations reuse `MenuItem`, `MenuEntry`, and `MenuSection`; their `Image
 Register primary tray activation once through `SystemTrayHandle::OnActivate(handler)`, normally in an `ApplicationHook`. This application-lifetime registration requires the original application's thread, rejects empty or duplicate handlers, and survives `Show()`, `Hide()`, and window retirement. It does not capture a window context: capture a specific `WindowHandle` or an application-owned service that selects the target window instead of calling `UseWindow()` inside the handler.
 `UseWindow()` supplies independent visibility commands and lifecycle-bound minimize and close request handlers, allowing an application to compose minimize-to-tray behavior while preserving the normal window action when no tray host is available.
 
+### Desktop startup without a window
+
+Set `AppOptions::create_initial_window` to `false` to start the desktop application without creating its default native window or composing the root.
+Application hooks, services, ordinary tasks, timers, activation delivery, and the application event loop still run.
+`extra_windows` are explicit independent startup windows; keep that list empty for a windowless startup.
+
+```cpp
+const Application application{
+    App,
+    {
+        .window = {.title = "Tray application"},
+        .create_initial_window = false,
+        .application_hooks = {InstallApplicationServices, InstallTray},
+    },
+};
+```
+
+Install background work and the tray from application hooks rather than from `App`, because the root does not run until a window composes.
+An application task or tray callback can later call `ApplicationHandle::OpenWindow(options)`; enqueue work through `UseApplicationTaskScope()` when starting it from an application hook, since windows cannot open while services are still being installed.
+The `window` configuration remains available as `application.options.window` for delayed creation, and `create_initial_window` does not restrict later `OpenWindow` calls.
+Applications own fallback behavior when no tray host is available and should keep another way to open a window or exit.
+Call `Quit()` to stop a windowless application; retiring every window does not terminate its Runtime.
+This startup policy applies to framework-owned desktop windows; mobile, Web, and embedded hosts keep their platform-driven attachments.
+
 See [Application Permissions](../design/permissions.md) for status meanings, native declarations, and platform limitations.
 See [Local Notifications](../design/local-notifications.md) for notification authorization, identifiers, ordering, scheduling, and target platform mappings.
 

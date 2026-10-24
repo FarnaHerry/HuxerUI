@@ -16,6 +16,11 @@
 
 namespace huxerui::detail {
 
+// Embedded and quiet runs have no local window. Passive runs may still display progress.
+[[nodiscard]] inline bool InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY display) {
+  return display == BOOTSTRAPPER_DISPLAY_EMBEDDED || display == BOOTSTRAPPER_DISPLAY_NONE;
+}
+
 // Burn numeric versions may omit trailing zero fields. Invalid and overflowing fields must not
 // escape an engine callback as exceptions or be mistaken for an equal version.
 [[nodiscard]] inline std::optional<int> InstallerCompareVersions(std::string_view candidate,
@@ -118,8 +123,8 @@ enum class InstallerTerminalAction {
   QuitEngine,
 };
 
-[[nodiscard]] inline InstallerTerminalAction InstallerTerminalActionFor(bool ui_closed, bool preempts) {
-  if (ui_closed) {
+[[nodiscard]] inline InstallerTerminalAction InstallerTerminalActionFor(bool ui_closed, bool preempts, bool headless = false) {
+  if (ui_closed || headless) {
     return InstallerTerminalAction::QuitEngine;
   }
   return preempts ? InstallerTerminalAction::CloseWindow : InstallerTerminalAction::None;

@@ -268,7 +268,9 @@ public:
 
   int Run(const Application& application) {
     Start(application);
-    static_cast<void>(OpenWindow(application.options.window));
+    if (application.options.create_initial_window) {
+      static_cast<void>(OpenWindow(application.options.window));
+    }
     for (const WindowOptions& options : application.options.extra_windows) {
       static_cast<void>(OpenWindow(options));
     }

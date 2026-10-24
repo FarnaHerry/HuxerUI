@@ -20,6 +20,10 @@ This design does not add multiple tray items, desktop notifications, badges, sta
 
 System tray presentation is not part of `WindowOptions`. A field such as `minimize_to_tray` would combine application presentation, window request policy, capability fallback, and process termination in one startup flag. Those concerns remain independently composable.
 
+For desktop tray-only startup, set `AppOptions::create_initial_window = false` and leave `extra_windows` empty, then install the tray and background work in application hooks.
+This skips creation and composition of the default window while retaining the application event loop; the first tray activation can create a window through `ApplicationHandle::OpenWindow`.
+Window reuse, retirement, unavailable-tray fallback, and explicit exit remain application policy, as described in [Desktop startup without a window](../guide/core-concepts.md#desktop-startup-without-a-window).
+
 ## Ownership
 
 The responsibilities are divided as follows:
