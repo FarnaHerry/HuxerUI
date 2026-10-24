@@ -16,9 +16,21 @@ cmake --build build/check --config Release --parallel 4 --target example_desktop
 ```
 
 The tray menu provides show, hide, position recovery, settings, and quit.
-The ordinary settings window can receive keyboard focus and change wave-animation and topmost preferences.
+The ordinary settings window can receive keyboard focus and change wave-animation, topmost, and lightweight-mode preferences.
 Retiring the pet also retires its owned settings window; the Runtime and tray remain alive, and Show pet creates a new attachment.
 If a tray host is unavailable, hiding and explicit retirement are disabled in the example, a mounted hidden pet is shown again, and right-click Quit remains available.
+
+### Lightweight tray mode
+
+Lightweight mode is off by default and can be enabled in Settings when a tray host is available.
+Ordinary hiding keeps the native window and rendering resources for fast restoration.
+With lightweight mode enabled, Hide pet and intercepted close requests retire both the pet and settings windows through WindowHandle::Retire, releasing the UI trees and native rendering resources while the Runtime and tray continue running.
+Enabling the mode for an already hidden pet also retires its windows.
+Tray activation recreates the orb with its last in-process position, energized state, animation preference, and topmost preference; wave phase restarts.
+The settings window can be opened from the tray while the pet is retired, including changing the next window's topmost preference.
+Lightweight hiding also closes any such settings window.
+The process still retains application state, the tray, loaded libraries, and allocator/driver caches; retirement does not promise zero memory use or an immediate matching drop in the operating system's working-set counter.
+Preferences and position are not persisted across process exit.
 
 ## Native behavior and limits
 
@@ -37,7 +49,7 @@ Monitor-change subscriptions, persistent placement, arbitrary independent input 
 
 ## Validation
 
-The common Window tests cover invalid configuration, unavailable operations, disconnected handles, retained wave animation, and hidden/reduced-motion scheduling.
+The common Window tests cover invalid configuration, unavailable operations, disconnected handles, retained wave animation, hidden/reduced-motion scheduling, lightweight retirement/recreation, preference restoration, absent-tray recovery, and replacement safety during queued retirement.
 The Windows transparent-surface renderer fixture checks premultiplied pixels, silhouette clearing, resize, and resource recreation.
 The hidden native test creates its own second-process target to verify actual desktop alpha, passive focus, and excluded mouse input:
 

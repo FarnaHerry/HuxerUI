@@ -22,7 +22,7 @@ The example does not acquire audio or connect to a model service.
 | FD-04: stacking | Initial and mutable topmost requests with native failure results | Fullscreen/workspace interactions and broader owner/modal stacking qualification |
 | FD-05: geometry | Runtime position and client-size requests, observed position, work-area snapshots, native drag, and explicit position recovery | Display-change subscriptions, persistent placement, monitor removal, and mixed-DPI recovery |
 | FD-06: input | Zero-alpha passthrough to another process, independent whole-window passthrough, capture cancellation, and preservation of modal blocking | Arbitrary input regions independent of visual alpha, touch/pen, and other desktop hosts |
-| FD-07: example | Geometric assistant orb, retained 30 fps wave animation, hidden/reduced-motion pausing, click/drag/context menu, settings, tray recovery, and retirement/recreation | Background decoder/producer qualification if introduced; broader device and compositor coverage |
+| FD-07: example | Geometric assistant orb, retained 30 fps wave animation, hidden/reduced-motion pausing, click/drag/context menu, settings, tray recovery, and opt-in lightweight hiding with window retirement and in-process preference restoration | Background decoder/producer qualification if introduced; broader device and compositor coverage |
 
 The layered renderer reads back the complete small surface on every presented frame; it is limited to 4096 pixels per dimension and 16 million pixels in total.
 PlatformView hosting is unavailable on this path; ordinary opaque windows retain their existing presentation paths.

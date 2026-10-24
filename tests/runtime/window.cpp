@@ -5,6 +5,7 @@
 
 #include "application/window_internal.h"
 #include "../../examples/desktop_pet/pet.h"
+#include "../../examples/desktop_pet/pet_model.h"
 
 namespace huxerui::test {
 
@@ -702,6 +703,171 @@ TEST_CASE("DesktopPetOrbAnimatesPaintWithoutRecompositionAndStopsWhenHiddenOrMot
   const auto paused_commands = window.BuildFrame().Commands();
   platform.current_time = 1.0;
   REQUIRE(window.BuildFrame().Commands() == paused_commands);
+}
+
+namespace {
+
+View PetModelApp() {
+  const auto model = UseService<desktop_pet::PetModel>();
+  if (UseEnvironment<WindowIdentity>().key == "settings") desktop_pet::UseSettingsAttachment(model);
+  else desktop_pet::UsePetAttachment(model);
+  return Spacer();
+}
+
+class PetModelWindow final : public TestPlatform {
+public:
+  PetModelWindow(const WindowOptions& options, int& destroyed)
+      : position_(options.initial_position.value_or(Point{})), destroyed_(destroyed) {}
+  ~PetModelWindow() override { ++destroyed_; }
+
+  WindowCapabilities NativeWindowCapabilities() const override {
+    return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
+            .topmost = true, .geometry = true};
+  }
+  WindowRequestResult RequestWindowTopmost(bool) override { return WindowRequestResult::Submitted; }
+  WindowRequestResult RequestWindowPosition(Point position) override {
+    position_ = position;
+    return WindowRequestResult::Submitted;
+  }
+  std::optional<Point> WindowScreenOrigin() const override { return position_; }
+  std::optional<Rect> WindowWorkArea() const override { return Rect{0.0F, 0.0F, 1000.0F, 800.0F}; }
+  void RequestWindowCommand(WindowCommand command) override {
+    TestPlatform::RequestWindowCommand(command);
+    if (command == WindowCommand::Show || command == WindowCommand::Activate) {
+      UpdateWindowLifecycleState(WindowLifecycleState::Inactive);
+    } else if (command == WindowCommand::Hide) {
+      UpdateWindowLifecycleState(WindowLifecycleState::Background);
+    }
+  }
+  void DiscardHost() override {
+    TestPlatform::DiscardHost();
+    detail::InternalAccess::WindowServiceOf(*this)->ReleaseRetiredWindow();
+  }
+
+private:
+  Point position_;
+  int& destroyed_;
+};
+
+class PetModelRuntime final : public TestPlatform {
+public:
+  ~PetModelRuntime() override { huxerui::Runtime::Retire(); }
+  int destroyed = 0;
+  std::vector<WindowOptions> opened_options;
+
+  std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
+      std::uint32_t ordinal) override {
+    auto window = std::make_unique<PetModelWindow>(options, destroyed);
+    detail::InternalAccess::InitializeWindow(*window, *this, options, ordinal);
+    window->SetWindowMetrics({.viewport = options.initial_size});
+    window->BuildFrame();
+    opened_options.push_back(options);
+    return window;
+  }
+};
+
+}
+
+TEST_CASE("DesktopPetLightweightHideReleasesWindowsAndRestoresApplicationPreferences") {
+  std::shared_ptr<desktop_pet::PetModel> model;
+  std::optional<ApplicationHandle> application_handle;
+  PetModelRuntime owner;
+  Application application{PetModelApp, {.show_debug_overlay = false, .application_hooks = {
+      [&model, &application_handle](ApplicationContext& context) {
+        model = std::make_shared<desktop_pet::PetModel>();
+        context.Provide(model);
+        application_handle = UseApplication();
+      },
+  }}};
+  RuntimeLifetime lifetime(application, owner);
+  model->Show(*application_handle);
+  model->OpenSettings(*application_handle);
+  const auto old_pet = *model->pet;
+  const auto old_settings = *model->settings;
+  REQUIRE_FALSE(model->lightweight.Get());
+  model->Hide(true);
+  owner.RunPlatformModuleTasks();
+  REQUIRE(owner.destroyed == 0);
+  REQUIRE(model->pet.has_value());
+  REQUIRE(model->pet->LifecycleState() == WindowLifecycleState::Background);
+  model->Show(*application_handle);
+  REQUIRE(model->pet->SetPosition({-120.0F, 64.0F}) == WindowRequestResult::Submitted);
+  model->energized = true;
+  model->animate = false;
+  model->SetTopmost(false);
+  model->SetLightweight(true, true);
+  REQUIRE(model->pet.has_value());
+  model->Hide(true);
+  owner.RunPlatformModuleTasks();
+  REQUIRE(owner.destroyed == 2);
+  REQUIRE_FALSE(model->pet);
+  REQUIRE_FALSE(model->settings);
+  REQUIRE(old_pet.SetTopmost(true) == WindowRequestResult::Disconnected);
+  REQUIRE(old_settings.SetTopmost(true) == WindowRequestResult::Disconnected);
+  REQUIRE(owner.application_quit_requests == 0);
+
+  model->Show(*application_handle);
+  REQUIRE(model->pet.has_value());
+  REQUIRE((model->pet->Position() == Point{-120.0F, 64.0F}));
+  REQUIRE_FALSE(owner.opened_options.back().topmost);
+  REQUIRE(model->energized.Get());
+  REQUIRE_FALSE(model->animate.Get());
+  REQUIRE(model->lightweight.Get());
+  model->Hide(true);
+  owner.RunPlatformModuleTasks();
+  model->OpenSettings(*application_handle);
+  REQUIRE_FALSE(model->pet);
+  model->SetTopmost(true);
+  model->Show(*application_handle);
+  REQUIRE(owner.opened_options.back().topmost);
+  model->Hide(true);
+  owner.RunPlatformModuleTasks();
+  REQUIRE(owner.destroyed == 5);
+}
+
+TEST_CASE("DesktopPetLightweightModeProtectsReplacementsAndRequiresTrayRecovery") {
+  std::shared_ptr<desktop_pet::PetModel> model;
+  std::optional<ApplicationHandle> application_handle;
+  PetModelRuntime owner;
+  Application application{PetModelApp, {.show_debug_overlay = false, .application_hooks = {
+      [&model, &application_handle](ApplicationContext& context) {
+        model = std::make_shared<desktop_pet::PetModel>();
+        context.Provide(model);
+        application_handle = UseApplication();
+      },
+  }}};
+  RuntimeLifetime lifetime(application, owner);
+  model->Show(*application_handle);
+  model->SetLightweight(true, false);
+  model->Hide(false);
+  REQUIRE_FALSE(model->lightweight.Get());
+  REQUIRE(model->pet->LifecycleState() != WindowLifecycleState::Background);
+
+  SECTION("Enabling while hidden releases the retained window") {
+    model->Hide(true);
+    model->SetLightweight(true, true);
+    owner.RunPlatformModuleTasks();
+    REQUIRE(owner.destroyed == 1);
+    REQUIRE_FALSE(model->pet);
+  }
+  SECTION("Old lifecycle cleanup preserves newly mounted windows") {
+    model->SetLightweight(true, true);
+    model->OpenSettings(*application_handle);
+    model->Hide(true);
+    model->Show(*application_handle);
+    model->OpenSettings(*application_handle);
+    owner.RunPlatformModuleTasks();
+    REQUIRE(owner.destroyed == 2);
+    REQUIRE(model->pet.has_value());
+    REQUIRE(model->settings.has_value());
+    REQUIRE(model->pet->SetTopmost(true) == WindowRequestResult::Submitted);
+    REQUIRE(model->settings->SetTopmost(true) == WindowRequestResult::Submitted);
+    model->Hide(true);
+    owner.RunPlatformModuleTasks();
+    REQUIRE(owner.destroyed == 4);
+    REQUIRE_FALSE(model->pet);
+    REQUIRE_FALSE(model->settings);
+  }
 }
 
 TEST_CASE("WindowRetirementReleasesItsLastSemanticFrame") {

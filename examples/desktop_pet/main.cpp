@@ -2,61 +2,16 @@
 
 #include <desktop_pet_resources.h>
 
-#include <algorithm>
 #include <memory>
-#include <optional>
 
 #include "pet.h"
+#include "pet_model.h"
 
 using namespace huxerui;
+using desktop_pet::PetModel;
+using desktop_pet::PetOptions;
 
 namespace {
-
-WindowOptions PetOptions() {
-  return {
-      .title = "HuxerUI Desktop Pet",
-      .key = "pet",
-      .initial_size = {200.0F, 200.0F},
-      .presentation = WindowPresentation::Utility,
-      .transparent_surface = true,
-      .show_without_activation = true,
-      .topmost = true,
-  };
-}
-
-struct PetModel {
-  std::optional<WindowHandle> pet;
-  std::optional<WindowHandle> settings;
-  State<bool> energized{false};
-  State<bool> animate{true};
-  State<bool> topmost{true};
-
-  void Show(const ApplicationHandle& application) {
-    if (!pet) {
-      auto options = PetOptions();
-      options.topmost = topmost.Get();
-      pet = application.OpenWindow(options);
-    }
-    pet->Show();
-  }
-
-  void RecoverPosition() const {
-    if (!pet) return;
-    if (const auto work = pet->WorkArea()) {
-      static_cast<void>(pet->SetPosition({work->x + std::max(0.0F, work->width - 220.0F),
-                                        work->y + std::max(0.0F, work->height - 220.0F)}));
-    }
-  }
-
-  void OpenSettings(const ApplicationHandle& application) {
-    if (!settings) {
-      settings = application.OpenWindow(
-          {.title = "Desktop Pet Settings", .key = "settings", .initial_size = {380.0F, 340.0F}},
-          {.owner = pet});
-    }
-    settings->Activate();
-  }
-};
 
 void InstallPet(ApplicationContext& context) {
   const auto model = std::make_shared<PetModel>();
@@ -68,7 +23,7 @@ void InstallPet(ApplicationContext& context) {
       .tooltip = "HuxerUI Desktop Pet",
       .menu = {
           MenuItem("Show pet", [model, application] { model->Show(application); }),
-          MenuItem("Hide pet", [model] { if (model->pet) model->pet->Hide(); }),
+          MenuItem("Hide pet", [model, tray] { model->Hide(tray.IsAvailable()); }),
           MenuItem("Recover position", [model] { model->RecoverPosition(); }),
           MenuItem("Settings", [model, application] { model->OpenSettings(application); }),
           MenuSection{},
@@ -88,14 +43,10 @@ View PetContent() {
   Lifecycle([window, tray_available] {
     if (!tray_available) window.Show();
   }, tray_available);
-  Lifecycle([model, window] {
-    model->pet = window;
-    model->RecoverPosition();
-    return [model] { model->pet.reset(); };
-  });
-  window.OnCloseRequest([model, window, tray_available] {
+  desktop_pet::UsePetAttachment(model);
+  window.OnCloseRequest([model, tray_available] {
     if (!tray_available) return false;
-    window.Hide();
+    model->Hide(tray_available);
     return true;
   }, tray_available);
   return Stack {}.With(
@@ -106,10 +57,10 @@ View PetContent() {
                 .label = "Assistant orb. Click to energize; drag to move; right-click for menu."}
   ).OnClick([model] { model->energized = !model->energized.Get(); })
       .On<DragEvents::Started>([window](const DragEvent&) { static_cast<void>(window.BeginMove()); })
-      .On<ViewEvents::ContextMenuRequested>([model, application, menu, window, tray_available](Point position) {
+      .On<ViewEvents::ContextMenuRequested>([model, application, menu, tray_available](Point position) {
         menu.ShowAt(position, {
             MenuItem("Settings", [model, application] { model->OpenSettings(application); }),
-            MenuItem("Hide pet", [window] { window.Hide(); }).Enabled(tray_available),
+            MenuItem("Hide pet", [model, tray_available] { model->Hide(tray_available); }).Enabled(tray_available),
             MenuSection{},
             MenuItem("Quit", [application] { application.Quit(); }),
         });
@@ -118,25 +69,26 @@ View PetContent() {
 
 [[huxerui::composable]]
 View SettingsContent() {
-  const auto window = UseWindow();
   const auto model = UseService<PetModel>();
   const auto application = UseApplication();
   const bool tray_available = application.SystemTray().IsAvailable();
-  Lifecycle([model, window] {
-    model->settings = window;
-    return [model] { model->settings.reset(); };
-  });
+  desktop_pet::UseSettingsAttachment(model);
   return ScrollView {
     Column {
       Text("Assistant orb", TextRole::Title),
       Text("Click the orb to brighten its waves. Drag to move it."),
       Checkbox("Animate waves", model->animate.Get())
           .OnChanged([model](bool value) { model->animate = value; }),
-      Checkbox("Stay on top", model->topmost.Get()).OnChanged([model](bool value) {
-        if (model->pet && model->pet->SetTopmost(value) == WindowRequestResult::Submitted) model->topmost = value;
-      }),
+      Checkbox("Stay on top", model->topmost.Get())
+          .OnChanged([model](bool value) { model->SetTopmost(value); }),
+      Checkbox("Lightweight mode", model->lightweight.Get())
+          .OnChanged([model, tray_available](bool value) { model->SetLightweight(value, tray_available); })
+          .With(Enabled(tray_available)),
+      Text("Release pet and settings windows when hidden. Click the tray to recreate the orb."),
       Button("Recover pet position").OnClick([model] { model->RecoverPosition(); }),
-      Button("Retire pet").OnClick([model] { if (model->pet) model->pet->Retire(); })
+      Button("Hide pet").OnClick([model, tray_available] { model->Hide(tray_available); })
+          .With(Enabled(tray_available)),
+      Button("Retire pet").OnClick([model] { model->Retire(); })
           .With(Enabled(tray_available)),
       Button("Show or recreate pet").OnClick([model, application] { model->Show(application); }),
       Button("Quit").OnClick([application] { application.Quit(); }),
