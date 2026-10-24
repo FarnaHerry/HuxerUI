@@ -716,13 +716,14 @@ View PetModelApp() {
 
 class PetModelWindow final : public TestPlatform {
 public:
-  PetModelWindow(const WindowOptions& options, int& destroyed)
-      : position_(options.initial_position.value_or(Point{})), destroyed_(destroyed) {}
+  PetModelWindow(const WindowOptions& options, int& destroyed, bool passive_display_available)
+      : position_(options.initial_position.value_or(Point{})), destroyed_(destroyed),
+        passive_display_available_(passive_display_available) {}
   ~PetModelWindow() override { ++destroyed_; }
 
   WindowCapabilities NativeWindowCapabilities() const override {
-    return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
-            .topmost = true, .geometry = true};
+    return {.transparent_surface = true, .utility_presentation = true,
+            .passive_display = passive_display_available_, .topmost = true, .geometry = true};
   }
   WindowRequestResult RequestWindowTopmost(bool) override { return WindowRequestResult::Submitted; }
   WindowRequestResult RequestWindowPosition(Point position) override {
@@ -747,17 +748,21 @@ public:
 private:
   Point position_;
   int& destroyed_;
+  bool passive_display_available_;
 };
 
 class PetModelRuntime final : public TestPlatform {
 public:
   ~PetModelRuntime() override { huxerui::Runtime::Retire(); }
   int destroyed = 0;
+  bool passive_display_available = true;
+  std::vector<WindowOptions> attempted_options;
   std::vector<WindowOptions> opened_options;
 
   std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
       std::uint32_t ordinal) override {
-    auto window = std::make_unique<PetModelWindow>(options, destroyed);
+    attempted_options.push_back(options);
+    auto window = std::make_unique<PetModelWindow>(options, destroyed, passive_display_available);
     detail::InternalAccess::InitializeWindow(*window, *this, options, ordinal);
     window->SetWindowMetrics({.viewport = options.initial_size});
     window->BuildFrame();
@@ -766,6 +771,40 @@ public:
   }
 };
 
+}
+
+TEST_CASE("DesktopPetStartupPreservesPassiveDisplayAndFallsBackWhenUnavailable") {
+  PetModelRuntime owner;
+  SECTION("A backend with passive display retains its creation policy") {}
+  SECTION("A backend without passive display falls back during creation") {
+    owner.passive_display_available = false;
+  }
+  std::shared_ptr<desktop_pet::PetModel> model;
+  Application application{
+      PetModelApp,
+      {
+          .create_initial_window = false,
+          .show_debug_overlay = false,
+          .application_hooks = {
+              [&](ApplicationContext& context) {
+                model = std::make_shared<desktop_pet::PetModel>();
+                context.Provide(model);
+                const auto application = UseApplication();
+                UseApplicationTaskScope().Post([model, application] { model->Show(application); });
+              },
+          },
+      },
+  };
+  RuntimeLifetime lifetime(application, owner);
+  REQUIRE(owner.opened_options.empty());
+  owner.RunPlatformModuleTasks();
+  REQUIRE(model->pet.has_value());
+  REQUIRE(owner.opened_options.size() == 1);
+  REQUIRE(owner.attempted_options.front().show_without_activation);
+  REQUIRE(owner.attempted_options.front().topmost);
+  REQUIRE(owner.opened_options.back().show_without_activation == owner.passive_display_available);
+  REQUIRE(owner.opened_options.back().topmost == owner.passive_display_available);
+  REQUIRE(owner.attempted_options.size() == (owner.passive_display_available ? 1 : 2));
 }
 
 TEST_CASE("DesktopPetLightweightHideReleasesWindowsAndRestoresApplicationPreferences") {

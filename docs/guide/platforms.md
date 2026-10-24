@@ -8,7 +8,7 @@ Each backend uses platform lifecycle, input, text, accessibility, file, network,
 | Platform | Rendering and text | HTTP and files | Accessibility | PlatformView | ExternalTexture | Permissions | Local notifications | System tray |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | Windows | Direct2D and DirectWrite | Yes | UI Automation | Yes | Yes | AppCapability | Registered Win32 toast identity | Yes |
-| macOS | Core Graphics and Core Text | Yes | AppKit accessibility | Yes | Yes | Camera and microphone | User Notifications | Yes |
+| macOS (preview) | Core Graphics and Core Text | Yes | AppKit accessibility | Yes | Yes | Camera and microphone | User Notifications | Yes |
 | Linux | GSK, Cairo, and Pango | Yes | Not supported | No | Yes | Unavailable | Unavailable | StatusNotifierItem host |
 | Web | Canvas 2D and browser text metrics | Yes | Not supported | Yes | Yes | Query only | Unavailable | No |
 | Android | Android Canvas and StaticLayout | Yes | AccessibilityNodeInfo | Yes | Yes | Camera and microphone | Configured NotificationManager | No |
@@ -27,7 +27,7 @@ See [Local Notifications](../design/local-notifications.md) for authorization, a
 The client origin is the point corresponding to `{0, 0}` in the window's content coordinates; native title bars, borders, and shadows are excluded.
 Windows applies this preference using the native display scale; the window manager may constrain placement.
 macOS applies this preference through AppKit and reports positions in the same logical coordinates.
-Linux/X11 has a placement implementation, but its origin consistency, scaling, and native lifecycle still require separate Linux maintainer validation.
+Linux/X11 converts root pixels to logical client coordinates, excluding GTK decorations and shadows; placement requests use the same scale and client origin.
 Wayland and host-managed mobile and Web surfaces use platform placement instead.
 
 ```cpp
@@ -78,14 +78,16 @@ Zero-alpha pixels naturally pass native mouse input through; translucent pixels 
 Independent arbitrary shaped input regions remain unavailable; View hit testing and visual alpha are not substitutes for that capability.
 PlatformView hosting is unavailable on the transparent path; ExternalTexture rendering remains usable.
 
-macOS utility windows are borderless non-activating `NSPanel` surfaces excluded from window cycling and able to share a Space with a full-screen window.
+macOS floating-window support is a preview accepted through the macOS Multi-Window Preview CI workflow; no physical macOS device is available for interactive qualification.
+Utility windows use borderless `NSPanel` surfaces excluded from window cycling and able to share a Space with a full-screen window.
 Transparent surfaces make the panel non-opaque with a clear background and no shadow, and the renderer erases stale content with per-pixel alpha instead of the opaque fallback fill.
 Passive display orders the panel front without taking key status, and its non-activating style keeps pointer input from implicitly activating the application.
 `SetInputPassthrough` uses whole-window input exclusion and is available on every attachment; `BeginMove` needs the pointer-down event of the current drag gesture and is rejected without one.
 Open an ordinary settings window and explicitly activate it for keyboard/IME editing.
 
 Linux transparent utility windows draw through the regular GTK scene graph: the window background becomes a per-pixel alpha surface, and no CPU readback budget applies.
-Both GDK backends support Utility presentation, transparency, client sizing, `WorkArea()`, and interactive `BeginMove()`.
+Both GDK backends support Utility presentation, transparency, client sizing, and interactive `BeginMove()`.
+On X11, `WorkArea()` returns the current monitor's logical usable bounds, excluding window-manager-reserved panels; Wayland returns `std::nullopt` because GDK exposes no usable-work-area query there.
 On X11 they additionally support passive display, topmost, programmatic positioning, and whole-window input passthrough through the shape extension; Wayland owns activation, stacking, and placement by protocol, so those operations report Unavailable there and `Position()` returns `std::nullopt`.
 Treat backend availability as a runtime property of each attachment: a Wayland session and an X11 or XWayland session on the same machine report different capabilities.
 See the [desktop pet example](../../examples/desktop_pet/README.md) and [floating-window design](../design/window-chrome.md#floating-utility-windows) for scope and native validation requirements.
@@ -188,6 +190,7 @@ If the producer device is removed, publish a replacement texture from a valid de
 
 ## macOS
 
+The macOS backend is a preview whose acceptance gate is CI on the supported runners; interactive behavior has not been qualified on a physical macOS device.
 The macOS backend requires macOS 12 or later.
 The macOS backend uses AppKit, Core Graphics, Core Text, and `NSTextInputClient`.
 Runtime-created windows, startup `extra_windows`, ownership, modality, and explicit retirement are available as a preview; see [Developing Multi-Window](../development/multi-window.md#macos-preview-validation) for CI coverage and the remaining interactive validation.

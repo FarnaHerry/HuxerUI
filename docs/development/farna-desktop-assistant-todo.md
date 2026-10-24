@@ -1,7 +1,7 @@
 # Farna TODO: Floating Windows and Desktop Assistant Capabilities
 
 Owner: Farna.
-Status: Windows, Linux, and macOS floating-window implementations and the assistant-orb example delivered; broader qualification and optional services remain future work.
+Status: Windows and Linux floating-window implementations and the assistant-orb example delivered; macOS remains a CI-qualified preview; broader qualification and optional services remain future work.
 
 This backlog extracts reusable framework requirements from animated desktop companions and character-based assistants.
 It belongs to the Farna fork and its [downstream integration policy](farna-integration.md), not to an upstream release plan.
@@ -26,7 +26,7 @@ The example does not acquire audio or connect to a model service.
 
 The layered renderer reads back the complete small surface on every presented frame; it is limited to 4096 pixels per dimension and 16 million pixels in total.
 PlatformView hosting is unavailable on this path; ordinary opaque windows retain their existing presentation paths.
-The utility policies are implemented on Windows, on Linux through the GTK adapter with its capability set split truthfully between the X11 and Wayland backends, and on macOS through AppKit; mobile and Web hosts retain explicit unavailable behavior.
+The utility policies are implemented on Windows, on Linux through the GTK adapter with its capability set split truthfully between the X11 and Wayland backends, and as a CI-qualified macOS preview through AppKit, without physical-device validation; mobile and Web hosts retain explicit unavailable behavior.
 The P0 checklist below retains the broader acceptance scope and must not be interpreted as a claim that every desktop backend or device has passed it.
 
 ### Validation and distribution
@@ -37,7 +37,7 @@ The P0 checklist below retains the broader acceptance scope and must not be inte
 - A temporary Windows 10/11 x64 portable ZIP contains the executable, resources, licenses, and matching app-local Release CRT; profiling is disabled, extracted file hashes match, and startup succeeds from an unrelated working directory with a system-only PATH.
 - The ZIP remains a local build artifact; clean-machine execution, physical mixed-DPI displays, touch/pen, accessibility, fullscreen interaction, and actual Windows 7 execution are not qualified by that startup check.
 - Linux validation ran locally on Fedora (GTK 4.22, Wayland session with XWayland): full Ninja build with tests and examples, all four common suites, the Linux platform suite including the new per-backend native floating-window tests, and a desktop-pet smoke run; one pre-existing bidi caret test failure and one pre-existing runtime-dependency segfault were verified against a pristine base checkout.
-- macOS validation ran through the `macos-multi-window` workflow on both runners (macos-15 static, macos-15-intel shared): native suite including the two new floating-window scenarios, common and codegen suites, and the desktop-pet example build all passed; interactive behavior beyond CI (dragging behind other applications, Space and full-screen transitions, multiple displays) remains unqualified.
+- macOS is a preview accepted through CI because no physical macOS device is available. Previous validation ran through the `macos-multi-window` workflow on both runners (macos-15 static, macos-15-intel shared): native suite including the two new floating-window scenarios, common and codegen suites, and the desktop-pet example build all passed; interactive behavior beyond CI (dragging behind other applications, Space and full-screen transitions, multiple displays) remains unqualified.
 - Mobile and Web builds remain unavailable on these hosts; no equivalent native support is claimed for them.
 
 ### Next priorities

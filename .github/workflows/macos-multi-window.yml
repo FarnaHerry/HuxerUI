@@ -8,6 +8,9 @@ on:
     paths:
       - 'platform/macos/**'
       - 'tests/platform/macos/**'
+      - 'tests/runtime/**'
+      - 'examples/CMakeLists.txt'
+      - 'examples/desktop_pet/**'
       - 'src/application/**'
       - 'src/runtime/**'
       - 'include/huxerui/**'

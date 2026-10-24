@@ -1,6 +1,7 @@
 # Desktop pet
 
-A small Windows desktop companion styled as a glass assistant orb, drawn entirely with existing HuxerUI paint commands.
+A small desktop companion styled as a glass assistant orb, drawn entirely with existing HuxerUI paint commands.
+Windows and Linux are supported; macOS is a CI-qualified preview.
 Layered cyan, blue, and violet wave ribbons flow inside a dark translucent sphere; click to brighten and energize the waves, drag to move, and right-click for settings or exit.
 Wave motion uses retained paint state capped at 30 frames per second without recomposing the UI; it pauses while hidden or disabled and honors reduced motion.
 The visual is a demonstration and does not acquire microphone audio.
@@ -14,6 +15,15 @@ Use the repository's configured Windows MSVC build:
 cmake --build build/check --config Release --parallel 4 --target example_desktop_pet
 & ./build/check/bin/Release/example_desktop_pet.exe
 ```
+
+On Linux, use a configured GTK build:
+
+```sh
+cmake --build build/linux-multi-window-clean --parallel 3 --target example_desktop_pet
+./build/linux-multi-window-clean/bin/example_desktop_pet
+```
+
+The same target builds on macOS through the macOS Multi-Window Preview CI workflow; no physical macOS device has been used to qualify it.
 
 The tray menu provides show, hide, position recovery, settings, and quit.
 The ordinary settings window can receive keyboard focus and change wave-animation, topmost, and lightweight-mode preferences.
@@ -34,7 +44,9 @@ Preferences and position are not persisted across process exit.
 
 ## Native behavior and limits
 
-The pet uses a transparent, borderless utility window, initially topmost and shown without activation.
+The pet uses a transparent, borderless utility window and requests topmost and passive display when it is created.
+Application setup queues the first pet through the same creation path as tray recovery, after application services freeze.
+On Wayland, unsupported passive display and topmost policies fall back to compositor-controlled activation and stacking; Windows, macOS, and X11 retain the requested policies.
 Windows layered publication preserves premultiplied alpha, and zero-alpha pixels let native mouse input reach windows belonging to other processes.
 The translucent outer rim remains interactive.
 Whole-window SetInputPassthrough is available separately; the sample keeps it off so the body and context menu remain usable.
@@ -44,7 +56,10 @@ The layered path reuses the existing GPU scene renderer and performs a complete 
 This is a bounded small-surface implementation, not a claim of transfer-free rendering: surfaces are limited to 4096 pixels per dimension and 16 million pixels in total.
 PlatformView hosting is unavailable on this presentation path; immutable ExternalTexture frames can still be drawn.
 Ordinary opaque windows retain the swap-chain and DirectComposition paths.
-Linux and macOS do not yet implement the new utility policies, and this example target is registered only on Windows.
+The example target is registered on desktop Windows, Linux, and macOS only.
+Linux uses GTK scene composition without the Windows readback path; X11 exposes logical client coordinates, native stacking, and whole-window input passthrough.
+X11 position recovery uses the current monitor's work area, excluding desktop panels; Wayland does not expose global placement or a work-area query, so position recovery is unavailable there.
+macOS uses transparent AppKit panels and remains a preview accepted through CI; physical-device dragging, focus, Spaces, fullscreen, and multiple displays remain unqualified.
 Monitor-change subscriptions, persistent placement, arbitrary independent input regions, and character decoders remain follow-up scopes.
 
 ## Validation
@@ -59,5 +74,13 @@ The hidden native test creates its own second-process target to verify actual de
 & ./build/check/bin/Release/huxerui_windows_tests.exe "[win32-native-pet]"
 ```
 
-The native case temporarily moves the pointer over its own test windows and restores the previous pointer position when it finishes.
+The Windows native case temporarily moves the pointer over its own test windows and restores the previous pointer position when it finishes.
+Linux geometry scenarios can run without driving the pointer; run them on Wayland and X11, including a scaled X11 surface:
+
+```sh
+GDK_BACKEND=wayland ./build-farna-debug/bin/huxerui_linux_tests '[linux-native-floating-geometry]'
+GDK_BACKEND=x11 GDK_SCALE=2 ./build-farna-debug/bin/huxerui_linux_tests '[linux-native-floating-geometry]'
+```
+
+The separate `[linux-native-floating]` case drives pointer input and should run in an isolated desktop session.
 Mixed-DPI physical monitors, touch/pen, accessibility, fullscreen interactions, and actual Windows 7 execution require their own native qualification.

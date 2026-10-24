@@ -57,6 +57,7 @@
 #include "linux_text_input.h"
 #include "linux_ui_dispatcher.h"
 #include "application/platform_frame_internal.h"
+#include "application/window_internal.h"
 #include "resources/resource_internal.h"
 #include "text/text_internal.h"
 #include "runtime/window_drag_internal.h"
@@ -932,7 +933,9 @@ public:
       return std::nullopt;
     }
     G_GNUC_END_IGNORE_DEPRECATIONS
-    return Point{static_cast<float>(x), static_cast<float>(y)};
+    const float scale = static_cast<float>(gdk_surface_get_scale_factor(surface));
+    const Point offset = ClientSurfaceOffset();
+    return Point{static_cast<float>(x) / scale + offset.x, static_cast<float>(y) / scale + offset.y};
 #endif
 #endif
     return std::nullopt;
@@ -1011,12 +1014,26 @@ public:
     if (!request) {
       return WindowRequestResult::Rejected;
     }
-    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-    XMoveWindow(request.display, request.window, static_cast<int>(std::lround(position.x)),
-                static_cast<int>(std::lround(position.y)));
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    const double scale = gdk_surface_get_scale_factor(surface);
+    const Point offset = ClientSurfaceOffset();
+    const int x = ResolveWindowPositionCoordinate((static_cast<double>(position.x) - offset.x) * scale,
+        std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+    const int y = ResolveWindowPositionCoordinate((static_cast<double>(position.y) - offset.y) * scale,
+        std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+    // StaticGravity addresses the client surface rather than the window manager's decoration frame.
+    XEvent message{};
+    message.xclient.type = ClientMessage;
+    message.xclient.window = request.window;
+    message.xclient.message_type = XInternAtom(request.display, "_NET_MOVERESIZE_WINDOW", False);
+    message.xclient.format = 32;
+    message.xclient.data.l[0] = StaticGravity | (1 << 8) | (1 << 9) | (1 << 12);
+    message.xclient.data.l[1] = x;
+    message.xclient.data.l[2] = y;
+    const int submitted = XSendEvent(request.display, DefaultRootWindow(request.display), False,
+        SubstructureRedirectMask | SubstructureNotifyMask, &message);
     XFlush(request.display);
-    G_GNUC_END_IGNORE_DEPRECATIONS
-    return WindowRequestResult::Submitted;
+    return submitted != 0 ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
 #else
     static_cast<void>(position);
     return WindowRequestResult::Unavailable;
@@ -1033,8 +1050,9 @@ public:
     }
     // GTK owns logical sizes, so the DIP request maps one to one to the widget-space default size;
     // the mapped surface adopts it even while non-resizable, as probe-verified on both backends.
-    gtk_window_set_default_size(window_, std::max(1, static_cast<int>(std::lround(size.width))),
-                                std::max(1, static_cast<int>(std::lround(size.height))));
+    const int width = ResolveWindowPositionCoordinate(std::max(1.0F, size.width), 1, std::numeric_limits<int>::max());
+    const int height = ResolveWindowPositionCoordinate(std::max(1.0F, size.height), 1, std::numeric_limits<int>::max());
+    gtk_window_set_default_size(window_, width, height);
     return WindowRequestResult::Submitted;
   }
 
@@ -1093,31 +1111,22 @@ public:
   }
 
   std::optional<Rect> WindowWorkArea() const override {
-    if (window_ == nullptr) {
-      return std::nullopt;
-    }
-    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
-    if (surface == nullptr) {
-      return std::nullopt;
-    }
-    GdkDisplay* display = gdk_surface_get_display(surface);
-    GdkMonitor* monitor = gdk_display_get_monitor_at_surface(display, surface);
-    if (monitor == nullptr) {
-      return std::nullopt;
-    }
-    GdkRectangle geometry{};
-    gdk_monitor_get_geometry(monitor, &geometry);
-    // The display owns its monitor list; gdk_display_get_monitor_at_surface transfers no reference.
-    float scale = 1.0F;
 #if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
-    if (GDK_IS_X11_SURFACE(surface)) {
-      // X11 reports positions in the root pixel space that WindowScreenOrigin and SetPosition use,
-      // while GDK monitor geometry is logical; convert so one coordinate space holds per backend.
-      scale = static_cast<float>(gdk_surface_get_scale_factor(surface));
-    }
+    if (window_ == nullptr) return std::nullopt;
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (surface == nullptr || !GDK_IS_X11_SURFACE(surface)) return std::nullopt;
+    GdkMonitor* monitor = gdk_display_get_monitor_at_surface(gdk_surface_get_display(surface), surface);
+    if (monitor == nullptr) return std::nullopt;
+    // GDK resolves the current desktop's reserved areas and returns logical coordinates.
+    GdkRectangle work_area{};
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    gdk_x11_monitor_get_workarea(monitor, &work_area);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    return Rect{static_cast<float>(work_area.x), static_cast<float>(work_area.y),
+                static_cast<float>(work_area.width), static_cast<float>(work_area.height)};
+#else
+    return std::nullopt;
 #endif
-    return Rect{static_cast<float>(geometry.x) * scale, static_cast<float>(geometry.y) * scale,
-                static_cast<float>(geometry.width) * scale, static_cast<float>(geometry.height) * scale};
   }
 
   bool BeginWindowDrag(std::shared_ptr<WindowDrag> transfer) override {
@@ -1412,14 +1421,24 @@ private:
   }
 
   bool UsingX11SurfaceBackend() const noexcept {
-#ifdef GDK_WINDOWING_X11
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
     return window_ != nullptr && GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(window_)));
 #else
     return false;
 #endif
   }
 
-  /// Points the theme's window background at per-pixel alpha for this window only.
+  /// Locates the canvas origin within the native surface, excluding GTK decorations and shadows.
+  Point ClientSurfaceOffset() const {
+    const graphene_point_t zero{0.0F, 0.0F};
+    graphene_point_t origin{};
+    if (!gtk_widget_compute_point(drawing_area_, GTK_WIDGET(window_), &zero, &origin)) return {};
+    double x = 0.0;
+    double y = 0.0;
+    gtk_native_get_surface_transform(GTK_NATIVE(window_), &x, &y);
+    return Point{origin.x - static_cast<float>(x), origin.y - static_cast<float>(y)};
+  }
+
   /// Points the theme's window background at per-pixel alpha for this window only.
   void ApplyTransparentBackground() {
     EnsureTransparentBackgroundProvider(gtk_widget_get_display(GTK_WIDGET(window_)));
@@ -1798,7 +1817,7 @@ private:
   }
 
   /// Stashes the preferred initial position on X11; GTK4 has no placement API, so the request moves the
-  /// window through XMoveWindow once the surface maps. Wayland ignores client positions by protocol.
+  /// client surface through the window manager once it maps. Wayland ignores client positions by protocol.
   void ApplyInitialPosition(const Point& position) {
 #ifdef GDK_WINDOWING_X11
 #ifdef HUXERUI_LINUX_X11
@@ -1826,13 +1845,9 @@ private:
     if (surface == nullptr || !GDK_IS_X11_SURFACE(surface)) {
       return;
     }
-    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-    Display* const xdisplay = gdk_x11_display_get_xdisplay(gdk_surface_get_display(surface));
     const Point position = *pending_initial_position_;
     pending_initial_position_.reset();
-    XMoveWindow(xdisplay, gdk_x11_surface_get_xid(surface),
-                static_cast<int>(std::lround(position.x)), static_cast<int>(std::lround(position.y)));
-    G_GNUC_END_IGNORE_DEPRECATIONS
+    static_cast<void>(RequestWindowPosition(position));
 #endif
 #endif
   }

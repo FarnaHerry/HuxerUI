@@ -41,8 +41,9 @@ The Linux changes in the macOS preview PR address CMake/mcpp X11 build dependenc
 
 ## macOS preview validation
 
+macOS multi-window and floating-window support remain previews accepted through CI; no physical macOS device is available for interactive validation.
 The `macOS Multi-Window Preview` workflow builds on GitHub-hosted macOS runners: arm64 with static linkage and Intel with shared linkage, both retaining the macOS 12 deployment target.
-It builds common and codegen suites, AppKit platform suites, standalone headers, `example_multi_window`, and `example_window_relationship`.
+It builds common and codegen suites, AppKit platform suites, standalone headers, `example_multi_window`, `example_window_relationship`, and `example_desktop_pet`.
 The separate native test bundle creates real NSWindows on the main thread and exercises startup extras, runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
 Each CTest scenario runs in a fresh process because AppKit owns a process-wide NSApplication; weak native references check that retired windows and their content views are released after bounded native autorelease cleanup.
 The native Quit scenario invokes AppKit termination from the main queue and verifies that queued Runtime shutdown completes and returns to the caller.

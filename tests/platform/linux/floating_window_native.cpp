@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -268,6 +269,7 @@ struct FloatingScenario {
   int presses = 0;
   int cancels = 0;
   int settle = 0;
+  int stage = 0;
   bool completed = false;
 
   void Check(bool condition, const char* message) {
@@ -313,7 +315,7 @@ void RunFloatingScenario(FloatingScenario& scenario) {
     auto& scenario = *static_cast<FloatingScenario*>(data);
     try {
       scenario.Check(std::chrono::steady_clock::now() < scenario.deadline,
-                     "floating-window native test timed out");
+                     ("floating-window native test timed out at stage " + std::to_string(scenario.stage)).c_str());
       if (!scenario.advance()) return G_SOURCE_CONTINUE;
       scenario.completed = true;
     } catch (...) {
@@ -375,7 +377,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
   std::optional<WindowHandle> reopened;
   std::optional<WindowHandle> plain;
   std::optional<Rect> work_area;
-  int stage = 0;
+  int& stage = scenario.stage;
   int press_baseline = 0;
   int move_attempts = 0;
   int reopen_cycle = 0;
@@ -403,8 +405,12 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
         self.Check(capabilities.input_passthrough, "input passthrough missed the X11 shape extension");
       }
       work_area = self.primary->WorkArea();
-      self.Check(work_area.has_value() && work_area->width > 0.0F && work_area->height > 0.0F,
-                 "work area was not reported");
+      if (x11) {
+        self.Check(work_area.has_value() && work_area->width > 0.0F && work_area->height > 0.0F,
+                   "X11 work area was not reported");
+      } else {
+        self.Check(!work_area.has_value(), "Wayland exposed monitor geometry as a work area");
+      }
       self.Check(self.primary->BeginMove() == WindowRequestResult::Rejected,
                  "native move began without an active pointer press");
       ++stage;
@@ -618,7 +624,9 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       // retried a bounded number of times before the relocation outcome is required.
       if (xtest) {
         const std::optional<Point> origin = floating->Position();
-        const bool relocated = origin.has_value() && origin->x > 340.0F;
+        GtkWindow* pet = self.Native("HuxerUI floating pet");
+        const float scale = static_cast<float>(gtk_widget_get_scale_factor(GTK_WIDGET(pet)));
+        const bool relocated = origin.has_value() && origin->x * scale > 340.0F;
         if (!relocated && ++self.settle < 250 && move_attempts < 3) {
           return false;
         }
@@ -699,6 +707,91 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
   if (xtest && shape) {
     REQUIRE(scenario.cancels >= 1);
   }
+}
+
+TEST_CASE("LinuxNativeFloatingGeometryUsesLogicalClientCoordinates", "[.][linux-native-floating-geometry]") {
+  X11Probe probe;
+  FloatingScenario scenario;
+  std::optional<WindowHandle> utility;
+  std::optional<WindowHandle> decorated;
+  int& stage = scenario.stage;
+  scenario.advance = [&]() {
+    if (!scenario.application || !scenario.primary) return false;
+    if (stage == 0) {
+      utility = scenario.application->OpenWindow({
+          .title = "HuxerUI logical utility", .initial_size = {120.0F, 100.0F},
+          .initial_position = Point{80.0F, 70.0F}, .presentation = WindowPresentation::Utility,
+      });
+      decorated = scenario.application->OpenWindow({
+          .title = "HuxerUI logical decorated", .initial_size = {140.0F, 110.0F},
+          .initial_position = Point{120.0F, 100.0F},
+      });
+      ++stage;
+      return false;
+    }
+    GtkWindow* native_utility = scenario.Native("HuxerUI logical utility");
+    GtkWindow* native_decorated = scenario.Native("HuxerUI logical decorated");
+    if (native_utility == nullptr || native_decorated == nullptr ||
+        !gtk_widget_get_mapped(GTK_WIDGET(native_utility)) ||
+        !gtk_widget_get_mapped(GTK_WIDGET(native_decorated))) return false;
+    if (++scenario.settle < 20) return false;
+    scenario.settle = 0;
+    if (!probe.OnX11()) {
+      scenario.Check(!utility->Position() && !utility->WorkArea(), "Wayland returned global geometry");
+      scenario.Check(utility->SetPosition({80.0F, 70.0F}) == WindowRequestResult::Unavailable,
+                     "Wayland accepted global placement");
+      return true;
+    }
+#ifdef GDK_WINDOWING_X11
+    const auto verify_origin = [&](const WindowHandle& handle, GtkWindow* window, Point expected) {
+      GtkWidget* canvas = gtk_window_get_child(window);
+      const graphene_point_t zero{0.0F, 0.0F};
+      graphene_point_t offset{};
+      scenario.Check(gtk_widget_compute_point(canvas, GTK_WIDGET(window), &zero, &offset),
+                     "canvas origin was unavailable");
+      int root_x = 0;
+      int root_y = 0;
+      probe.RootPoint(window, offset.x, offset.y, &root_x, &root_y);
+      const float scale = static_cast<float>(gtk_widget_get_scale_factor(GTK_WIDGET(window)));
+      const auto origin = handle.Position();
+      scenario.Check(origin && std::abs(origin->x * scale - root_x) < 1.1F &&
+                         std::abs(origin->y * scale - root_y) < 1.1F,
+                     "public origin did not describe the logical canvas origin");
+      return std::abs(origin->x - expected.x) < 1.1F && std::abs(origin->y - expected.y) < 1.1F;
+    };
+    if (stage == 1) {
+      if (!verify_origin(*utility, native_utility, {80.0F, 70.0F}) ||
+          !verify_origin(*decorated, native_decorated, {120.0F, 100.0F})) return false;
+      scenario.Check(decorated->SetPosition({160.0F, 120.0F}) == WindowRequestResult::Submitted,
+                     "decorated placement was refused");
+      scenario.Check(utility->SetPosition({200.0F, 160.0F}) == WindowRequestResult::Submitted,
+                     "utility placement was refused");
+      ++stage;
+      return false;
+    }
+    if (!verify_origin(*utility, native_utility, {200.0F, 160.0F}) ||
+        !verify_origin(*decorated, native_decorated, {160.0F, 120.0F})) return false;
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(native_utility));
+    GdkMonitor* monitor = gdk_display_get_monitor_at_surface(gdk_surface_get_display(surface), surface);
+    GdkRectangle native_work{};
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    gdk_x11_monitor_get_workarea(monitor, &native_work);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    const auto work = utility->WorkArea();
+    scenario.Check(work && work->x == native_work.x && work->y == native_work.y &&
+                       work->width == native_work.width && work->height == native_work.height,
+                   "work area included reserved space or physical scaling");
+    bool rejected = false;
+    try {
+      static_cast<void>(utility->SetPosition({std::numeric_limits<float>::max(), 0.0F}));
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    scenario.Check(rejected, "unrepresentable native placement was not rejected");
+#endif
+    return true;
+  };
+  RunFloatingScenario(scenario);
 }
 
 } // namespace huxerui::test

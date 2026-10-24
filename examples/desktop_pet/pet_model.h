@@ -22,16 +22,6 @@ inline huxerui::WindowOptions PetOptions() {
   };
 }
 
-// The startup pet requests only the portable floating core. Passive display and keep-above are
-// creation policies that Wayland compositors own by protocol, so requesting them there throws
-// std::logic_error; the mounted pet re-asserts keep-above afterwards where the attachment accepts it.
-inline huxerui::WindowOptions StartupPetOptions() {
-  huxerui::WindowOptions options = PetOptions();
-  options.show_without_activation = false;
-  options.topmost = false;
-  return options;
-}
-
 struct PetModel {
   std::optional<huxerui::WindowHandle> pet;
   std::optional<huxerui::WindowHandle> settings;
@@ -115,8 +105,7 @@ inline void UsePetAttachment(const std::shared_ptr<PetModel>& model) {
   huxerui::Lifecycle([model, window] {
     const auto generation = ++model->pet_generation;
     model->pet = window;
-    // Keep-above is a post-creation request so startup can use the portable policy; attachments
-    // without the operation keep their compositor stacking and drop the preference.
+    // An attachment without keep-above support uses its compositor's stacking policy.
     if (model->topmost.Get() && window.SetTopmost(true) != huxerui::WindowRequestResult::Submitted) {
       model->topmost = false;
     }

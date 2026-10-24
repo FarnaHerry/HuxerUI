@@ -128,6 +128,7 @@ struct FloatingScenario {
   bool drag_origin_valid = false;
   int clicks = 0;
   int cancels = 0;
+  int drag_cancels = 0;
   int pet_compositions = 0;
   int modal_compositions = 0;
   bool completed = false;
@@ -169,6 +170,7 @@ View FloatingPetRoot() {
         .On<DragEvents::Started>([&scenario](const DragEvent&) {
           scenario.begin_move_result = scenario.pet->BeginMove();
         })
+        .On<DragEvents::Canceled>([&scenario](const DragEvent&) { ++scenario.drag_cancels; })
         .On<ViewEvents::Pointer>([&scenario](const PointerEvent& event) {
           if (event.type == PointerEventType::Cancel) ++scenario.cancels;
         });
@@ -439,6 +441,8 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       checks.Check(!pet.ignoresMouseEvents, "utility window started with input excluded");
       ClickViewPoint(pet, NSMakePoint(100.0, 100.0));
       checks.Check(checks.clicks == 1, "the first synthesized click did not reach the application");
+      checks.Check(checks.pet->BeginMove() == WindowRequestResult::Rejected,
+                   "BeginMove reused a released mouse-down event");
       DeliverPointer(pet, NSEventTypeLeftMouseDown, NSMakePoint(100.0, 100.0));
       checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Submitted,
                    "SetInputPassthrough(true) was refused");
@@ -464,7 +468,7 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       DeliverPointer(pet, NSEventTypeLeftMouseDown, NSMakePoint(100.0, 100.0));
       DeliverPointer(pet, NSEventTypeLeftMouseDragged, NSMakePoint(112.0, 100.0));
       DeliverPointer(pet, NSEventTypeLeftMouseDragged, NSMakePoint(126.0, 100.0));
-      DeliverPointer(pet, NSEventTypeLeftMouseUp, NSMakePoint(126.0, 100.0));
+      // A native move may consume mouse-up; leave this shared sequence active until queued cancellation.
       checks.Check(checks.begin_move_result == WindowRequestResult::Submitted,
                    "BeginMove from a live drag gesture was not submitted");
       ++phase;
@@ -475,6 +479,12 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       NSWindow* pet = checks.watches[0]->Window();
       checks.Check(pet != nil, "the native move request retired the utility window");
       checks.Check(!pet.ignoresMouseEvents, "the native move request excluded pointer input");
+      checks.Check(checks.cancels >= 2, "native move did not cancel the shared pointer sequence");
+      checks.Check(checks.drag_cancels == 1, "native move did not cancel the accepted drag gesture exactly once");
+      checks.Check(checks.pet->BeginMove() == WindowRequestResult::Rejected,
+                   "native move reused a completed trigger");
+      ClickViewPoint(pet, NSMakePoint(100.0, 100.0));
+      checks.Check(checks.clicks == 3, "input stayed captured after native move cancellation");
       const std::optional<Point> after_drag = checks.pet->Position();
       checks.Check(checks.drag_origin_valid && after_drag.has_value() &&
                        Near(after_drag->x, checks.drag_origin.x, 1.0F) && Near(after_drag->y, checks.drag_origin.y, 1.0F),

@@ -1008,7 +1008,12 @@ public:
     __strong NSEvent* event = trigger;
     runtime_->PostNativeTask([window, event] {
       NSWindow* live_window = window;
-      if (live_window == nil || MacWindowAttachment(live_window) == nullptr) return;
+      MacUiWindow* attachment = live_window == nil ? nullptr : MacWindowAttachment(live_window);
+      if (attachment == nullptr || attachment->closing_ || attachment->input_blocked_ ||
+          attachment->window_drag_event_ != event) return;
+      attachment->window_drag_event_ = nil;
+      // AppKit may consume the release, so retire shared recognition before native tracking starts.
+      [attachment->view_ cancelPointer];
       // performWindowDragWithEvent: only tracks while its initiating button stays pressed; without that live
       // pointer state the request has no native drag to resume and completes without a modal tracking loop.
       if ([NSEvent pressedMouseButtons] == 0) return;
@@ -1782,6 +1787,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   if (huxeruiWindow == nullptr) {
     return;
   }
+  huxeruiWindow->CaptureWindowDragEvent(nil);
   huxeruiWindow->SendPointer({
       huxerui::PointerEventType::Cancel,
       0,
@@ -1828,6 +1834,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)mouseUp:(NSEvent*)event {
+  if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(nil);
   [self sendPointerEvent:event type:huxerui::PointerEventType::Up];
 }
 
@@ -1842,6 +1849,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)rightMouseUp:(NSEvent*)event {
+  if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(nil);
   [self sendPointerEvent:event type:huxerui::PointerEventType::Up];
 }
 
@@ -1856,6 +1864,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)otherMouseUp:(NSEvent*)event {
+  if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(nil);
   [self sendPointerEvent:event type:huxerui::PointerEventType::Up];
 }
 

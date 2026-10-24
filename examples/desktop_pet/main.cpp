@@ -9,7 +9,6 @@
 
 using namespace huxerui;
 using desktop_pet::PetModel;
-using desktop_pet::StartupPetOptions;
 
 namespace {
 
@@ -17,6 +16,7 @@ void InstallPet(ApplicationContext& context) {
   const auto model = std::make_shared<PetModel>();
   context.Provide(model);
   const auto application = UseApplication();
+  UseApplicationTaskScope().Post([model, application] { model->Show(application); });
   const auto tray = application.SystemTray();
   tray.OnActivate([model, application] { model->Show(application); });
   tray.Show(desktop_pet::images::tray, {
@@ -44,8 +44,11 @@ View PetContent() {
     if (!tray_available) window.Show();
   }, tray_available);
   desktop_pet::UsePetAttachment(model);
-  window.OnCloseRequest([model, tray_available] {
-    if (!tray_available) return false;
+  window.OnCloseRequest([model, application, tray_available] {
+    if (!tray_available) {
+      application.Quit();
+      return true;
+    }
     model->Hide(tray_available);
     return true;
   }, tray_available);
@@ -104,4 +107,4 @@ View App() {
   };
 }
 
-const Application application{App, {.window = StartupPetOptions(), .application_hooks = {InstallPet}}};
+const Application application{App, {.create_initial_window = false, .application_hooks = {InstallPet}}};
