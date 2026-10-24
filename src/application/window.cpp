@@ -40,6 +40,12 @@ void ValidateWindowOptions(const WindowOptions& options) {
   if (!std::isfinite(options.title_bar_height) || options.title_bar_height <= 0.0F) {
     throw std::invalid_argument("HuxerUI window title-bar height must be finite and positive");
   }
+  if (options.presentation != WindowPresentation::Standard && options.presentation != WindowPresentation::Utility) {
+    throw std::invalid_argument("HuxerUI window presentation is invalid");
+  }
+  if (options.transparent_surface && options.presentation != WindowPresentation::Utility) {
+    throw std::invalid_argument("HuxerUI transparent surfaces require utility presentation");
+  }
 }
 
 int ResolveWindowPositionCoordinate(double coordinate, int minimum, int maximum) {
@@ -217,6 +223,11 @@ bool IsValidSystemBarsAppearance(const SystemBarsAppearance& appearance) noexcep
 
 WindowService::WindowService(UiWindow& ui_window)
     : ui_window_(&ui_window), application_(CurrentApplicationRuntime()) {}
+
+UiWindow* WindowService::NativeWindow() const {
+  if (const auto application = application_.lock()) application->RequireThread();
+  return ui_window_;
+}
 
 WindowLifecycleState WindowService::LifecycleState() const {
   return lifecycle_state_.Get();
@@ -486,6 +497,47 @@ LayoutResult WindowTitleBar::Measure(LayoutContext& context, ViewNode& node, Con
 
 void WindowHandle::Show() const {
   service_->Request(WindowCommand::Show);
+}
+
+WindowCapabilities WindowHandle::Capabilities() const {
+  const auto* window = service_->NativeWindow();
+  return window ? window->NativeWindowCapabilities() : WindowCapabilities{};
+}
+
+WindowRequestResult WindowHandle::SetTopmost(bool topmost) const {
+  auto* window = service_->NativeWindow();
+  return window ? window->RequestWindowTopmost(topmost) : WindowRequestResult::Disconnected;
+}
+
+WindowRequestResult WindowHandle::SetPosition(Point position) const {
+  if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
+    throw std::invalid_argument("HuxerUI window position must be finite");
+  }
+  auto* window = service_->NativeWindow();
+  return window ? window->RequestWindowPosition(position) : WindowRequestResult::Disconnected;
+}
+
+WindowRequestResult WindowHandle::SetClientSize(Size size) const {
+  if (!std::isfinite(size.width) || size.width <= 0.0F || !std::isfinite(size.height) || size.height <= 0.0F) {
+    throw std::invalid_argument("HuxerUI window client size must be finite and positive");
+  }
+  auto* window = service_->NativeWindow();
+  return window ? window->RequestWindowSize(size) : WindowRequestResult::Disconnected;
+}
+
+WindowRequestResult WindowHandle::SetInputPassthrough(bool passthrough) const {
+  auto* window = service_->NativeWindow();
+  return window ? window->RequestWindowInputPassthrough(passthrough) : WindowRequestResult::Disconnected;
+}
+
+WindowRequestResult WindowHandle::BeginMove() const {
+  auto* window = service_->NativeWindow();
+  return window ? window->RequestWindowMove() : WindowRequestResult::Disconnected;
+}
+
+std::optional<Rect> WindowHandle::WorkArea() const {
+  const auto* window = service_->NativeWindow();
+  return window ? window->WindowWorkArea() : std::nullopt;
 }
 
 WindowLifecycleState WindowHandle::LifecycleState() const {

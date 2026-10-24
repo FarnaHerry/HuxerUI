@@ -754,7 +754,7 @@ public:
     runtime.NotifyInitialWindowReady(window_);
     UiWindow::UpdateResourceConfiguration(Configuration());
 
-    ShowWindow(window_, SW_SHOW);
+    ShowWindow(window_, passive_display_ ? SW_SHOWNOACTIVATE : SW_SHOW);
     UpdateApplicationLifecycleState(
         GetActiveWindow() == window_ ? ApplicationLifecycleState::Active : ApplicationLifecycleState::Inactive
     );
@@ -860,6 +860,86 @@ public:
     PostMessageW(window_, kWindowCommandMessage, static_cast<WPARAM>(command), 0);
   }
 
+  WindowCapabilities NativeWindowCapabilities() const override {
+    return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
+            .topmost = true, .geometry = true, .native_move = true, .input_passthrough = transparent_surface_};
+  }
+
+  WindowRequestResult RequestWindowTopmost(bool topmost) override {
+    return SetWindowPos(window_, topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
+               ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
+  }
+
+  WindowRequestResult RequestWindowPosition(Point position) override {
+    POINT origin{};
+    RECT bounds{};
+    if (fullscreen_ || !ClientToScreen(window_, &origin) || !GetWindowRect(window_, &bounds)) {
+      return WindowRequestResult::Rejected;
+    }
+    const int x = ResolveWindowPositionCoordinate(static_cast<double>(position.x) * DpiScale() + bounds.left - origin.x,
+        std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max());
+    const int y = ResolveWindowPositionCoordinate(static_cast<double>(position.y) * DpiScale() + bounds.top - origin.y,
+        std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max());
+    return SetWindowPos(window_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER)
+               ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
+  }
+
+  WindowRequestResult RequestWindowSize(Size size) override {
+    if (fullscreen_) return WindowRequestResult::Rejected;
+    if (minimum_size_) {
+      size.width = std::max(size.width, minimum_size_->width);
+      size.height = std::max(size.height, minimum_size_->height);
+    }
+    const int width = ResolveWindowPositionCoordinate(static_cast<double>(size.width) * DpiScale(),
+        1, std::numeric_limits<int>::max());
+    const int height = ResolveWindowPositionCoordinate(static_cast<double>(size.height) * DpiScale(),
+        1, std::numeric_limits<int>::max());
+    ValidateTransparentSize(width, height);
+    RECT frame{0, 0, width, height};
+    if (!utility_window_ && !custom_chrome_ &&
+        !win32_api_.AdjustWindowRectForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(window_, GWL_STYLE)), FALSE,
+            static_cast<DWORD>(GetWindowLongPtrW(window_, GWL_EXSTYLE)), static_cast<UINT>(dpi_))) {
+      return WindowRequestResult::Rejected;
+    }
+    const int outer_width = ResolveWindowPositionCoordinate(static_cast<double>(frame.right) - frame.left,
+        1, std::numeric_limits<int>::max());
+    const int outer_height = ResolveWindowPositionCoordinate(static_cast<double>(frame.bottom) - frame.top,
+        1, std::numeric_limits<int>::max());
+    return SetWindowPos(window_, nullptr, 0, 0, outer_width, outer_height,
+                        SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER)
+               ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
+  }
+
+  WindowRequestResult RequestWindowInputPassthrough(bool passthrough) override {
+    if (!transparent_surface_) return WindowRequestResult::Unavailable;
+    const LONG_PTR previous = GetWindowLongPtrW(window_, GWL_EXSTYLE);
+    const LONG_PTR next = passthrough ? previous | WS_EX_TRANSPARENT : previous & ~WS_EX_TRANSPARENT;
+    if (next == previous) return WindowRequestResult::Submitted;
+    SetLastError(ERROR_SUCCESS);
+    if (SetWindowLongPtrW(window_, GWL_EXSTYLE, next) == 0 && GetLastError() != ERROR_SUCCESS) {
+      return WindowRequestResult::Rejected;
+    }
+    CancelPointer();
+    return WindowRequestResult::Submitted;
+  }
+
+  WindowRequestResult RequestWindowMove() override {
+    if (input_blocked_ || fullscreen_) return WindowRequestResult::Rejected;
+    // SC_MOVE is queued so native capture cancellation cannot dismantle an in-flight gesture callback.
+    return PostMessageW(window_, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0)
+               ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
+  }
+
+  std::optional<Rect> WindowWorkArea() const override {
+    MONITORINFO monitor{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor)) return std::nullopt;
+    const float scale = DpiScale();
+    return Rect{monitor.rcWork.left / scale, monitor.rcWork.top / scale,
+                (monitor.rcWork.right - monitor.rcWork.left) / scale,
+                (monitor.rcWork.bottom - monitor.rcWork.top) / scale};
+  }
+
   void ApplyWindowOwnership(UiWindow* owner) override {
     if (window_ == nullptr) {
       return;
@@ -948,18 +1028,29 @@ private:
   void CreateApplicationWindow(Runtime& application, const WindowOptions& options, std::uint32_t window_ordinal) {
     dpi_ = static_cast<float>(win32_api_.SystemDpi());
     const float scale = DpiScale();
-    custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
+    utility_window_ = options.presentation == WindowPresentation::Utility;
+    transparent_surface_ = options.transparent_surface;
+    passive_display_ = options.show_without_activation;
+    custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
+    renderer_.SetTransparentSurface(transparent_surface_);
     custom_title_bar_height_ = options.title_bar_height;
     minimum_size_ = options.minimum_size;
     const Size initial_size = ResolveInitialWindowSize(options);
+    ValidateTransparentSize(static_cast<double>(initial_size.width) * scale,
+                            static_cast<double>(initial_size.height) * scale);
     RECT frame{
         0,
         0,
         std::max(1L, static_cast<LONG>(std::lround(initial_size.width * scale))),
         std::max(1L, static_cast<LONG>(std::lround(initial_size.height * scale))),
     };
-    const DWORD style = WS_OVERLAPPEDWINDOW;
-    if (!custom_chrome_ && !win32_api_.AdjustWindowRectForDpi(&frame, style, FALSE, 0, static_cast<UINT>(dpi_))) {
+    const DWORD style = utility_window_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    const DWORD extended_style = (utility_window_ ? WS_EX_TOOLWINDOW : 0) |
+                                 (transparent_surface_ ? WS_EX_LAYERED : 0) |
+                                 (passive_display_ ? WS_EX_NOACTIVATE : 0) |
+                                 (options.topmost ? WS_EX_TOPMOST : 0);
+    if (!utility_window_ && !custom_chrome_ &&
+        !win32_api_.AdjustWindowRectForDpi(&frame, style, FALSE, extended_style, static_cast<UINT>(dpi_))) {
       throw std::runtime_error("HuxerUI could not calculate the Windows window size");
     }
 
@@ -975,7 +1066,7 @@ private:
                                     std::numeric_limits<int>::min() + 1, std::numeric_limits<int>::max())
                               : CW_USEDEFAULT;
     window_ = CreateWindowExW(
-        0,
+        extended_style,
         window_class_name_.c_str(),
         title.c_str(),
         style,
@@ -1071,6 +1162,12 @@ private:
     return std::max(dpi_, 1.0F) / kDipsPerInch;
   }
 
+  void ValidateTransparentSize(double width, double height) const {
+    if (transparent_surface_ && (width > 4096.0 || height > 4096.0 || width * height > 16000000.0)) {
+      throw std::invalid_argument("HuxerUI Windows transparent size exceeds its pixel budget");
+    }
+  }
+
   int SystemMetric(int index) const noexcept {
     return win32_api_.SystemMetricForDpi(index, static_cast<UINT>(std::max(dpi_, 1.0F)));
   }
@@ -1156,6 +1253,19 @@ private:
     const bool has_platform_views = platform_views_ && platform_views_->Commit(*committed_frame_, DpiScale());
     const bool composition_changed = has_platform_views && renderer_.EnablePlatformComposition(window_);
     accessibility_.Commit(commit.semantic_frame, has_platform_views ? platform_views_.get() : nullptr);
+    if (transparent_surface_) {
+      // A layered window has no visible surface until its first publication, so WM_PAINT cannot drive that frame.
+      frame_state_.BeginPaint();
+      RECT client{};
+      GetClientRect(window_, &client);
+      const auto result = renderer_.Render(window_, dpi_, *committed_frame_, client);
+      if (result == Win32RenderResult::Retry || result == Win32RenderResult::Recreate) {
+        RequestFrameAt(Now() + 1.0 / 60.0);
+      }
+      if (commit.next_frame_deadline) RequestFrameAt(*commit.next_frame_deadline);
+      if (const auto deadline = frame_state_.EndPaint(window_ != nullptr)) ScheduleFrame(*deadline);
+      return;
+    }
     if (composition_changed) {
       static_cast<void>(InvalidateFullWindow());
     }
@@ -1299,7 +1409,8 @@ private:
     }
     SendPointer(PointerEventType::Cancel, last_pointer_position_);
     pointer_down_ = false;
-    if (GetCapture() != nullptr) {
+    const HWND capture = GetCapture();
+    if (capture == window_ || (capture && IsChild(window_, capture))) {
       ReleaseCapture();
     }
   }
@@ -1544,6 +1655,7 @@ private:
   }
 
   LRESULT HandleMessage(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
+    if (message == WM_MOUSEACTIVATE && passive_display_) return MA_NOACTIVATE;
     if (custom_chrome_ && message == WM_NCCALCSIZE) {
       // User32 must observe the first captioned-window calculation before the client takes ownership of the frame.
       if (first_nc_calc_) {
@@ -1574,7 +1686,7 @@ private:
       }
       const UINT dpi = std::max(1U, win32_api_.WindowDpi(window));
       SIZE frame_extent{};
-      if (!custom_chrome_) {
+      if (!utility_window_ && !custom_chrome_) {
         RECT frame{};
         if (win32_api_.AdjustWindowRectForDpi(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi)) {
           frame_extent = {frame.right - frame.left, frame.bottom - frame.top};
@@ -1587,6 +1699,7 @@ private:
       return result;
     }
     case WM_NCHITTEST:
+      if (utility_window_) return HTCLIENT;
       if (fullscreen_) return HTCLIENT;
       if (custom_chrome_) {
         if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
@@ -1636,6 +1749,10 @@ private:
       }
       return 0;
     case WM_SYSCOMMAND:
+      if ((w_param & 0xFFF0U) == SC_MOVE) {
+        if (input_blocked_ || fullscreen_) return 0;
+        CancelPointer();
+      }
       if ((w_param & 0xFFF0U) == SC_MINIMIZE && IsInitialized() &&
           UiWindow::HandleWindowRequest(WindowCommand::Minimize)) {
         return 0;
@@ -1723,6 +1840,13 @@ private:
     case Win32Accessibility::action_message:
       return accessibility_.HandleActionMessage(l_param);
     case WM_PAINT: {
+      if (transparent_surface_) {
+        PAINTSTRUCT paint{};
+        BeginPaint(window, &paint);
+        EndPaint(window, &paint);
+        RequestFrameAt(Now());
+        return 0;
+      }
       frame_state_.BeginPaint();
       if (committed_frame_ == nullptr || (frame_state_.FrameBuildPending() && !frame_state_.PaintPending())) {
         CommitFrameAndInvalidate();
@@ -1885,6 +2009,9 @@ private:
   HWND window_ = nullptr;
   float dpi_ = kDipsPerInch;
   bool custom_chrome_ = false;
+  bool utility_window_ = false;
+  bool transparent_surface_ = false;
+  bool passive_display_ = false;
   bool fullscreen_ = false;
   LONG_PTR fullscreen_style_ = 0;
   WINDOWPLACEMENT fullscreen_placement_{sizeof(WINDOWPLACEMENT)};

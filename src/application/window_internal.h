@@ -50,6 +50,7 @@ public:
   explicit WindowService(UiWindow& ui_window);
 
   void Request(WindowCommand command);
+  [[nodiscard]] UiWindow* NativeWindow() const;
   /// Applies one relationship change resolved by the Runtime after validation.
   /// @param owner Service of the new owner window, or null for an independent window.
   /// @param modal Whether the window blocks user input to the windows its relationship covers.

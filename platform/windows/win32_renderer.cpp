@@ -50,6 +50,35 @@ constexpr float kFullCircle = 6.28318530717958647692F;
 // The effect property stores the enum as UINT32; some MinGW headers expose the property but omit its enum.
 constexpr UINT32 kShadowOptimizationBalanced = 1U;
 
+struct LayeredBitmap {
+  HDC dc = nullptr;
+  HBITMAP bitmap = nullptr;
+  HGDIOBJ previous = nullptr;
+  void* pixels = nullptr;
+
+  ~LayeredBitmap() {
+    if (previous && previous != HGDI_ERROR) SelectObject(dc, previous);
+    if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
+  }
+
+  void Initialize(UINT width, UINT height) {
+    dc = CreateCompatibleDC(nullptr);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = static_cast<LONG>(width);
+    info.bmiHeader.biHeight = -static_cast<LONG>(height);
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    if (dc) bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    if (bitmap) previous = SelectObject(dc, bitmap);
+    if (!dc || !bitmap || !previous || previous == HGDI_ERROR) {
+      throw std::runtime_error("HuxerUI could not allocate the Windows layered bitmap");
+    }
+  }
+};
+
 void ThrowIfFailed(HRESULT result, const char* message) {
   if (FAILED(result)) {
     throw std::runtime_error(message);
@@ -1037,7 +1066,7 @@ struct Win32Renderer::State {
   }
 
   bool EnsureSizeDependentResources() {
-    if (swap_chain_target_ && scene_target_) {
+    if (scene_target_ && (transparent_surface_ || swap_chain_target_)) {
       return true;
     }
     if (!EnsureDeviceResources()) {
@@ -1052,6 +1081,29 @@ struct Win32Renderer::State {
     const UINT height = static_cast<UINT>(std::max(0L, client.bottom - client.top));
     if (width == 0 || height == 0) {
       return false;
+    }
+
+    if (transparent_surface_) {
+      if (width > 4096 || height > 4096 || static_cast<std::uint64_t>(width) * height > 16000000) {
+        throw std::runtime_error("HuxerUI Windows transparent surface exceeds its pixel budget");
+      }
+      const auto format = D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
+      const auto target_properties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET, format, dpi_, dpi_);
+      const auto readback_properties = D2D1::BitmapProperties1(
+          D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, format);
+      ComPtr<ID2D1Bitmap1> scene;
+      ComPtr<ID2D1Bitmap1> readback;
+      ThrowIfFailed(device_context_->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0, &target_properties,
+                        scene.GetAddressOf()), "HuxerUI could not create the Windows transparent target");
+      ThrowIfFailed(device_context_->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0, &readback_properties,
+                        readback.GetAddressOf()), "HuxerUI could not create the Windows transparent readback");
+      auto bitmap = std::make_unique<LayeredBitmap>();
+      bitmap->Initialize(width, height);
+      scene_target_ = std::move(scene);
+      layered_readback_ = std::move(readback);
+      layered_bitmap_ = std::move(bitmap);
+      force_full_repaint_ = true;
+      return true;
     }
 
     if (!swap_chain_) {
@@ -1142,6 +1194,8 @@ struct Win32Renderer::State {
     scene_target_.Reset();
     active_target_.Reset();
     swap_chain_target_.Reset();
+    layered_readback_.Reset();
+    layered_bitmap_.reset();
   }
 
   void DiscardShadowResources() noexcept {
@@ -1235,6 +1289,9 @@ struct Win32Renderer::State {
   }
 
   bool EnablePlatformComposition(HWND window) {
+    if (transparent_surface_) {
+      throw std::logic_error("HuxerUI Windows transparent surfaces do not support PlatformView hosting");
+    }
     window_ = window;
     if (platform_composition_) {
       return false;
@@ -1247,6 +1304,10 @@ struct Win32Renderer::State {
 
   void ResizeRenderTarget() {
     force_full_repaint_ = true;
+    if (transparent_surface_) {
+      DiscardSizeDependentResources();
+      return;
+    }
     if (!swap_chain_) {
       return;
     }
@@ -1307,8 +1368,12 @@ struct Win32Renderer::State {
       if (!backdrop_frame_) {
         device_context_->PushAxisAlignedClip(ToD2DRect(paint_bounds), D2D1_ANTIALIAS_MODE_ALIASED);
       }
-      SetBrushColor(Color::Rgb(247, 248, 250));
-      device_context_->FillRectangle(ToD2DRect(client_bounds), brush_.Get());
+      if (transparent_surface_) {
+        device_context_->Clear(D2D1::ColorF(0.0F, 0.0F, 0.0F, 0.0F));
+      } else {
+        SetBrushColor(Color::Rgb(247, 248, 250));
+        device_context_->FillRectangle(ToD2DRect(client_bounds), brush_.Get());
+      }
 
       if (frame.scene.root != nullptr) {
         RenderSceneNode(*frame.scene.root);
@@ -1342,6 +1407,31 @@ struct Win32Renderer::State {
     }
     ThrowIfFailed(result, "HuxerUI could not render the Windows frame");
     ThrowIfFailed(release_result, "HuxerUI could not release Windows D3D11 textures after rendering");
+
+    if (transparent_surface_) {
+      // User32 needs the alpha bitmap for cross-process hit testing; DirectComposition alone supplies no such mask.
+      device_context_->SetTarget(nullptr);
+      ThrowIfFailed(layered_readback_->CopyFromBitmap(nullptr, scene_target_.Get(), nullptr),
+          "HuxerUI could not copy the Windows transparent frame");
+      D2D1_MAPPED_RECT mapped{};
+      ThrowIfFailed(layered_readback_->Map(D2D1_MAP_OPTIONS_READ, &mapped),
+          "HuxerUI could not map the Windows transparent frame");
+      auto* destination = static_cast<std::uint32_t*>(layered_bitmap_->pixels);
+      for (UINT row = 0; row < scene_size.height; ++row) {
+        const auto* source =
+            reinterpret_cast<const std::uint32_t*>(mapped.bits + static_cast<std::size_t>(row) * mapped.pitch);
+        std::copy_n(source, scene_size.width, destination + static_cast<std::size_t>(row) * scene_size.width);
+      }
+      ThrowIfFailed(layered_readback_->Unmap(), "HuxerUI could not unmap the Windows transparent frame");
+      POINT source{};
+      SIZE size{static_cast<LONG>(scene_size.width), static_cast<LONG>(scene_size.height)};
+      BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+      if (!UpdateLayeredWindow(window_, nullptr, nullptr, &size, layered_bitmap_->dc, &source, 0, &blend, ULW_ALPHA)) {
+        throw std::runtime_error("HuxerUI could not publish the Windows transparent frame");
+      }
+      force_full_repaint_ = false;
+      return Win32RenderResult::Presented;
+    }
 
     device_context_->SetTarget(swap_chain_target_.Get());
     device_context_->BeginDraw();
@@ -2831,6 +2921,9 @@ struct Win32Renderer::State {
   bool force_full_repaint_ = true;
   bool supports_dirty_present_ = false;
   bool platform_composition_ = false;
+  bool transparent_surface_ = false;
+  ComPtr<ID2D1Bitmap1> layered_readback_;
+  std::unique_ptr<LayeredBitmap> layered_bitmap_;
   bool backdrop_frame_ = false;
   std::size_t backdrop_live_targets_ = 0;
   std::uint64_t backdrop_target_bytes_ = 0;
@@ -2906,11 +2999,18 @@ void Win32Renderer::Initialize() {
   state_->InitializeFactories();
 }
 
+void Win32Renderer::SetTransparentSurface(bool transparent) {
+  if (state_->transparent_surface_ == transparent) return;
+  state_->DiscardDeviceResources();
+  state_->transparent_surface_ = transparent;
+}
+
 void Win32Renderer::Discard() noexcept {
   state_->DiscardDeviceResources();
   state_->pixel_textures_.clear();
   state_->d3d11_textures_.clear();
   state_->platform_composition_ = false;
+  state_->transparent_surface_ = false;
   state_->paragraphs_.clear();
   state_->paragraph_bytes_ = 0;
   state_->text_runs_.clear();

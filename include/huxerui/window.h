@@ -122,6 +122,25 @@ enum class WindowChromeMode {
   Custom, ///< Lets application content occupy title-bar space while HuxerUI preserves native window behavior.
 };
 
+/// Selects ordinary desktop decoration or a borderless, non-resizable helper excluded from task switching.
+enum class WindowPresentation { Standard, Utility };
+
+/// Outcome of a native window request; Submitted does not guarantee window-manager application.
+enum class WindowRequestResult { Submitted, Unavailable, Rejected, Disconnected };
+
+/// Native operations available to one attachment. Query on its original application thread.
+struct WindowCapabilities {
+  bool transparent_surface = false;
+  bool utility_presentation = false;
+  bool passive_display = false;
+  bool topmost = false;
+  bool geometry = false;
+  bool native_move = false;
+  bool input_passthrough = false;
+
+  bool operator==(const WindowCapabilities&) const = default;
+};
+
 /// A top-level window operation understood by UiWindow and WindowHandle.
 enum class WindowCommand {
   Minimize,      ///< Requests the platform's minimized state.
@@ -234,6 +253,19 @@ struct WindowOptions {
 
   /// Accessibility labels for framework-rendered desktop caption controls.
   WindowCaptionLabels caption_labels{};
+
+  /// Creation-only desktop presentation; unsupported nondefault policies throw std::logic_error.
+  WindowPresentation presentation = WindowPresentation::Standard;
+
+  /// Enables a per-pixel alpha surface. Requires Utility presentation; independent of View opacity.
+  bool transparent_surface = false;
+
+  /// Shows without taking keyboard focus and suppresses implicit activation on pointer input.
+  /// Explicit Activate remains an application request for deliberate keyboard access.
+  bool show_without_activation = false;
+
+  /// Initial above-normal stacking preference, subsequently mutable through SetTopmost.
+  bool topmost = false;
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;
@@ -404,6 +436,24 @@ public:
 /// @endcode
 class WindowHandle {
 public:
+  /// Reads available native operations; a retired handle reports all false. Call on the application thread.
+  [[nodiscard]] WindowCapabilities Capabilities() const;
+
+  /// Requests above-normal stacking without activation; independent of owner relationships and fullscreen.
+  /// Native requests run on the original application thread; retired handles return Disconnected.
+  [[nodiscard]] WindowRequestResult SetTopmost(bool topmost) const;
+  /// Requests a finite client origin in logical screen coordinates, preserving negative display origins.
+  [[nodiscard]] WindowRequestResult SetPosition(Point position) const;
+  /// Requests finite positive client dimensions, subject to the configured minimum and native constraints.
+  [[nodiscard]] WindowRequestResult SetClientSize(Size size) const;
+  /// Excludes all native pointer input without changing drawing. Restoring input preserves modal blocking.
+  /// Unsupported attachments return Unavailable; a change cancels active pointer interaction and capture.
+  [[nodiscard]] WindowRequestResult SetInputPassthrough(bool passthrough) const;
+  /// Queues native user dragging after the current callback, without a framework movement state machine.
+  [[nodiscard]] WindowRequestResult BeginMove() const;
+  /// Reads this window's current monitor work area in logical screen coordinates, or nullopt when unavailable.
+  [[nodiscard]] std::optional<Rect> WorkArea() const;
+
   /// Reads this window's current native foreground state on the application thread.
   /// @return The latest state; reading during composition subscribes the current scope to changes.
   /// The returned value describes only this window, not the aggregate ApplicationHandle lifecycle.

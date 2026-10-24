@@ -1,8 +1,10 @@
 #include "runtime_test_support.h"
 
 #include <limits>
+#include <thread>
 
 #include "application/window_internal.h"
+#include "../../examples/desktop_pet/pet.h"
 
 namespace huxerui::test {
 
@@ -582,6 +584,124 @@ TEST_CASE("WindowHandleBecomesInactiveAfterRuntimeDestruction") {
   REQUIRE(window_handle.has_value());
   window_handle->Close();
   REQUIRE(platform.window_commands.empty());
+}
+
+TEST_CASE("FloatingWindowRequestsReportUnavailableAndDisconnectWithoutRebinding") {
+  window_handle.reset();
+  TestPlatform platform;
+  {
+    UiWindow runtime(WindowCommandsApp, platform);
+    runtime.SetWindowMetrics({.viewport = {200.0F, 200.0F}});
+    runtime.BuildFrame();
+    REQUIRE(window_handle.has_value());
+    REQUIRE(window_handle->Capabilities() == WindowCapabilities{});
+    REQUIRE(window_handle->SetTopmost(true) == WindowRequestResult::Unavailable);
+    REQUIRE(window_handle->SetPosition({-100.0F, 20.0F}) == WindowRequestResult::Unavailable);
+    REQUIRE(window_handle->SetClientSize({120.0F, 80.0F}) == WindowRequestResult::Unavailable);
+    REQUIRE(window_handle->SetInputPassthrough(true) == WindowRequestResult::Unavailable);
+    REQUIRE(window_handle->BeginMove() == WindowRequestResult::Unavailable);
+    REQUIRE_FALSE(window_handle->WorkArea());
+    REQUIRE_THROWS_AS(
+        window_handle->SetPosition({std::numeric_limits<float>::infinity(), 0.0F}), std::invalid_argument
+    );
+    REQUIRE_THROWS_AS(window_handle->SetClientSize({0.0F, 80.0F}), std::invalid_argument);
+    REQUIRE_THROWS_AS(window_handle->SetClientSize({120.0F, std::numeric_limits<float>::quiet_NaN()}),
+        std::invalid_argument);
+  }
+  REQUIRE(window_handle->Capabilities() == WindowCapabilities{});
+  REQUIRE(window_handle->SetTopmost(true) == WindowRequestResult::Disconnected);
+  REQUIRE(window_handle->SetPosition({10.0F, 20.0F}) == WindowRequestResult::Disconnected);
+  REQUIRE(window_handle->SetClientSize({100.0F, 80.0F}) == WindowRequestResult::Disconnected);
+  REQUIRE(window_handle->SetInputPassthrough(false) == WindowRequestResult::Disconnected);
+  REQUIRE(window_handle->BeginMove() == WindowRequestResult::Disconnected);
+  REQUIRE_FALSE(window_handle->WorkArea());
+}
+
+TEST_CASE("FloatingWindowCreationRejectsUnavailablePoliciesAndInvalidConfiguration") {
+  AppOptions options;
+  SECTION("Utility presentation is unavailable") { options.window.presentation = WindowPresentation::Utility; }
+  SECTION("Passive display is unavailable") { options.window.show_without_activation = true; }
+  SECTION("Topmost is unavailable") { options.window.topmost = true; }
+  SECTION("Transparent utility surfaces are unavailable") {
+    options.window.presentation = WindowPresentation::Utility;
+    options.window.transparent_surface = true;
+  }
+  TestPlatform platform;
+  REQUIRE_THROWS_AS(UiWindow(WindowCommandsApp, platform, options), std::logic_error);
+
+  WindowOptions invalid;
+  invalid.transparent_surface = true;
+  REQUIRE_THROWS_AS(detail::ValidateWindowOptions(invalid), std::invalid_argument);
+  invalid.transparent_surface = false;
+  invalid.presentation = static_cast<WindowPresentation>(999);
+  REQUIRE_THROWS_AS(detail::ValidateWindowOptions(invalid), std::invalid_argument);
+}
+
+TEST_CASE("FloatingWindowRequestsPreserveNativeResultsAndRequireTheApplicationThread") {
+  class NativePlatform final : public TestPlatform {
+  public:
+    int requests = 0;
+    WindowCapabilities NativeWindowCapabilities() const override { return {.geometry = true}; }
+    WindowRequestResult RequestWindowPosition(Point position) override {
+      ++requests;
+      REQUIRE((position == Point{-120.0F, 40.0F}));
+      return WindowRequestResult::Rejected;
+    }
+  } platform;
+  UiWindow window(WindowCommandsApp, platform);
+  window.SetWindowMetrics({.viewport = {100.0F, 100.0F}});
+  window.BuildFrame();
+  REQUIRE(window_handle->Capabilities().geometry);
+  REQUIRE(window_handle->SetPosition({-120.0F, 40.0F}) == WindowRequestResult::Rejected);
+  REQUIRE(platform.requests == 1);
+  bool rejected = false;
+  std::thread worker([&] {
+    try { static_cast<void>(window_handle->SetPosition({-120.0F, 40.0F})); }
+    catch (const std::logic_error&) { rejected = true; }
+  });
+  worker.join();
+  REQUIRE(rejected);
+  REQUIRE(platform.requests == 1);
+}
+
+namespace {
+bool pet_animate = true;
+bool pet_reduced_motion = false;
+int pet_compositions = 0;
+
+View PetAnimationApp() {
+  ++pet_compositions;
+  ThemeSpec theme;
+  theme.motion.reduced_motion = pet_reduced_motion;
+  return MaterialTheme{theme, Stack {}.With(desktop_pet::Orb{.animate = pet_animate})};
+}
+}
+
+TEST_CASE("DesktopPetOrbAnimatesPaintWithoutRecompositionAndStopsWhenHiddenOrMotionIsReduced") {
+  pet_animate = true;
+  pet_reduced_motion = false;
+  pet_compositions = 0;
+  TestPlatform platform;
+  UiWindow window(PetAnimationApp, platform);
+  window.SetWindowMetrics({.viewport = {200.0F, 200.0F}});
+  const auto first = window.BuildCommit().next_frame_deadline;
+  REQUIRE(first.has_value());
+  REQUIRE(*first == Catch::Approx(1.0 / 30.0));
+  const auto initial_commands = window.BuildFrame().Commands();
+  platform.current_time = 1.0 / 30.0;
+  REQUIRE(window.BuildCommit().next_frame_deadline.value() == Catch::Approx(2.0 / 30.0));
+  REQUIRE(window.BuildFrame().Commands() != initial_commands);
+  platform.current_time = 2.0 / 30.0;
+  REQUIRE(window.BuildCommit().next_frame_deadline.value() == Catch::Approx(3.0 / 30.0));
+  REQUIRE(pet_compositions == 1);
+
+  SECTION("Hidden or manually stopped") { pet_animate = false; }
+  SECTION("Reduced motion") { pet_reduced_motion = true; }
+  window.InvalidateRoot();
+  REQUIRE_FALSE(window.BuildCommit().next_frame_deadline);
+  const auto paused_commands = window.BuildFrame().Commands();
+  platform.current_time = 1.0;
+  REQUIRE(window.BuildFrame().Commands() == paused_commands);
 }
 
 TEST_CASE("WindowRetirementReleasesItsLastSemanticFrame") {

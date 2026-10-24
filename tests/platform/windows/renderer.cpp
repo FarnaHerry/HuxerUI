@@ -424,4 +424,38 @@ TEST_CASE("Win32BackdropRejectsOversizedViewportBeforeAllocatingRenderTargets") 
   REQUIRE_THROWS_AS(renderer.Render(window.get(), 96.0F, frame, {0, 0, 5000, 5000}), std::runtime_error);
 }
 
+TEST_CASE("Win32TransparentSurfacePreservesPremultipliedAlphaAndErasesOldSilhouettes", "[transparent-surface]") {
+  PaintFixture fixture;
+  SetWindowLongPtrW(fixture.window.handle, GWL_EXSTYLE, WS_EX_LAYERED);
+  fixture.renderer.SetTransparentSurface(true);
+  RenderNode root;
+  {
+    PaintContext paint(root.content, {0.0F, 0.0F, 128.0F, 128.0F});
+    paint.DrawCircle({64.0F, 64.0F}, 24.0F, Color::Rgb(255, 0, 0, 0.5F));
+    paint.Finish();
+  }
+  const auto pixels = fixture.Draw(root);
+  REQUIRE(pixels[0] == 0);
+  REQUIRE(((pixels[64 * 128 + 64] >> 24U) & 255U) == Catch::Approx(128).margin(1));
+  REQUIRE(((pixels[64 * 128 + 64] >> 16U) & 255U) == Catch::Approx(128).margin(1));
+  REQUIRE((pixels[64 * 128 + 64] & 65535U) == 0);
+  fixture.renderer.ResetDeviceResources();
+  REQUIRE(fixture.Draw(root) == pixels);
+  {
+    PaintContext paint(root.content, {0.0F, 0.0F, 128.0F, 128.0F});
+    paint.DrawCircle({16.0F, 16.0F}, 8.0F, Color::White());
+    paint.Finish();
+  }
+  const RenderFrame changed{.scene = {.root = &root}, .damage = {.full = false}, .revision = 2};
+  REQUIRE(fixture.renderer.Render(fixture.window.handle, 96.0F, changed, {0, 0, 100, 100}) ==
+      detail::Win32RenderResult::Presented);
+  const auto moved = detail::Win32RendererTestAccess::ReadPixels(fixture.renderer);
+  REQUIRE(moved[64 * 128 + 64] == 0);
+  REQUIRE(moved[16 * 128 + 16] == 0xFFFFFFFFU);
+  REQUIRE_THROWS_AS(fixture.renderer.EnablePlatformComposition(fixture.window.handle), std::logic_error);
+  REQUIRE(SetWindowPos(fixture.window.handle, nullptr, 0, 0, 160, 128, SWP_NOMOVE | SWP_NOZORDER));
+  fixture.renderer.Resize(fixture.window.handle, 96.0F);
+  REQUIRE(fixture.Draw(root).size() == 160 * 128);
+}
+
 } // namespace huxerui::test

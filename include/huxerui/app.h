@@ -877,6 +877,16 @@ public:
   /// window;
   /// native minimize/close callbacks still pass through HandleWindowRequest before applying their default operation.
   virtual void RequestWindowCommand(WindowCommand) {}
+  /// Native floating-window capabilities; unsupported and embedded hosts retain explicit defaults.
+  virtual WindowCapabilities NativeWindowCapabilities() const { return {}; }
+  /// Native requests run on the application thread; Submitted does not promise window-manager application.
+  virtual WindowRequestResult RequestWindowTopmost(bool) { return WindowRequestResult::Unavailable; }
+  virtual WindowRequestResult RequestWindowPosition(Point) { return WindowRequestResult::Unavailable; }
+  virtual WindowRequestResult RequestWindowSize(Size) { return WindowRequestResult::Unavailable; }
+  virtual WindowRequestResult RequestWindowInputPassthrough(bool) { return WindowRequestResult::Unavailable; }
+  virtual WindowRequestResult RequestWindowMove() { return WindowRequestResult::Unavailable; }
+  /// Current monitor work area in logical screen coordinates, when the host exposes it.
+  virtual std::optional<Rect> WindowWorkArea() const { return std::nullopt; }
   /// Reads the current client-area origin in logical screen coordinates, with X increasing right and Y down.
   /// @return The client origin, or std::nullopt when the platform does not expose window positions.
   /// Called on the application thread; adapters with compositor-owned placement (Wayland) report std::nullopt.

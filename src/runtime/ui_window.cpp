@@ -1210,6 +1210,13 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, const WindowOption
   const ScrollPhysics scroll_physics = ScrollDefaults();
   detail::ValidateScrollPhysics(scroll_physics);
   detail::ValidateWindowOptions(window_options);
+  const WindowCapabilities capabilities = NativeWindowCapabilities();
+  if ((window_options.presentation == WindowPresentation::Utility && !capabilities.utility_presentation) ||
+      (window_options.transparent_surface && !capabilities.transparent_surface) ||
+      (window_options.show_without_activation && !capabilities.passive_display) ||
+      (window_options.topmost && !capabilities.topmost)) {
+    throw std::logic_error("HuxerUI requested window presentation is unavailable on this attachment");
+  }
   try {
     application_runtime_ = &application_runtime;
     external_texture_frame_requester_ =
