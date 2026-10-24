@@ -34,6 +34,8 @@ public:
   [[nodiscard]] std::unique_ptr<TextLayout> CreateTextLayout(const AttributedText& text, const TextStyle& style,
       float max_width, const TextLayoutOptions& options = {});
   void Draw(CGContextRef context, CGRect dirty_rect, const RenderFrame* frame, CGRect viewport = CGRectNull);
+  /// Selects per-pixel-alpha clearing for a transparent window surface; call before the first frame.
+  void SetTransparentSurface(bool transparent) noexcept;
   void DrawSlice(
       CGContextRef context,
       CGRect dirty_rect,
@@ -73,6 +75,7 @@ private:
   void RenderCommand(CGContextRef context, const PopTransformCommand& command);
   void RenderCommand(CGContextRef context, const PlacePlatformViewCommand& command);
 
+  bool transparent_surface_ = false;
   std::unique_ptr<State> state_;
 };
 
