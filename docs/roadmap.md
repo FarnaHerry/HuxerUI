@@ -14,6 +14,15 @@ Current behavior is documented in the user guides, while detailed constraints li
 - Complete iOS archive export, distribution signing, and embeddable host integration.
 - Add an OHOS backend through the existing platform boundaries.
 
+## Desktop windows
+
+- Extend the existing window contract with per-pixel transparency, utility-window presentation, task-switcher visibility, activation policy, and runtime stacking control through native platform operations.
+- Add runtime window geometry control and display work-area queries for floating UI, with explicit capability reporting where the host controls placement or stacking.
+- Add native pointer-input regions and whole-window input passthrough independently of visual alpha, preserving shared pointer cancellation and capture behavior when the input policy changes.
+- Reuse ExternalTexture and retained frame scheduling for decoded animation frames, keeping character assets, animation selection, and application integration in the consuming application.
+
+The [Farna floating-window and desktop-assistant backlog](development/farna-desktop-assistant-todo.md) records downstream investigation, optional native-service candidates, and validation gates; it does not commit upstream API or implementation scope.
+
 ## Interaction and animation
 
 - Add ordinary View lifecycle transitions without introducing per-component Runtime branches.
