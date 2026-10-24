@@ -433,6 +433,14 @@ Changing whole-window input policy cancels the shared pointer sequence and relea
 Passive display does not activate on mouse input; an explicit Activate or an ordinary owned settings window provides deliberate keyboard and IME access.
 Programmatic moves do not replace native user dragging: BeginMove queues the native move operation after the current pointer callback.
 
+The Linux GTK adapter maps the same contract onto the active GDK backend, and NativeWindowCapabilities reports that backend truthfully at runtime.
+Both backends provide Utility presentation (undecorated, non-resizable), transparency through a window-scoped CSS provider that makes the GtkWindow background per-pixel alpha, client sizing through the GTK logical default size, WorkArea from the monitor at the surface, and BeginMove through gdk_toplevel_begin_move with the press's seat, serial, and surface-relative origin.
+X11 additionally provides passive display (XWMHints input hint plus a no-present show path), topmost and taskbar or pager exclusion through EWMH client messages after map, programmatic positioning through XMoveWindow in the same root pixel space as Position, and whole-window input passthrough through the X11 shape extension's input region, which requires the xext link and is otherwise not advertised.
+Wayland owns activation, stacking, and placement by protocol: those operations report Unavailable there, Position and initial placement report nothing, and creation-time passive display or topmost throws std::logic_error instead of silently downgrading the window.
+GTK rewrites EWMH state and X11 window-manager hints during mapping, so creation-time protocol state is applied at realize and reasserted at map; transparency needs no renderer path change because the GSK scene composites over the window background the provider cleared.
+Changing input passthrough cancels the shared pointer sequence exactly as on Windows, and the provider, CSS class, and shape state retire with their window.
+
 Acceptance requires real desktop composition, partial-alpha edges, another process receiving excluded clicks, passive focus, normal settings focus, resizing, DPI changes, device recreation, and repeated retirement.
 Offscreen pixels, window styles, and successful compilation are supporting checks rather than substitutes for those native observations.
-Other desktop hosts retain explicit unavailable results until equivalent native operations and qualification are provided.
+The Linux native floating-window tests run per backend against the live session and probe the X11 protocol state and physical pointer through dlopened Xlib, Xext, and XTest; Wayland runs assert the unavailable operations rather than skipping.
+Remaining desktop hosts retain explicit unavailable results until equivalent native operations and qualification are provided.

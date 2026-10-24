@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 
 #include "pet.h"
 
@@ -24,6 +25,16 @@ WindowOptions PetOptions() {
   };
 }
 
+// The startup pet requests only the widely supported floating core. Passive display and keep-above
+// are creation policies that Wayland compositors own by protocol, so requesting them there throws
+// std::logic_error; the mounted pet applies keep-above afterwards where the attachment accepts it.
+WindowOptions StartupPetOptions() {
+  WindowOptions options = PetOptions();
+  options.show_without_activation = false;
+  options.topmost = false;
+  return options;
+}
+
 struct PetModel {
   std::optional<WindowHandle> pet;
   std::optional<WindowHandle> settings;
@@ -35,7 +46,15 @@ struct PetModel {
     if (!pet) {
       auto options = PetOptions();
       options.topmost = topmost.Get();
-      pet = application.OpenWindow(options);
+      try {
+        pet = application.OpenWindow(options);
+      } catch (const std::logic_error&) {
+        // Wayland rejects passive display and keep-above at creation; fall back to the base policy.
+        options.show_without_activation = false;
+        options.topmost = false;
+        pet = application.OpenWindow(options);
+        topmost = false;
+      }
     }
     pet->Show();
   }
@@ -90,6 +109,8 @@ View PetContent() {
   }, tray_available);
   Lifecycle([model, window] {
     model->pet = window;
+    // Keep-above is a post-creation request; attachments without the operation keep their stacking.
+    if (window.SetTopmost(true) != WindowRequestResult::Submitted) model->topmost = false;
     model->RecoverPosition();
     return [model] { model->pet.reset(); };
   });
@@ -152,4 +173,4 @@ View App() {
   };
 }
 
-const Application application{App, {.window = PetOptions(), .application_hooks = {InstallPet}}};
+const Application application{App, {.window = StartupPetOptions(), .application_hooks = {InstallPet}}};

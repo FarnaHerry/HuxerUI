@@ -10,6 +10,7 @@ target_sources(huxerui_linux_tests PRIVATE
         external_texture.cpp
         file.cpp
         file_picker.cpp
+        floating_window_native.cpp
         gl_effects.cpp
         http.cpp
         multi_window_native.cpp

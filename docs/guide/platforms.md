@@ -47,11 +47,12 @@ Positions that become unrepresentable after DPI and decoration adjustment throw 
 
 ## Floating utility windows
 
-Windows supports `WindowPresentation::Utility` for a borderless, non-resizable window excluded from task switching.
+Windows and Linux (GTK) support `WindowPresentation::Utility` for a borderless, non-resizable window excluded from task switching.
 Set `WindowOptions::transparent_surface` for per-pixel transparency, `show_without_activation` for passive display, and `topmost` for an initial above-normal stacking preference.
 These options default to ordinary window behavior; transparency requires Utility presentation.
 The utility, transparency, and passive-display policies are fixed when the native window is created.
-Other backends currently reject nondefault unavailable presentation policies with `std::logic_error`.
+Hosts reject nondefault presentation policies their active backend cannot honor with `std::logic_error`, so query `WindowHandle::Capabilities()` or branch on availability instead of assuming one desktop contract.
+Other backends retain that explicit rejection behavior.
 
 ```cpp
 const auto pet = application.OpenWindow({
@@ -76,6 +77,11 @@ Zero-alpha pixels naturally pass native mouse input through; translucent pixels 
 Independent arbitrary shaped input regions remain unavailable; View hit testing and visual alpha are not substitutes for that capability.
 PlatformView hosting is unavailable on the transparent path; ExternalTexture rendering remains usable.
 Open an ordinary settings window and explicitly activate it for keyboard/IME editing.
+
+Linux transparent utility windows draw through the regular GTK scene graph: the window background becomes a per-pixel alpha surface, and no CPU readback budget applies.
+Both GDK backends support Utility presentation, transparency, client sizing, `WorkArea()`, and interactive `BeginMove()`.
+On X11 they additionally support passive display, topmost, programmatic positioning, and whole-window input passthrough through the shape extension; Wayland owns activation, stacking, and placement by protocol, so those operations report Unavailable there and `Position()` returns `std::nullopt`.
+Treat backend availability as a runtime property of each attachment: a Wayland session and an X11 or XWayland session on the same machine report different capabilities.
 See the [desktop pet example](../../examples/desktop_pet/README.md) and [floating-window design](../design/window-chrome.md#floating-utility-windows) for scope and native validation requirements.
 
 ## Android host focus
