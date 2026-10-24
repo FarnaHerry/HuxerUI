@@ -1614,7 +1614,10 @@ private:
       fullscreen_style_ = GetWindowLongPtrW(window_, GWL_STYLE);
       fullscreen_ = true;
       SetWindowLongPtrW(window_, GWL_STYLE, fullscreen_style_ & ~(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE));
-      SetWindowPos(window_, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+      // 网页式真全屏：任务栏永远 TOPMOST，HWND_TOP 压不住它（窗口尺寸对了、
+      // 任务栏仍盖在上面，看上去就成了「窗口全屏」）。全屏期间置顶，退出时
+      // 明确放回 NOTOPMOST，别让窗口永远留在最顶层。
+      SetWindowPos(window_, HWND_TOPMOST, monitor.rcMonitor.left, monitor.rcMonitor.top,
                    monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
                    SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
       break;
@@ -1624,8 +1627,8 @@ private:
       fullscreen_ = false;
       SetWindowLongPtrW(window_, GWL_STYLE, fullscreen_style_);
       SetWindowPlacement(window_, &fullscreen_placement_);
-      SetWindowPos(window_, nullptr, 0, 0, 0, 0,
-                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+      SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 0, 0,
+                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER);
       break;
     case WindowCommand::Close:
       performing_close_ = true;
