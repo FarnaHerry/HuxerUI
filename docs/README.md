@@ -26,8 +26,9 @@ User guides describe the current public SDK, development guides cover this repos
 - [Windows Paint Benchmark](development/windows-paint-benchmark.md): reproduce native renderer A/B timing, pixel checks, and memory measurements.
 - [Downstream integration](development/farna-integration.md): the `farna/main` patch inventory, validation, and adoption.
 - [Developing Multi-Window](development/multi-window.md): the multi-window extension status, validation, behavioral notes, and desktop porting checklist.
+- [Desktop Pet Example](../examples/desktop_pet/README.md): a Windows assistant orb with retained wave animation, transparent utility presentation, passive display, native input passthrough, and tray recovery.
 - [Farna graphics TODO](development/farna-graphics-todo.md): downstream-only future work for compositing, glass primitives, and backend qualification; not an upstream roadmap.
-- [Farna floating-window and desktop-assistant TODO](development/farna-desktop-assistant-todo.md): audited reusable foundations, optional native services, ownership boundaries, and acceptance gates; not an upstream roadmap.
+- [Farna floating-window and desktop-assistant TODO](development/farna-desktop-assistant-todo.md): delivered Windows baseline, validation limits, remaining foundations, and optional native services; not an upstream roadmap.
 - [SDK Packaging](development/sdk-packaging.md): produce and validate release-ready SDK archives.
 
 ## Design reference

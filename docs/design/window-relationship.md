@@ -71,3 +71,4 @@ Nested modality follows the edge set: closing an inner modal restores its own sc
 - `WindowHandle` commands keep working on blocked windows; modality blocks user input, not programmatic control.
 - Layers and dialogs inside one window are unchanged; a window-level modal and an in-window dialog may coexist, and the window-level rule wins for input crossing windows.
 - Accessibility sees disabled windows through the platform state; no semantic role is added.
+- Floating-window activation and input-passthrough policies compose with the blocked set. Restoring pointer input never enables a window blocked by a modal relationship, and native move requests are rejected while blocked.

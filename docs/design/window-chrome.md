@@ -397,3 +397,42 @@ macOS tests isolate preferred and native title-bar height, traffic-light vertica
 Manual macOS validation remains required for system window composition, traffic-light accessibility, dragging, full-screen transitions, and cross-screen behavior before release.
 Linux tests isolate metric resolution, preferred-height flooring, viewport clamping, caption-control reservation, and maximized-state propagation.
 Manual Linux validation covers GTK decoration removal, drag and edge or corner resize, caption-control interaction, and the maximized glyph swap on each supported GDK backend.
+
+## Floating utility windows
+
+Floating windows extend the existing WindowOptions, WindowHandle, WindowService, and native UiWindow operations.
+WindowPresentation::Utility selects a borderless, non-resizable helper surface excluded from the task switcher; it does not reinterpret Custom chrome or create another application loop.
+The presentation, transparent_surface, and show_without_activation options are fixed at creation; topmost is an initial preference that can subsequently change through WindowHandle::SetTopmost.
+Defaults retain ordinary opaque, decorated, activating windows.
+Transparent surfaces require Utility presentation, which has no native title-bar metrics or framework caption controls.
+
+WindowCapabilities describes this attachment's available transparency, utility presentation, passive display, stacking, geometry, native moving, and whole-window input passthrough.
+Unavailable hosts return false capabilities; a nondefault creation policy requiring unavailable behavior throws std::logic_error instead of silently creating an ordinary window.
+Invalid configuration throws std::invalid_argument before native policy changes, and native resource failures use std::runtime_error; diagnostics begin with HuxerUI.
+Availability is a snapshot on the application thread, not a platform-name guarantee or a general capability registry.
+
+SetTopmost, SetPosition, SetClientSize, SetInputPassthrough, and BeginMove return WindowRequestResult.
+Submitted means the host accepted a request, not that its window manager applied it; Rejected means the host declined it, Unavailable means the attachment cannot perform it, and Disconnected identifies a retired attachment.
+Requests and capability queries run on the original application thread, retain the original Runtime identity, and never reconnect a stale handle to a replacement window.
+Position and WorkArea are native snapshots in logical screen coordinates; observed client geometry continues to enter through SetWindowMetrics.
+New request results do not change the existing void command or retirement contracts.
+
+Windows transparent utility surfaces use the existing Direct2D scene renderer with a premultiplied BGRA layered-window publication path.
+The ordinary swap-chain and PlatformView DirectComposition paths remain in place for opaque windows.
+Layered publication requires a bounded CPU readback of the complete retained scene and a native bitmap; these resources belong to the renderer, are reused between frames, and retire with it.
+Transparent surfaces reject PlatformView hosting until native child composition is qualified; ExternalTexture remains the frame-production path.
+The initial layered-surface budget is 4096 by 4096 physical pixels, also bounded to 16 million pixels; excessive allocations fail explicitly rather than lowering quality.
+Transparent frame clearing and partial repaint must erase the old silhouette, preserve premultiplied color, and keep zero-alpha pixels at zero.
+Device recreation and resizing discard all dependent publication resources before the next complete redraw.
+
+Layered-window zero-alpha pixels naturally exclude native mouse input, and SetInputPassthrough excludes the whole surface without changing its pixels.
+The adapter publishes layered frames directly from its scheduled frame callback: an unpublished layered surface cannot rely on ordinary WM_PAINT delivery to become visible.
+These are distinct from arbitrary application-supplied native input regions, which remain future work: this implementation does not advertise an independent shaped-region capability.
+A WM_NCHITTEST return value alone does not establish cross-process passthrough.
+Changing whole-window input policy cancels the shared pointer sequence and releases this window's capture, while preserving modal blocking.
+Passive display does not activate on mouse input; an explicit Activate or an ordinary owned settings window provides deliberate keyboard and IME access.
+Programmatic moves do not replace native user dragging: BeginMove queues the native move operation after the current pointer callback.
+
+Acceptance requires real desktop composition, partial-alpha edges, another process receiving excluded clicks, passive focus, normal settings focus, resizing, DPI changes, device recreation, and repeated retirement.
+Offscreen pixels, window styles, and successful compilation are supporting checks rather than substitutes for those native observations.
+Other desktop hosts retain explicit unavailable results until equivalent native operations and qualification are provided.

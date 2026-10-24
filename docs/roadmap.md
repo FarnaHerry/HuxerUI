@@ -16,9 +16,9 @@ Current behavior is documented in the user guides, while detailed constraints li
 
 ## Desktop windows
 
-- Extend the existing window contract with per-pixel transparency, utility-window presentation, task-switcher visibility, activation policy, and runtime stacking control through native platform operations.
-- Add runtime window geometry control and display work-area queries for floating UI, with explicit capability reporting where the host controls placement or stacking.
-- Add native pointer-input regions and whole-window input passthrough independently of visual alpha, preserving shared pointer cancellation and capture behavior when the input policy changes.
+- Extend native transparency, utility presentation, activation, stacking, geometry, and work-area support to additional desktop backends through the existing window contract and explicit capability results.
+- Add display-change observation and qualify mixed-DPI placement recovery for floating UI.
+- Add arbitrary native pointer-input regions independently of visual alpha, preserving shared pointer cancellation and capture behavior when the input policy changes.
 - Reuse ExternalTexture and retained frame scheduling for decoded animation frames, keeping character assets, animation selection, and application integration in the consuming application.
 
 The [Farna floating-window and desktop-assistant backlog](development/farna-desktop-assistant-todo.md) records downstream investigation, optional native-service candidates, and validation gates; it does not commit upstream API or implementation scope.

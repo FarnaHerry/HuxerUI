@@ -35,6 +35,7 @@ public:
   void ResetDeviceResources() noexcept;
   void Resize(HWND window, float dpi);
   void DpiChanged(HWND window, float dpi);
+  void SetTransparentSurface(bool transparent);
   [[nodiscard]] bool EnablePlatformComposition(HWND window);
   [[nodiscard]] FontMetrics Metrics(const Font& font);
   [[nodiscard]] TextRunMetrics

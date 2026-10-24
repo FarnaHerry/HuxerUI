@@ -1,17 +1,54 @@
 # Farna TODO: Floating Windows and Desktop Assistant Capabilities
 
 Owner: Farna.
-Status: downstream investigation and future work; no implementation is authorized by this checklist.
+Status: Windows floating-window baseline and assistant-orb example implemented; broader qualification and optional services remain future work.
 
 This backlog extracts reusable framework requirements from animated desktop companions and character-based assistants.
 It belongs to the Farna fork and its [downstream integration policy](farna-integration.md), not to an upstream release plan.
-The requested deliverable is this development document; adopting a pet application, migrating its business logic, and implementing the capabilities below require separate scopes.
-Capability descriptions are planning terms, not approved C++ declarations or platform support promises.
+The current implementation follows the separately approved Windows desktop-pet scope; unchecked work below still requires its own scope.
+Future capability descriptions are planning terms, not approved C++ declarations or platform support promises.
+
+## Current delivery and remaining work
+
+The Windows baseline provides an interactive transparent utility surface and the [desktop-pet example](../../examples/desktop_pet/README.md), styled as an assistant orb with animated wave ribbons.
+It uses the existing Runtime, WindowHandle, retained NodeExtension animation, ordinary settings window, and system tray.
+The example does not acquire audio or connect to a model service.
+
+| Work area | Delivered Windows baseline | Remaining acceptance scope |
+| --- | --- | --- |
+| FD-01: window contract | WindowCapabilities, WindowRequestResult, creation-policy validation, application-thread requests, unsupported-host defaults, and disconnected-handle results | Qualify additional hosts and any future dynamic capability changes |
+| FD-02: transparency | Premultiplied layered presentation, transparent clearing, native alpha hit testing, resize, and renderer resource recreation | Physical mixed-DPI displays, broader ExternalTexture combinations, and other desktop renderers |
+| FD-03: utility and activation | Borderless non-resizable utility windows excluded from task switching, passive show, and explicit activation of an ordinary settings window | Accessibility, editing/IME scenarios, and additional desktop hosts |
+| FD-04: stacking | Initial and mutable topmost requests with native failure results | Fullscreen/workspace interactions and broader owner/modal stacking qualification |
+| FD-05: geometry | Runtime position and client-size requests, observed position, work-area snapshots, native drag, and explicit position recovery | Display-change subscriptions, persistent placement, monitor removal, and mixed-DPI recovery |
+| FD-06: input | Zero-alpha passthrough to another process, independent whole-window passthrough, capture cancellation, and preservation of modal blocking | Arbitrary input regions independent of visual alpha, touch/pen, and other desktop hosts |
+| FD-07: example | Geometric assistant orb, retained 30 fps wave animation, hidden/reduced-motion pausing, click/drag/context menu, settings, tray recovery, and retirement/recreation | Background decoder/producer qualification if introduced; broader device and compositor coverage |
+
+The layered renderer reads back the complete small surface on every presented frame; it is limited to 4096 pixels per dimension and 16 million pixels in total.
+PlatformView hosting is unavailable on this path; ordinary opaque windows retain their existing presentation paths.
+The new utility policies are implemented on Windows only; other hosts retain explicit unavailable behavior.
+The P0 checklist below retains the broader acceptance scope and must not be interpreted as a claim that every desktop backend or device has passed it.
+
+### Validation and distribution
+
+- Windows MSVC x64 Release framework and example builds, standalone public-header checks, and a separate clean configure/build pass.
+- All four common CTest suites and the Windows native suite pass, including transparent pixels, silhouette clearing, cross-process input, passive focus, native drag, capture cancellation, modal blocking, and repeated retirement/recreation.
+- The module-shell freshness check and CMake/mcpp build-parity check cover the shared declaration and build boundaries; gdi32 was already present in the mcpp Windows link interface.
+- A temporary Windows 10/11 x64 portable ZIP contains the executable, resources, licenses, and matching app-local Release CRT; profiling is disabled, extracted file hashes match, and startup succeeds from an unrelated working directory with a system-only PATH.
+- The ZIP remains a local build artifact; clean-machine execution, physical mixed-DPI displays, touch/pen, accessibility, fullscreen interaction, and actual Windows 7 execution are not qualified by that startup check.
+- Linux, macOS, mobile, and Web builds were unavailable on this Windows host; no equivalent native support is claimed.
+
+### Next priorities
+
+1. Qualify mixed-DPI movement, display removal, saved-position recovery, and fullscreen/topmost behavior on real Windows desktops.
+2. Add display-change observation and independently shaped input regions through the existing window owners when their contracts are agreed.
+3. Select a second desktop backend and port the same capability/result contract with its own native tests.
+4. Choose optional animation decoding, audio, capture, or model integration only from concrete application demand; these remain separate from the visual demo.
 
 ## Research basis and boundaries
 
 The repository audit was performed on 2026-10-23 against the current checkout's public headers, shared implementation, desktop adapters, focused test sources, and owning documentation.
-Tests were inspected as contract evidence, not executed as part of this documentation task.
+That initial audit inspected tests as contract evidence; the implemented Windows baseline is validated separately as described above.
 Recheck the relevant files before implementing a task because this inventory does not freeze the SDK.
 
 The application references reveal three useful groups of requirements:
@@ -34,8 +71,8 @@ The following mechanisms already own substantial parts of the required behavior:
 | Capability | Current evidence | Planning consequence |
 | --- | --- | --- |
 | Runtime-created windows, ownership, modality, and retirement | [app.h](../../include/huxerui/app.h), [window.h](../../include/huxerui/window.h), [multi-window design](../design/multi-window.md), [relationship design](../design/window-relationship.md) | Extend the existing window contract; do not introduce a companion host or a second event loop |
-| Custom chrome and native dragging | [window.h](../../include/huxerui/window.h), [window-chrome design](../design/window-chrome.md), [window tests](../../tests/runtime/window.cpp) | Custom chrome is present, but does not promise a transparent, borderless, non-activating utility window |
-| Initial placement and position snapshots | [window.h](../../include/huxerui/window.h), [platform placement guide](../guide/platforms.md#native-window-placement) | Placement is partial: Windows and Linux/X11 have implementations; Wayland and the macOS preview report or retain limitations; no general runtime geometry setter is exposed |
+| Custom chrome, utility presentation, and native dragging | [window.h](../../include/huxerui/window.h), [window-chrome design](../design/window-chrome.md), [window tests](../../tests/runtime/window.cpp) | Windows adds transparent utility surfaces, passive display, and native move requests; other hosts require separate implementations and qualification |
+| Placement, runtime geometry, and work areas | [window.h](../../include/huxerui/window.h), [platform placement guide](../guide/platforms.md#native-window-placement) | Windows exposes native geometry requests and work-area snapshots; Linux/X11 retains initial placement, while Wayland and the macOS preview retain their explicit limits; display-change observation remains future work |
 | Tray, visibility commands, close interception, and application quit | [app.h](../../include/huxerui/app.h), [tray design](../design/system-tray.md), [tray tests](../../tests/runtime/system_tray.cpp) | Reuse the tray; qualify availability and recovery rather than build another tray system |
 | Retained animation, delayed frame requests, gestures, and reduced motion | [modifier.h](../../include/huxerui/modifier.h), [animation.h](../../include/huxerui/animation.h), [animation design](../design/animation.md), [gesture design](../design/gestures.md) | Character behavior belongs in a library or application using existing scheduling and interaction |
 | Immutable external frames and pixel publication | [external_texture.h](../../include/huxerui/external_texture.h), [implementation](../../src/graphics/external_texture.cpp), [Windows](../../include/huxerui/windows/external_texture.h), [Linux](../../include/huxerui/linux/external_texture.h), [macOS](../../include/huxerui/macos/external_texture.h) | Feed decoded or rendered frames through ExternalTexture; publication does not require per-frame recomposition |

@@ -44,6 +44,7 @@ set(HUXERUI_PLATFORM_LINK_LIBRARIES
         dwmapi
         dxguid
         dxgi
+        gdi32
         imm32
         ole32
         oleaut32

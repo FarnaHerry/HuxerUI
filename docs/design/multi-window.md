@@ -14,11 +14,11 @@ It extends the [Application Activation and Lifecycle](application.md) ownership 
 ## Non-goals
 
 - Multiple UI threads or per-window threads; all attached UIs stay on the one application thread.
-- Window geometry, dragging, or platform handle APIs beyond the existing `WindowHandle` commands, with one deliberate exception: the best-effort placement surface (`WindowOptions::initial_position` and `WindowHandle::Position()`) for tear-off workflows. It is honored on X11 and Windows and reports unavailable on Wayland, where compositors own placement by protocol.
+- A general window-manager or platform-handle API. Initial placement remains best effort, with native floating-window geometry and move requests specified separately in [Window Chrome](window-chrome.md#floating-utility-windows); compositor-controlled operations remain explicitly unavailable.
 - Cross-window layers, shared `NavigationStack` state, or cross-window focus transfer.
 - Window relationships such as owner, transient parent, or modality are specified separately in [Window Relationship Design](window-relationship.md).
 - Mobile multi-window: Android and iOS windows remain platform-driven attachments, and this document does not add runtime window creation there.
-- Saveable or restorable window layout.
+- Saveable or restorable window layout. Floating utility presentation and explicit native geometry requests extend the window boundary as specified in [Window Chrome](window-chrome.md#floating-utility-windows); applications still own saved-position policy.
 
 ## Ownership model
 

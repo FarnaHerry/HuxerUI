@@ -587,6 +587,7 @@ export namespace huxerui {
     using huxerui::VirtualList;
     using huxerui::VirtualViewport;
     using huxerui::VisualFill;
+    using huxerui::WindowCapabilities;
     using huxerui::WindowCaptionLabels;
     using huxerui::WindowChromeMode;
     using huxerui::WindowCommand;
@@ -599,7 +600,9 @@ export namespace huxerui {
     using huxerui::WindowLifecycleState;
     using huxerui::WindowMetrics;
     using huxerui::WindowOptions;
+    using huxerui::WindowPresentation;
     using huxerui::WindowRelationship;
+    using huxerui::WindowRequestResult;
     using huxerui::WindowTitleBar;
     using huxerui::WindowTitleBarMetrics;
     using huxerui::WorkerSequence;

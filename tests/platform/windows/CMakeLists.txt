@@ -15,6 +15,7 @@ target_sources(huxerui_windows_tests PRIVATE
         file.cpp
         http.cpp
         multi_window_native.cpp
+        floating_window_native.cpp
         installer_command_policy.cpp
         platform_module.cpp
         platform_view.cpp
