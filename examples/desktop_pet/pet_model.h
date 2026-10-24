@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 
 #include <huxerui/huxerui.h>
 
@@ -19,6 +20,16 @@ inline huxerui::WindowOptions PetOptions() {
       .show_without_activation = true,
       .topmost = true,
   };
+}
+
+// The startup pet requests only the portable floating core. Passive display and keep-above are
+// creation policies that Wayland compositors own by protocol, so requesting them there throws
+// std::logic_error; the mounted pet re-asserts keep-above afterwards where the attachment accepts it.
+inline huxerui::WindowOptions StartupPetOptions() {
+  huxerui::WindowOptions options = PetOptions();
+  options.show_without_activation = false;
+  options.topmost = false;
+  return options;
 }
 
 struct PetModel {
@@ -37,7 +48,15 @@ struct PetModel {
       auto options = PetOptions();
       options.topmost = topmost.Get();
       options.initial_position = saved_position;
-      pet = application.OpenWindow(options);
+      try {
+        pet = application.OpenWindow(options);
+      } catch (const std::logic_error&) {
+        // Wayland rejects passive display and keep-above at creation; fall back to the base policy.
+        options.show_without_activation = false;
+        options.topmost = false;
+        pet = application.OpenWindow(options);
+        topmost = false;
+      }
     }
     pet->Show();
   }
@@ -96,6 +115,11 @@ inline void UsePetAttachment(const std::shared_ptr<PetModel>& model) {
   huxerui::Lifecycle([model, window] {
     const auto generation = ++model->pet_generation;
     model->pet = window;
+    // Keep-above is a post-creation request so startup can use the portable policy; attachments
+    // without the operation keep their compositor stacking and drop the preference.
+    if (model->topmost.Get() && window.SetTopmost(true) != huxerui::WindowRequestResult::Submitted) {
+      model->topmost = false;
+    }
     if (!model->saved_position) model->RecoverPosition();
     return [model, generation] {
       if (model->pet_generation == generation) model->pet.reset();

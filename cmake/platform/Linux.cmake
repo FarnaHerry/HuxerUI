@@ -45,7 +45,10 @@ set(HUXERUI_PLATFORM_LINK_LIBRARIES
 )
 
 # Optional X11 placement must extend the completed platform lists so static consumers retain its link dependency.
+# Xext adds the shape extension used for whole-window input passthrough, so the adapter advertises
+# passthrough only when both libraries resolve.
 pkg_check_modules(HUXERUI_X11 QUIET IMPORTED_TARGET x11)
+pkg_check_modules(HUXERUI_XEXT QUIET IMPORTED_TARGET xext)
 if (HUXERUI_X11_FOUND)
     list(APPEND HUXERUI_PLATFORM_INCLUDE_DIRECTORIES ${HUXERUI_X11_INCLUDE_DIRS})
     list(APPEND HUXERUI_PLATFORM_COMPILE_OPTIONS ${HUXERUI_X11_CFLAGS_OTHER})
@@ -53,4 +56,10 @@ if (HUXERUI_X11_FOUND)
             HUXERUI_LINUX_X11=1
     )
     list(APPEND HUXERUI_PLATFORM_LINK_LIBRARIES PkgConfig::HUXERUI_X11)
+    if (HUXERUI_XEXT_FOUND)
+        list(APPEND HUXERUI_PLATFORM_INCLUDE_DIRECTORIES ${HUXERUI_XEXT_INCLUDE_DIRS})
+        list(APPEND HUXERUI_PLATFORM_COMPILE_OPTIONS ${HUXERUI_XEXT_CFLAGS_OTHER})
+        list(APPEND HUXERUI_PLATFORM_COMPILE_DEFINITIONS HUXERUI_LINUX_X11_SHAPE=1)
+        list(APPEND HUXERUI_PLATFORM_LINK_LIBRARIES PkgConfig::HUXERUI_XEXT)
+    endif ()
 endif ()

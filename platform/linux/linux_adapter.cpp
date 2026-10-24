@@ -10,6 +10,13 @@
 #ifdef None
 #undef None
 #endif
+#if defined(HUXERUI_LINUX_X11)
+#include <X11/Xatom.h>
+#include <X11/Xutil.h>
+#endif
+#if defined(HUXERUI_LINUX_X11) && defined(HUXERUI_LINUX_X11_SHAPE)
+#include <X11/extensions/shape.h>
+#endif
 #endif
 
 #include <sys/resource.h>
@@ -78,6 +85,69 @@ unsigned long X11WindowId(GtkWindow* window) noexcept {
   }
 #endif
   return 0;
+}
+
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
+constexpr int kNetWmStateRemove = 0;
+constexpr int kNetWmStateAdd = 1;
+
+/// EWMH state transitions are requests to the window manager: the client message is sent after the
+/// window maps because GTK rewrites _NET_WM_STATE from its own surface state during mapping.
+void SendNetWmStateMessage(::Display* xdisplay, ::Window window, const char* state_name, int action) {
+  XEvent message{};
+  message.xclient.type = ClientMessage;
+  message.xclient.window = window;
+  message.xclient.message_type = XInternAtom(xdisplay, "_NET_WM_STATE", False);
+  message.xclient.format = 32;
+  message.xclient.data.l[0] = action;
+  message.xclient.data.l[1] = static_cast<long>(XInternAtom(xdisplay, state_name, False));
+  message.xclient.data.l[2] = 0;
+  XSendEvent(xdisplay, DefaultRootWindow(xdisplay), False, SubstructureRedirectMask | SubstructureNotifyMask, &message);
+}
+
+/// Resolves the X11 connection behind a realized GTK window for direct protocol requests.
+struct X11SurfaceRequest {
+  ::Display* display = nullptr;
+  ::Window window = 0;
+
+  explicit X11SurfaceRequest(GtkWindow* gtk_window) {
+    GdkSurface* surface = gtk_window != nullptr ? gtk_native_get_surface(GTK_NATIVE(gtk_window)) : nullptr;
+    if (surface == nullptr || !GDK_IS_X11_SURFACE(surface)) {
+      return;
+    }
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    display = gdk_x11_display_get_xdisplay(gdk_surface_get_display(surface));
+    window = gdk_x11_surface_get_xid(surface);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+  }
+
+  explicit operator bool() const { return display != nullptr && window != 0; }
+};
+#endif
+
+/// The theme paints the GtkWindow background node opaquely; transparent utility surfaces override
+/// that node only for windows carrying this class, so ordinary windows keep their theme background.
+constexpr const char* kTransparentWindowCss = "window.huxerui-transparent { background: transparent; }";
+
+/// Displays whose style cascade already carries the transparent-background rule. One
+/// display-lifetime registration avoids re-invalidating every window's style each time a
+/// transparent window retires, mirrors how theme providers live with their display, and lets
+/// windows opt in and out through the CSS class alone.
+std::vector<GdkDisplay*> transparent_background_displays;
+
+void EnsureTransparentBackgroundProvider(GdkDisplay* display) {
+  if (std::find(transparent_background_displays.begin(), transparent_background_displays.end(), display) !=
+      transparent_background_displays.end()) {
+    return;
+  }
+  GtkCssProvider* provider = gtk_css_provider_new();
+  gtk_css_provider_load_from_string(provider, kTransparentWindowCss);
+  gtk_style_context_add_provider_for_display(
+      display, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
+  );
+  // The display's style cascade owns the registration from here on, matching theme providers.
+  g_object_unref(provider);
+  transparent_background_displays.push_back(display);
 }
 
 const char* LinuxPointerCursorName(PointerCursorKind kind) noexcept {
@@ -750,7 +820,13 @@ public:
       UiWindow::UpdateResourceConfiguration(Configuration());
       UpdateRuntimeViewport(initial_size);
       running_ = true;
-      gtk_window_present(window_);
+      if (passive_display_) {
+        // Passive surfaces never request presentation focus; the pre-map input hint keeps the
+        // window manager from activating them when they map.
+        gtk_widget_set_visible(GTK_WIDGET(window_), TRUE);
+      } else {
+        gtk_window_present(window_);
+      }
       gtk_widget_grab_focus(GTK_WIDGET(drawing_area_));
       RequestFrameAt(Now());
     } catch (...) {
@@ -876,6 +952,172 @@ public:
       return;
     }
     gtk_window_set_modal(window_, modal ? TRUE : FALSE);
+  }
+
+  WindowCapabilities NativeWindowCapabilities() const override {
+    // Wayland owns focus-on-map, stacking, and placement by protocol, so those operations stay
+    // unavailable there; transparency, utility presentation, sizing, and interactive moves work
+    // through GDK on both backends.
+    const bool x11 = UsingX11SurfaceBackend();
+    WindowCapabilities capabilities;
+    capabilities.transparent_surface = true;
+    capabilities.utility_presentation = true;
+    capabilities.passive_display = x11;
+    capabilities.topmost = x11;
+    capabilities.geometry = x11;
+    capabilities.native_move = true;
+#if defined(HUXERUI_LINUX_X11) && defined(HUXERUI_LINUX_X11_SHAPE)
+    capabilities.input_passthrough = x11;
+#endif
+    return capabilities;
+  }
+
+  WindowRequestResult RequestWindowTopmost(bool topmost) override {
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
+    if (!UsingX11SurfaceBackend()) {
+      return WindowRequestResult::Unavailable;
+    }
+    if (window_ == nullptr) {
+      return WindowRequestResult::Rejected;
+    }
+    topmost_ = topmost;
+    if (!gtk_widget_get_mapped(GTK_WIDGET(window_))) {
+      // Unmapped windows adopt the preference the next time they map.
+      return WindowRequestResult::Submitted;
+    }
+    X11SurfaceRequest request{window_};
+    if (!request) {
+      return WindowRequestResult::Rejected;
+    }
+    SendNetWmStateMessage(request.display, request.window, "_NET_WM_STATE_ABOVE",
+                          topmost ? kNetWmStateAdd : kNetWmStateRemove);
+    XFlush(request.display);
+    return WindowRequestResult::Submitted;
+#else
+    static_cast<void>(topmost);
+    return WindowRequestResult::Unavailable;
+#endif
+  }
+
+  WindowRequestResult RequestWindowPosition(Point position) override {
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
+    if (!UsingX11SurfaceBackend()) {
+      return WindowRequestResult::Unavailable;
+    }
+    if (window_ == nullptr || gtk_window_is_fullscreen(window_) || !IsInitialized()) {
+      return WindowRequestResult::Rejected;
+    }
+    X11SurfaceRequest request{window_};
+    if (!request) {
+      return WindowRequestResult::Rejected;
+    }
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    XMoveWindow(request.display, request.window, static_cast<int>(std::lround(position.x)),
+                static_cast<int>(std::lround(position.y)));
+    XFlush(request.display);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+    return WindowRequestResult::Submitted;
+#else
+    static_cast<void>(position);
+    return WindowRequestResult::Unavailable;
+#endif
+  }
+
+  WindowRequestResult RequestWindowSize(Size size) override {
+    if (window_ == nullptr || !IsInitialized() || gtk_window_is_fullscreen(window_)) {
+      return WindowRequestResult::Rejected;
+    }
+    if (minimum_size_.has_value()) {
+      size.width = std::max(size.width, minimum_size_->width);
+      size.height = std::max(size.height, minimum_size_->height);
+    }
+    // GTK owns logical sizes, so the DIP request maps one to one to the widget-space default size;
+    // the mapped surface adopts it even while non-resizable, as probe-verified on both backends.
+    gtk_window_set_default_size(window_, std::max(1, static_cast<int>(std::lround(size.width))),
+                                std::max(1, static_cast<int>(std::lround(size.height))));
+    return WindowRequestResult::Submitted;
+  }
+
+  WindowRequestResult RequestWindowInputPassthrough(bool passthrough) override {
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11_SHAPE)
+    if (!UsingX11SurfaceBackend()) {
+      return WindowRequestResult::Unavailable;
+    }
+    if (window_ == nullptr) {
+      return WindowRequestResult::Rejected;
+    }
+    if (passthrough == input_passthrough_) {
+      return WindowRequestResult::Submitted;
+    }
+    X11SurfaceRequest request{window_};
+    if (!request || !gtk_widget_get_mapped(GTK_WIDGET(window_))) {
+      return WindowRequestResult::Rejected;
+    }
+    if (passthrough) {
+      // An empty input region excludes the whole surface from native hit testing.
+      XShapeCombineRectangles(request.display, request.window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
+    } else {
+      // Restoring the input region from the bounding shape tracks the current window size.
+      XShapeCombineShape(request.display, request.window, ShapeInput, 0, 0, request.window, ShapeBounding, ShapeSet);
+    }
+    XFlush(request.display);
+    input_passthrough_ = passthrough;
+    CancelPointer();
+    return WindowRequestResult::Submitted;
+#else
+    static_cast<void>(passthrough);
+    return WindowRequestResult::Unavailable;
+#endif
+  }
+
+  WindowRequestResult RequestWindowMove() override {
+    if (!IsInitialized() || input_blocked_ || native_drag_ || window_ == nullptr ||
+        gtk_window_is_fullscreen(window_)) {
+      return WindowRequestResult::Rejected;
+    }
+    // Interactive moves need the seat, serial, and surface-relative origin of the active press;
+    // GDK forwards them to the compositor or window manager, which then owns the gesture.
+    if (pointer_device_ == nullptr || pressed_buttons_ != PointerButton::Primary) {
+      return WindowRequestResult::Rejected;
+    }
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (surface == nullptr || !GDK_IS_TOPLEVEL(surface)) {
+      return WindowRequestResult::Rejected;
+    }
+    gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), pointer_device_, GDK_BUTTON_PRIMARY,
+                            last_pointer_position_.x, last_pointer_position_.y, pointer_press_time_);
+    CancelPointer();
+    // The compositor consumes the implicit grab, so the matching release never reaches the canvas.
+    suppress_pointer_release_ = true;
+    return WindowRequestResult::Submitted;
+  }
+
+  std::optional<Rect> WindowWorkArea() const override {
+    if (window_ == nullptr) {
+      return std::nullopt;
+    }
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (surface == nullptr) {
+      return std::nullopt;
+    }
+    GdkDisplay* display = gdk_surface_get_display(surface);
+    GdkMonitor* monitor = gdk_display_get_monitor_at_surface(display, surface);
+    if (monitor == nullptr) {
+      return std::nullopt;
+    }
+    GdkRectangle geometry{};
+    gdk_monitor_get_geometry(monitor, &geometry);
+    // The display owns its monitor list; gdk_display_get_monitor_at_surface transfers no reference.
+    float scale = 1.0F;
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
+    if (GDK_IS_X11_SURFACE(surface)) {
+      // X11 reports positions in the root pixel space that WindowScreenOrigin and SetPosition use,
+      // while GDK monitor geometry is logical; convert so one coordinate space holds per backend.
+      scale = static_cast<float>(gdk_surface_get_scale_factor(surface));
+    }
+#endif
+    return Rect{static_cast<float>(geometry.x) * scale, static_cast<float>(geometry.y) * scale,
+                static_cast<float>(geometry.width) * scale, static_cast<float>(geometry.height) * scale};
   }
 
   bool BeginWindowDrag(std::shared_ptr<WindowDrag> transfer) override {
@@ -1072,8 +1314,14 @@ private:
   }
 
   void CreateWindow(const WindowOptions& options, Size initial_size) {
-    custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
+    utility_window_ = options.presentation == WindowPresentation::Utility;
+    transparent_surface_ = options.transparent_surface;
+    passive_display_ = options.show_without_activation;
+    topmost_ = options.topmost;
+    // Utility presentation is borderless by definition, so custom chrome has nothing to replace.
+    custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
     custom_title_bar_height_ = options.title_bar_height;
+    minimum_size_ = options.minimum_size;
     window_ = GTK_WINDOW(gtk_window_new());
     gtk_window_set_title(window_, options.title.c_str());
     gtk_window_set_default_size(
@@ -1081,7 +1329,13 @@ private:
         std::max(1, static_cast<int>(std::lround(initial_size.width))),
         std::max(1, static_cast<int>(std::lround(initial_size.height)))
     );
-    gtk_window_set_decorated(window_, !custom_chrome_);
+    gtk_window_set_decorated(window_, !custom_chrome_ && !utility_window_);
+    if (utility_window_) {
+      gtk_window_set_resizable(window_, FALSE);
+    }
+    if (transparent_surface_) {
+      ApplyTransparentBackground();
+    }
     if (options.initial_position.has_value()) {
       ApplyInitialPosition(*options.initial_position);
     }
@@ -1101,6 +1355,7 @@ private:
 
     g_signal_connect(window_, "close-request", G_CALLBACK(CloseRequested), this);
     g_signal_connect(window_, "destroy", G_CALLBACK(Destroyed), this);
+    g_signal_connect(window_, "realize", G_CALLBACK(WindowRealizedForChrome), this);
     g_signal_connect(window_, "unrealize", G_CALLBACK(WindowUnrealized), this);
     g_signal_connect(window_, "map", G_CALLBACK(WindowMapped), this);
     g_signal_connect(window_, "unmap", G_CALLBACK(WindowUnmapped), this);
@@ -1154,6 +1409,72 @@ private:
     g_signal_connect(focus, "enter", G_CALLBACK(FocusEntered), this);
     g_signal_connect(focus, "leave", G_CALLBACK(FocusLeft), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), focus);
+  }
+
+  bool UsingX11SurfaceBackend() const noexcept {
+#ifdef GDK_WINDOWING_X11
+    return window_ != nullptr && GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(window_)));
+#else
+    return false;
+#endif
+  }
+
+  /// Points the theme's window background at per-pixel alpha for this window only.
+  /// Points the theme's window background at per-pixel alpha for this window only.
+  void ApplyTransparentBackground() {
+    EnsureTransparentBackgroundProvider(gtk_widget_get_display(GTK_WIDGET(window_)));
+    gtk_widget_add_css_class(GTK_WIDGET(window_), "huxerui-transparent");
+  }
+
+  /// Applies creation-time X11 protocol state that must exist before the first map: the utility
+  /// window type and the passive input hint GTK rewrites after mapping.
+  void ApplyX11InitialChrome() {
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
+    X11SurfaceRequest request{window_};
+    if (!request) {
+      return;
+    }
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    if (utility_window_) {
+      const Atom utility_type = XInternAtom(request.display, "_NET_WM_WINDOW_TYPE_UTILITY", False);
+      XChangeProperty(request.display, request.window, XInternAtom(request.display, "_NET_WM_WINDOW_TYPE", False),
+          XA_ATOM, 32, PropModeReplace, reinterpret_cast<const unsigned char*>(&utility_type), 1);
+    }
+    if (passive_display_) {
+      XWMHints hints;
+      hints.flags = InputHint;
+      hints.input = False;
+      XSetWMHints(request.display, request.window, &hints);
+    }
+    G_GNUC_END_IGNORE_DEPRECATIONS
+#endif
+  }
+
+  /// Applies post-map X11 state: taskbar and pager exclusion, the initial topmost preference, and
+  /// the passive input hint again because GTK restores its own hints while mapping.
+  void ApplyFloatingWindowMapState() {
+#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
+    X11SurfaceRequest request{window_};
+    if (!request) {
+      return;
+    }
+    if (utility_window_) {
+      SendNetWmStateMessage(request.display, request.window, "_NET_WM_STATE_SKIP_TASKBAR", kNetWmStateAdd);
+      SendNetWmStateMessage(request.display, request.window, "_NET_WM_STATE_SKIP_PAGER", kNetWmStateAdd);
+    }
+    if (topmost_) {
+      SendNetWmStateMessage(request.display, request.window, "_NET_WM_STATE_ABOVE", kNetWmStateAdd);
+    }
+    if (passive_display_) {
+      G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+      XWMHints hints;
+      hints.flags = InputHint;
+      hints.input = False;
+      XSetWMHints(request.display, request.window, &hints);
+      G_GNUC_END_IGNORE_DEPRECATIONS
+    }
+    XFlush(request.display);
+#endif
   }
 
   void ScheduleFrame(double deadline) {
@@ -1562,7 +1883,12 @@ private:
     self.text_input_.SetFocus(gtk_widget_has_focus(self.drawing_area_));
     self.AttachToplevelState();
     self.ApplyPendingInitialPosition();
+    self.ApplyFloatingWindowMapState();
     self.UpdateLifecycleState();
+  }
+
+  static void WindowRealizedForChrome(GtkWidget*, gpointer data) {
+    static_cast<LinuxUiWindow*>(data)->ApplyX11InitialChrome();
   }
 
   static void WindowUnrealized(GtkWidget*, gpointer data) {
@@ -1626,7 +1952,10 @@ private:
       return;
     }
     pressed_buttons_ |= button;
-    if (event) g_set_object(&pointer_device_, gdk_event_get_device(event));
+    if (event) {
+      g_set_object(&pointer_device_, gdk_event_get_device(event));
+      pointer_press_time_ = gdk_event_get_time(event);
+    }
     SendPointer(PointerEventType::Down, position, button, pressed_buttons_,
         event ? TranslateModifiers(gdk_event_get_modifier_state(event)) : KeyModifiers{});
   }
@@ -1863,6 +2192,13 @@ private:
   bool performing_minimize_ = false;
   bool performing_close_ = false;
   bool custom_chrome_ = false;
+  bool utility_window_ = false;
+  bool transparent_surface_ = false;
+  bool passive_display_ = false;
+  bool topmost_ = false;
+  bool input_passthrough_ = false;
+  std::optional<Size> minimum_size_;
+  guint32 pointer_press_time_ = 0;
   float custom_title_bar_height_ = 0.0F;
   PointerButton pressed_buttons_ = PointerButton::None;
   bool suppress_pointer_release_ = false;

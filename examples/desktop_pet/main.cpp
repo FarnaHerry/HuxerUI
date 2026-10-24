@@ -9,7 +9,7 @@
 
 using namespace huxerui;
 using desktop_pet::PetModel;
-using desktop_pet::PetOptions;
+using desktop_pet::StartupPetOptions;
 
 namespace {
 
@@ -104,4 +104,4 @@ View App() {
   };
 }
 
-const Application application{App, {.window = PetOptions(), .application_hooks = {InstallPet}}};
+const Application application{App, {.window = StartupPetOptions(), .application_hooks = {InstallPet}}};
