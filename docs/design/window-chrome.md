@@ -433,6 +433,16 @@ Changing whole-window input policy cancels the shared pointer sequence and relea
 Passive display does not activate on mouse input; an explicit Activate or an ordinary owned settings window provides deliberate keyboard and IME access.
 Programmatic moves do not replace native user dragging: BeginMove queues the native move operation after the current pointer callback.
 
+macOS utility windows are borderless non-activating NSPanel surfaces; the panel cannot share the ordinary NSWindow subclass, so it repeats the attachment ivar and window-policy overrides and the adapter resolves the attachment through one helper shared by both classes.
+Utility collection behavior excludes the panel from window cycling and lets it share a Space with a full-screen window.
+Transparent surfaces make the panel non-opaque with a clear background and no shadow; the Core Graphics renderer then erases stale content with CGContextClearRect instead of painting the opaque fallback fill, on both the direct and backdrop paths.
+Passive display orders the panel front without making it key, keeps the application unactivated, and uses tracking areas that stay active without key status.
+Stacking maps to NSWindowLevel floating and normal, and geometry requests convert between AppKit's bottom-left global origin and the contract's top-left logical origin through the primary screen frame, preserving the client-area top-left corner when resizing.
+Whole-window input exclusion combines modal blocking and requested passthrough in one ignoresMouseEvents publication and cancels the active pointer sequence; AppKit supports it on every attachment.
+BeginMove runs performWindowDragWithEvent: one native turn after the request, from the pointer-down event the adapter retains; it is rejected without such a trigger, and without a still-pressed button the native drag completes without a modal tracking loop.
+The work area is the current screen's visibleFrame converted to logical coordinates.
+macOS native validation beyond CI requires interactive dragging behind another application, Screen Capture-quality alpha over varied backgrounds, Space and full-screen transitions, and multiple displays.
+
 Acceptance requires real desktop composition, partial-alpha edges, another process receiving excluded clicks, passive focus, normal settings focus, resizing, DPI changes, device recreation, and repeated retirement.
 Offscreen pixels, window styles, and successful compilation are supporting checks rather than substitutes for those native observations.
-Other desktop hosts retain explicit unavailable results until equivalent native operations and qualification are provided.
+Other desktop hosts, including the GTK backend under separate work, retain explicit unavailable results until equivalent native operations and qualification are provided.

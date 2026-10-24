@@ -60,13 +60,18 @@ endforeach ()
 add_executable(huxerui_macos_native_tests
         "${HUXERUI_TEST_DIR}/tests_main.cpp"
         multi_window_native.mm
+        floating_window_native.mm
 )
 target_compile_features(huxerui_macos_native_tests PRIVATE cxx_std_20)
 target_compile_options(huxerui_macos_native_tests PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(huxerui_macos_native_tests PRIVATE
         HuxerUI3p::Catch2 ${HUXERUI_TEST_LIBRARY} "-framework AppKit" "-framework Foundation"
 )
-set_source_files_properties(multi_window_native.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+set_source_files_properties(
+        multi_window_native.mm
+        floating_window_native.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+)
 set_target_properties(huxerui_macos_native_tests PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "org.huxerui.tests.multi-window"
@@ -78,6 +83,8 @@ foreach (native_case IN ITEMS
         WindowCloseWaitsForKeyDispatchToReturn
         ApplicationModalsStackAndCoverNewWindows
         RetirementKeepsWindowlessRuntimeAliveAndCanReopen
+        FloatingUtilityWindowsPresentAlphaGeometryAndStacking
+        FloatingWindowPassthroughAndNativeMoveKeepInputContracts
 )
     add_test(NAME "HuxerUIMacOSNative${native_case}"
             COMMAND huxerui_macos_native_tests "MacNative${native_case}")

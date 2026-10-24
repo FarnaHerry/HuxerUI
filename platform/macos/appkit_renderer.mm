@@ -2008,6 +2008,10 @@ void AppKitRenderer::RenderCommand(CGContextRef context, const PlacePlatformView
   static_cast<void>(command);
 }
 
+void AppKitRenderer::SetTransparentSurface(bool transparent) noexcept {
+  transparent_surface_ = transparent;
+}
+
 void AppKitRenderer::Draw(CGContextRef context, CGRect dirty_rect, const RenderFrame* frame, CGRect viewport) {
   state_->PruneExternalTextures();
   if (frame != nullptr) {
@@ -2025,8 +2029,13 @@ void AppKitRenderer::Draw(CGContextRef context, CGRect dirty_rect, const RenderF
     CGContextRestoreGState(context);
     return;
   }
-  SetFillColor(context, Color::Rgb(247, 248, 250));
-  CGContextFillRect(context, dirty_rect);
+  if (transparent_surface_) {
+    // A transparent window surface must erase stale content instead of painting the opaque fallback.
+    CGContextClearRect(context, dirty_rect);
+  } else {
+    SetFillColor(context, Color::Rgb(247, 248, 250));
+    CGContextFillRect(context, dirty_rect);
+  }
   if (frame != nullptr && frame->scene.root != nullptr) {
     RenderSceneNode(*frame->scene.root, context, nullptr);
   }
@@ -2054,8 +2063,12 @@ void AppKitRenderer::DrawBackdropFrame(CGContextRef context, CGRect viewport, co
   const Rect bitmap_rect{static_cast<float>(viewport.origin.x), static_cast<float>(viewport.origin.y),
       static_cast<float>(width / scale_x), static_cast<float>(height / scale_y)};
   if (draw_background) {
-    SetFillColor(bitmap.Get(), Color::Rgb(247, 248, 250));
-    CGContextFillRect(bitmap.Get(), CGRectMake(bitmap_rect.x, bitmap_rect.y, bitmap_rect.width, bitmap_rect.height));
+    if (transparent_surface_) {
+      CGContextClearRect(bitmap.Get(), CGRectMake(bitmap_rect.x, bitmap_rect.y, bitmap_rect.width, bitmap_rect.height));
+    } else {
+      SetFillColor(bitmap.Get(), Color::Rgb(247, 248, 250));
+      CGContextFillRect(bitmap.Get(), CGRectMake(bitmap_rect.x, bitmap_rect.y, bitmap_rect.width, bitmap_rect.height));
+    }
   }
   state_->backdrop_frame = true;
   state_->backdrop_group_bytes = CGBitmapContextGetBytesPerRow(bitmap.Get()) * height;
@@ -2106,8 +2119,13 @@ void AppKitRenderer::DrawSlice(
     return;
   }
   if (draw_background) {
-    SetFillColor(context, Color::Rgb(247, 248, 250));
-    CGContextFillRect(context, dirty_rect);
+    if (transparent_surface_) {
+      // A transparent window surface must erase stale content instead of painting the opaque fallback.
+      CGContextClearRect(context, dirty_rect);
+    } else {
+      SetFillColor(context, Color::Rgb(247, 248, 250));
+      CGContextFillRect(context, dirty_rect);
+    }
   }
   if (frame != nullptr && frame->scene.root != nullptr && command_count > 0) {
     CommandRange range{first_command, first_command + command_count, 0};

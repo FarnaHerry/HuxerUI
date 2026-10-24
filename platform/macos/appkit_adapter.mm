@@ -108,9 +108,27 @@ NSCursor* MacPointerCursor(huxerui::PointerCursorKind kind) {
   return NSCursor.arrowCursor;
 }
 
+/// AppKit global coordinates anchor the origin at the primary screen's bottom-left corner with Y increasing upward;
+/// the public window contract uses logical coordinates with X increasing right and Y down from the primary screen's
+/// top-left corner. AppKit points already are logical units, so only the Y axis flips.
+std::optional<NSRect> MacPrimaryScreenFrame() {
+  NSArray<NSScreen*>* screens = NSScreen.screens;
+  if (screens.count == 0) return std::nullopt;
+  return screens.firstObject.frame;
+}
+
 } // namespace
 
 @interface HuxerUIWindow : NSWindow {
+@public
+  huxerui::detail::MacUiWindow* huxeruiWindow;
+}
+@end
+
+/// Hosts passive-display and utility windows. NSPanel carries the nonactivating window style that keeps pointer input
+/// from implicitly activating the application; because it cannot share HuxerUIWindow's NSWindow superclass, it repeats
+/// the attachment ivar and the window-policy overrides.
+@interface HuxerUIPanel : NSPanel {
 @public
   huxerui::detail::MacUiWindow* huxeruiWindow;
 }
@@ -230,6 +248,22 @@ NSCursor* MacPointerCursor(huxerui::PointerCursorKind kind) {
 @end
 
 namespace huxerui::detail {
+
+/// Reads the HuxerUI attachment from any HuxerUI-owned window or panel; null for foreign windows.
+MacUiWindow* MacWindowAttachment(NSWindow* window) {
+  if ([window isKindOfClass:HuxerUIWindow.class]) return static_cast<HuxerUIWindow*>(window)->huxeruiWindow;
+  if ([window isKindOfClass:HuxerUIPanel.class]) return static_cast<HuxerUIPanel*>(window)->huxeruiWindow;
+  return nullptr;
+}
+
+/// Binds or clears the attachment pointer on a HuxerUI-owned window or panel.
+void SetMacWindowAttachment(NSWindow* window, MacUiWindow* attached) {
+  if ([window isKindOfClass:HuxerUIWindow.class]) {
+    static_cast<HuxerUIWindow*>(window)->huxeruiWindow = attached;
+  } else if ([window isKindOfClass:HuxerUIPanel.class]) {
+    static_cast<HuxerUIPanel*>(window)->huxeruiWindow = attached;
+  }
+}
 
 GestureSettings MacGestureDefaults() noexcept {
   GestureSettings settings;
@@ -553,19 +587,42 @@ public:
       renderer_ = std::make_unique<AppKitRenderer>();
       const Size initial_size = ResolveInitialWindowSize(options);
       const NSRect frame = NSMakeRect(0.0, 0.0, initial_size.width, initial_size.height);
-      custom_chrome_ = options.chrome_mode == WindowChromeMode::Custom;
+      utility_window_ = options.presentation == WindowPresentation::Utility;
+      transparent_surface_ = options.transparent_surface;
+      passive_display_ = options.show_without_activation;
+      custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
       custom_title_bar_height_ = options.title_bar_height;
+      minimum_size_ = options.minimum_size;
+      renderer_->SetTransparentSurface(transparent_surface_);
       NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
                                 NSWindowStyleMaskResizable;
       if (custom_chrome_) {
         style |= NSWindowStyleMaskFullSizeContentView;
       }
-      window_ = [[HuxerUIWindow alloc] initWithContentRect:frame
-                                                 styleMask:style
-                                                   backing:NSBackingStoreBuffered
-                                                     defer:NO];
+      if (utility_window_) {
+        // A utility helper is a borderless, non-resizable surface without native title-bar metrics.
+        style = NSWindowStyleMaskBorderless;
+      }
+      if (passive_display_) {
+        // Nonactivating style is reserved for NSPanel and keeps pointer input from activating the application.
+        style |= NSWindowStyleMaskNonactivatingPanel;
+      }
+      if (utility_window_ || passive_display_) {
+        HuxerUIPanel* panel = [[HuxerUIPanel alloc] initWithContentRect:frame
+                                                                styleMask:style
+                                                                  backing:NSBackingStoreBuffered
+                                                                    defer:NO];
+        window_ = panel;
+        if (window_ != nil) panel->huxeruiWindow = this;
+      } else {
+        HuxerUIWindow* host = [[HuxerUIWindow alloc] initWithContentRect:frame
+                                                                styleMask:style
+                                                                  backing:NSBackingStoreBuffered
+                                                                    defer:NO];
+        window_ = host;
+        if (window_ != nil) host->huxeruiWindow = this;
+      }
       if (window_ == nil) throw std::runtime_error("HuxerUI could not create an AppKit window");
-      window_->huxeruiWindow = this;
       window_.releasedWhenClosed = NO;
       if (options.minimum_size.has_value()) {
         window_.contentMinSize = NSMakeSize(options.minimum_size->width, options.minimum_size->height);
@@ -573,6 +630,20 @@ public:
       window_.title = [NSString stringWithUTF8String:options.title.c_str()];
       window_.acceptsMouseMovedEvents = YES;
       window_.delegate = static_cast<id<NSWindowDelegate>>(application.delegate);
+      if (utility_window_) {
+        NSWindowCollectionBehavior behavior = window_.collectionBehavior;
+        // Utility helpers stay out of window cycling and can share a Space with a full-screen window.
+        behavior |= NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary;
+        window_.collectionBehavior = behavior;
+      }
+      if (transparent_surface_) {
+        window_.opaque = NO;
+        window_.backgroundColor = NSColor.clearColor;
+        window_.hasShadow = NO;
+      }
+      if (options.topmost) {
+        window_.level = NSFloatingWindowLevel;
+      }
       if (custom_chrome_) {
         window_.titleVisibility = NSWindowTitleHidden;
         window_.titlebarAppearsTransparent = YES;
@@ -597,12 +668,22 @@ public:
                                                object:nil];
       platform_views_ = std::make_unique<AppKitPlatformViews>(*renderer_, PlatformRegistry(), *this, window_);
       accessibility_ = std::make_unique<MacAccessibility>(*this, view_, *platform_views_);
-      [window_ center];
-      [window_ makeKeyAndOrderFront:nil];
-      [window_ makeFirstResponder:view_];
+      if (options.initial_position.has_value()) {
+        ApplyWindowContentOrigin(*options.initial_position);
+      } else {
+        [window_ center];
+      }
+      if (passive_display_) {
+        [window_ orderFront:nil];
+      } else {
+        [window_ makeKeyAndOrderFront:nil];
+        [window_ makeFirstResponder:view_];
+      }
       UiWindow::UpdateResourceConfiguration(Configuration());
 
-      [application activateIgnoringOtherApps:YES];
+      if (!passive_display_) {
+        [application activateIgnoringOtherApps:YES];
+      }
       UpdateWindowLifecycleState();
       UpdateWindowMetrics({
           static_cast<float>(view_.bounds.size.width),
@@ -623,7 +704,8 @@ public:
     if (view_ != nil) {
       view_->huxeruiWindow = nullptr;
     }
-    if (window_ != nil) window_->huxeruiWindow = nullptr;
+    if (window_ != nil) SetMacWindowAttachment(window_, nullptr);
+    window_drag_event_ = nil;
     [frame_scheduler_ shutdown];
     frame_scheduler_ = nil;
     scheduled_frame_deadline_.reset();
@@ -655,11 +737,12 @@ public:
     if (closing_ || !IsInitialized()) return;
     closing_ = true;
     // Keep input and native bindings alive until the originating AppKit callback returns.
-    __weak HuxerUIWindow* window = window_;
+    __weak NSWindow* window = window_;
     runtime_->PostNativeTask([window] {
-      HuxerUIWindow* live_window = window;
-      if (live_window != nil && live_window->huxeruiWindow != nullptr) {
-        live_window->huxeruiWindow->FinishClose();
+      NSWindow* live_window = window;
+      MacUiWindow* attachment = live_window == nil ? nullptr : MacWindowAttachment(live_window);
+      if (attachment != nullptr) {
+        attachment->FinishClose();
       }
     });
   }
@@ -704,7 +787,7 @@ public:
     static_cast<void>(modal);
     if (input_blocked_ == blocked) return;
     input_blocked_ = blocked;
-    window_.ignoresMouseEvents = blocked;
+    ApplyMouseEvents();
     if (blocked) {
       if (pointer_dispatching_) {
         pointer_cancel_pending_ = true;
@@ -850,6 +933,113 @@ public:
     }
     [window_ performWindowDragWithEvent:event];
     return true;
+  }
+
+  /// Retains the pointer-down event that later native window dragging would resume from.
+  void CaptureWindowDragEvent(NSEvent* event) noexcept {
+    window_drag_event_ = event;
+  }
+
+  /// Reports whether this attachment uses the borderless helper presentation.
+  [[nodiscard]] bool IsUtilityWindow() const noexcept {
+    return utility_window_;
+  }
+
+  WindowCapabilities NativeWindowCapabilities() const override {
+    // AppKit has no backend split: every attachment exposes the same native window operations.
+    return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
+            .topmost = true, .geometry = true, .native_move = true, .input_passthrough = true};
+  }
+
+  WindowRequestResult RequestWindowTopmost(bool topmost) override {
+    if (window_ == nil || closing_) return WindowRequestResult::Rejected;
+    window_.level = topmost ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    return WindowRequestResult::Submitted;
+  }
+
+  WindowRequestResult RequestWindowPosition(Point position) override {
+    if (window_ == nil || closing_ || (window_.styleMask & NSWindowStyleMaskFullScreen) != 0) {
+      return WindowRequestResult::Rejected;
+    }
+    const std::optional<NSRect> primary = MacPrimaryScreenFrame();
+    if (!primary.has_value()) return WindowRequestResult::Rejected;
+    NSRect content = [window_ contentRectForFrameRect:window_.frame];
+    content.origin.x = static_cast<CGFloat>(position.x);
+    content.origin.y = primary->size.height - static_cast<CGFloat>(position.y) - content.size.height;
+    [window_ setFrameOrigin:[window_ frameRectForContentRect:content].origin];
+    return WindowRequestResult::Submitted;
+  }
+
+  WindowRequestResult RequestWindowSize(Size size) override {
+    if (window_ == nil || closing_ || (window_.styleMask & NSWindowStyleMaskFullScreen) != 0) {
+      return WindowRequestResult::Rejected;
+    }
+    if (minimum_size_.has_value()) {
+      size.width = std::max(size.width, minimum_size_->width);
+      size.height = std::max(size.height, minimum_size_->height);
+    }
+    const NSSize content_size = NSMakeSize(std::max<CGFloat>(1.0, size.width), std::max<CGFloat>(1.0, size.height));
+    NSRect content = [window_ contentRectForFrameRect:window_.frame];
+    // Keep the client area's top-left corner fixed, matching the Win32 SWP_NOMOVE behavior.
+    NSRect desired = NSMakeRect(content.origin.x, NSMaxY(content) - content_size.height, content_size.width,
+                                content_size.height);
+    [window_ setFrame:[window_ frameRectForContentRect:desired] display:YES];
+    return WindowRequestResult::Submitted;
+  }
+
+  WindowRequestResult RequestWindowInputPassthrough(bool passthrough) override {
+    if (window_ == nil || closing_) return WindowRequestResult::Rejected;
+    if (input_passthrough_ == passthrough) return WindowRequestResult::Submitted;
+    input_passthrough_ = passthrough;
+    ApplyMouseEvents();
+    if (passthrough) [view_ cancelPointer];
+    return WindowRequestResult::Submitted;
+  }
+
+  WindowRequestResult RequestWindowMove() override {
+    if (window_ == nil || view_ == nil || closing_ || input_blocked_ ||
+        (window_.styleMask & NSWindowStyleMaskFullScreen) != 0) {
+      return WindowRequestResult::Rejected;
+    }
+    NSEvent* trigger = window_drag_event_;
+    if (trigger == nil || trigger.window != window_) return WindowRequestResult::Rejected;
+    // The native drag runs one native turn later so it cannot dismantle the in-flight pointer callback.
+    __weak NSWindow* window = window_;
+    __strong NSEvent* event = trigger;
+    runtime_->PostNativeTask([window, event] {
+      NSWindow* live_window = window;
+      if (live_window == nil || MacWindowAttachment(live_window) == nullptr) return;
+      // performWindowDragWithEvent: only tracks while its initiating button stays pressed; without that live
+      // pointer state the request has no native drag to resume and completes without a modal tracking loop.
+      if ([NSEvent pressedMouseButtons] == 0) return;
+      [live_window performWindowDragWithEvent:event];
+    });
+    return WindowRequestResult::Submitted;
+  }
+
+  std::optional<Rect> WindowWorkArea() const override {
+    if (window_ == nil) return std::nullopt;
+    NSScreen* screen = window_.screen != nil ? window_.screen : NSScreen.mainScreen;
+    const std::optional<NSRect> primary = MacPrimaryScreenFrame();
+    if (screen == nil || !primary.has_value()) return std::nullopt;
+    const NSRect visible = screen.visibleFrame;
+    return Rect{
+        static_cast<float>(visible.origin.x),
+        static_cast<float>(primary->size.height - NSMaxY(visible)),
+        static_cast<float>(visible.size.width),
+        static_cast<float>(visible.size.height),
+    };
+  }
+
+  std::optional<Point> WindowScreenOrigin() const override {
+    if (window_ == nil) return std::nullopt;
+    const std::optional<NSRect> primary = MacPrimaryScreenFrame();
+    if (!primary.has_value()) return std::nullopt;
+    const NSRect content = [window_ contentRectForFrameRect:window_.frame];
+    return Point{
+        static_cast<float>(content.origin.x),
+        static_cast<float>(primary->size.height - NSMaxY(content)),
+    };
   }
 
   void UpdateWindowMetrics(Size viewport) {
@@ -1039,6 +1229,23 @@ public:
   }
 
 private:
+  /// Publishes the combined whole-window input exclusion state: modal blocking or requested passthrough.
+  void ApplyMouseEvents() noexcept {
+    if (window_ != nil) {
+      window_.ignoresMouseEvents = input_blocked_ || input_passthrough_;
+    }
+  }
+
+  /// Places the window frame so the content view's top-left corner lands on the requested logical screen point.
+  void ApplyWindowContentOrigin(Point position) {
+    const std::optional<NSRect> primary = MacPrimaryScreenFrame();
+    if (window_ == nil || !primary.has_value()) return;
+    NSRect content = [window_ contentRectForFrameRect:window_.frame];
+    content.origin.x = static_cast<CGFloat>(position.x);
+    content.origin.y = primary->size.height - static_cast<CGFloat>(position.y) - content.size.height;
+    [window_ setFrameOrigin:[window_ frameRectForContentRect:content].origin];
+  }
+
   float SystemTitleBarHeight(Size viewport) const noexcept {
     if (window_ == nil || view_ == nil) {
       return 0.0F;
@@ -1180,10 +1387,16 @@ private:
 
   std::unique_ptr<AppKitRenderer> renderer_;
   bool custom_chrome_ = false;
+  bool utility_window_ = false;
+  bool transparent_surface_ = false;
+  bool passive_display_ = false;
+  bool input_passthrough_ = false;
+  std::optional<Size> minimum_size_;
   float custom_title_bar_height_ = 0.0F;
-  __strong HuxerUIWindow* window_ = nil;
+  __strong NSWindow* window_ = nil;
   __strong HuxerUIView* view_ = nil;
   __strong HuxerUIFrameScheduler* frame_scheduler_ = nil;
+  __strong NSEvent* window_drag_event_ = nil;
   std::unique_ptr<MacTextInput> text_input_;
   std::unique_ptr<MacAccessibility> accessibility_;
   std::unique_ptr<AppKitPlatformViews> platform_views_;
@@ -1208,8 +1421,7 @@ std::unique_ptr<UiWindow> MacRuntime::CreateNativeWindow(const WindowOptions& op
 
 void MacRuntime::WindowsActivityChanged(std::optional<bool> active) {
   for (NSWindow* window in NSApplication.sharedApplication.windows) {
-    if (![window isKindOfClass:HuxerUIWindow.class]) continue;
-    MacUiWindow* ui = static_cast<HuxerUIWindow*>(window)->huxeruiWindow;
+    MacUiWindow* ui = MacWindowAttachment(window);
     if (ui == nullptr) continue;
     if (active.has_value()) ui->ApplicationActiveChanged(*active);
     else ui->UpdateWindowLifecycleState();
@@ -1257,12 +1469,57 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 /// A window blocked by a window-level modal refuses key status so input stays with the modal chain.
+/// Borderless utility windows would otherwise refuse key status entirely, so an unblocked utility attachment accepts
+/// it; explicit activation then reaches the shared text-input responder chain.
 - (BOOL)canBecomeKeyWindow {
-  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeKeyWindow];
+  if (huxeruiWindow == nullptr) return [super canBecomeKeyWindow];
+  if (huxeruiWindow->IsInputBlocked()) return NO;
+  if (huxeruiWindow->IsUtilityWindow()) return YES;
+  return [super canBecomeKeyWindow];
 }
 
 - (BOOL)canBecomeMainWindow {
-  return (huxeruiWindow == nullptr || !huxeruiWindow->IsInputBlocked()) && [super canBecomeMainWindow];
+  if (huxeruiWindow == nullptr) return [super canBecomeMainWindow];
+  if (huxeruiWindow->IsInputBlocked()) return NO;
+  if (huxeruiWindow->IsUtilityWindow()) return NO;
+  return [super canBecomeMainWindow];
+}
+
+@end
+
+@implementation HuxerUIPanel
+
+- (void)sendEvent:(NSEvent*)event {
+  std::optional<huxerui::detail::MacNativeInputGuard> input_guard;
+  if (huxeruiWindow != nullptr) {
+    if (huxeruiWindow->IsInputBlocked()) return;
+    input_guard.emplace(huxeruiWindow->NativeRuntime());
+  }
+  if (huxeruiWindow == nullptr || !huxeruiWindow->BeginPlatformViewFocusTraversal(event)) {
+    [super sendEvent:event];
+    return;
+  }
+  @try {
+    [super sendEvent:event];
+  } @finally {
+    if (huxeruiWindow != nullptr) huxeruiWindow->EndPlatformViewFocusTraversal();
+  }
+}
+
+/// Mirrors HuxerUIWindow's policy: blocked panels refuse key status, and a borderless utility panel that would
+/// otherwise refuse key status entirely accepts it so explicit activation reaches the text-input responder chain.
+- (BOOL)canBecomeKeyWindow {
+  if (huxeruiWindow == nullptr) return [super canBecomeKeyWindow];
+  if (huxeruiWindow->IsInputBlocked()) return NO;
+  if (huxeruiWindow->IsUtilityWindow()) return YES;
+  return [super canBecomeKeyWindow];
+}
+
+- (BOOL)canBecomeMainWindow {
+  if (huxeruiWindow == nullptr) return [super canBecomeMainWindow];
+  if (huxeruiWindow->IsInputBlocked()) return NO;
+  if (huxeruiWindow->IsUtilityWindow()) return NO;
+  return [super canBecomeMainWindow];
 }
 
 @end
@@ -1451,9 +1708,12 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   if (huxeruiTrackingArea != nil) {
     [self removeTrackingArea:huxeruiTrackingArea];
   }
+  NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingInVisibleRect;
+  // A passive utility window often never becomes key; hover tracking must not depend on key status there.
+  options |= huxeruiWindow != nullptr && huxeruiWindow->IsUtilityWindow() ? NSTrackingActiveAlways
+                                                                          : NSTrackingActiveInKeyWindow;
   huxeruiTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
-                                                     options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved |
-                                                             NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+                                                     options:options
                                                        owner:self
                                                     userInfo:nil];
   [self addTrackingArea:huxeruiTrackingArea];
@@ -1544,8 +1804,11 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)mouseDown:(NSEvent*)event {
-  if (huxeruiWindow != nullptr && huxeruiWindow->BeginWindowDrag(event)) {
-    return;
+  if (huxeruiWindow != nullptr) {
+    huxeruiWindow->CaptureWindowDragEvent(event);
+    if (huxeruiWindow->BeginWindowDrag(event)) {
+      return;
+    }
   }
   [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
@@ -1569,6 +1832,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
+  if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(event);
   [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
@@ -1582,6 +1846,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)otherMouseDown:(NSEvent*)event {
+  if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(event);
   [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
@@ -1777,12 +2042,12 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (BOOL)windowShouldClose:(NSWindow*)sender {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(sender)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(sender);
   return huxeruiWindow == nullptr || huxeruiWindow->AllowWindowRequest(huxerui::WindowCommand::Close);
 }
 
 - (BOOL)windowShouldMiniaturize:(NSWindow*)sender {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(sender)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(sender);
   return huxeruiWindow == nullptr || huxeruiWindow->AllowWindowRequest(huxerui::WindowCommand::Minimize);
 }
 
@@ -1826,28 +2091,28 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)windowDidMove:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->InvalidateTextInputGeometry();
   }
 }
 
 - (void)windowDidUpdate:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->SynchronizePlatformViewFocus();
   }
 }
 
 - (void)windowDidResize:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->WindowGeometryChanged();
   }
 }
 
 - (void)windowDidChangeScreen:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->UpdateResourceConfiguration();
     huxeruiWindow->WindowGeometryChanged();
@@ -1855,14 +2120,14 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)windowDidEnterFullScreen:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->WindowGeometryChanged();
   }
 }
 
 - (void)windowDidExitFullScreen:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) {
     huxeruiWindow->WindowGeometryChanged();
   }
@@ -1879,27 +2144,27 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)windowDidBecomeKey:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidResignKey:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidMiniaturize:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidDeminiaturize:(NSNotification*)notification {
-  auto* huxeruiWindow = static_cast<HuxerUIWindow*>(notification.object)->huxeruiWindow;
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
   if (huxeruiWindow != nullptr) huxeruiWindow->UpdateWindowLifecycleState();
 }
 - (void)windowWillClose:(NSNotification*)notification {
-  auto* window = static_cast<HuxerUIWindow*>(notification.object);
-  if (window->huxeruiWindow != nullptr) window->huxeruiWindow->NativeWindowClosed();
+  auto* huxeruiWindow = huxerui::detail::MacWindowAttachment(static_cast<NSWindow*>(notification.object));
+  if (huxeruiWindow != nullptr) huxeruiWindow->NativeWindowClosed();
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {

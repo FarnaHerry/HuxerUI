@@ -26,8 +26,9 @@ See [Local Notifications](../design/local-notifications.md) for authorization, a
 `WindowOptions::initial_position` requests the initial client-area origin in logical screen coordinates: X increases to the right and Y downwards, with negative coordinates allowed for monitors left of or above the primary display.
 The client origin is the point corresponding to `{0, 0}` in the window's content coordinates; native title bars, borders, and shadows are excluded.
 Windows applies this preference using the native display scale; the window manager may constrain placement.
+macOS applies this preference through AppKit and reports positions in the same logical coordinates.
 Linux/X11 has a placement implementation, but its origin consistency, scaling, and native lifecycle still require separate Linux maintainer validation.
-Wayland, the macOS multi-window preview, and host-managed mobile and Web surfaces use platform placement instead.
+Wayland and host-managed mobile and Web surfaces use platform placement instead.
 
 ```cpp
 const WindowHandle secondary = application.OpenWindow({
@@ -40,14 +41,14 @@ const std::optional<Point> origin = secondary.Position();
 
 `WindowHandle::Position()` reads that same client origin synchronously on the application thread.
 It is a snapshot: reading it during composition does not subscribe to window moves or trigger recomposition when the user moves the window.
-It returns `std::nullopt` after retirement and on hosts that do not expose positions, including Wayland and the macOS preview.
+It returns `std::nullopt` after retirement and on hosts that do not expose positions, including Wayland.
 Initial positions must be finite; NaN and infinity throw `std::invalid_argument`, including on hosts that ignore placement.
 On Windows, conversion to native coordinates checks the signed integer range before narrowing and reserves the default-placement sentinel.
 Positions that become unrepresentable after DPI and decoration adjustment throw `std::invalid_argument`; ordinary negative positions remain valid.
 
 ## Floating utility windows
 
-Windows supports `WindowPresentation::Utility` for a borderless, non-resizable window excluded from task switching.
+Windows and macOS support `WindowPresentation::Utility` for a borderless, non-resizable window excluded from task or window switching.
 Set `WindowOptions::transparent_surface` for per-pixel transparency, `show_without_activation` for passive display, and `topmost` for an initial above-normal stacking preference.
 These options default to ordinary window behavior; transparency requires Utility presentation.
 The utility, transparency, and passive-display policies are fixed when the native window is created.
@@ -75,6 +76,11 @@ Zero-alpha pixels naturally pass native mouse input through; translucent pixels 
 `SetInputPassthrough(true)` excludes the entire surface without changing its appearance, and restoring input preserves native modal blocking.
 Independent arbitrary shaped input regions remain unavailable; View hit testing and visual alpha are not substitutes for that capability.
 PlatformView hosting is unavailable on the transparent path; ExternalTexture rendering remains usable.
+
+macOS utility windows are borderless non-activating `NSPanel` surfaces excluded from window cycling and able to share a Space with a full-screen window.
+Transparent surfaces make the panel non-opaque with a clear background and no shadow, and the renderer erases stale content with per-pixel alpha instead of the opaque fallback fill.
+Passive display orders the panel front without taking key status, and its non-activating style keeps pointer input from implicitly activating the application.
+`SetInputPassthrough` uses whole-window input exclusion and is available on every attachment; `BeginMove` needs the pointer-down event of the current drag gesture and is rejected without one.
 Open an ordinary settings window and explicitly activate it for keyboard/IME editing.
 See the [desktop pet example](../../examples/desktop_pet/README.md) and [floating-window design](../design/window-chrome.md#floating-utility-windows) for scope and native validation requirements.
 
@@ -179,7 +185,8 @@ If the producer device is removed, publish a replacement texture from a valid de
 The macOS backend requires macOS 12 or later.
 The macOS backend uses AppKit, Core Graphics, Core Text, and `NSTextInputClient`.
 Runtime-created windows, startup `extra_windows`, ownership, modality, and explicit retirement are available as a preview; see [Developing Multi-Window](../development/multi-window.md#macos-preview-validation) for CI coverage and the remaining interactive validation.
-The macOS preview uses AppKit placement and returns `std::nullopt` from `WindowHandle::Position()`; `WindowOptions::initial_position` is not applied.
+macOS applies `WindowOptions::initial_position` through AppKit, and `WindowHandle::Position()` reports the client-area origin in logical screen coordinates with the contract's top-left origin.
+Transparent utility windows, passive display, topmost stacking, geometry requests, whole-window input passthrough, and drag-initiated native moves are available as described under [Floating utility windows](#floating-utility-windows).
 Build with Xcode 26 or later and the macOS SDK; release CI uses Xcode 26.2. This toolchain requirement does not raise the macOS 12 deployment target.
 
 Custom chrome extends application content into the title bar while preserving AppKit traffic lights and window behavior.

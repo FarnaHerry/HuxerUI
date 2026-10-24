@@ -66,7 +66,7 @@ jobs:
             huxerui_unit_tests huxerui_runtime_tests huxerui_ui_tests huxerui_library_tests \
             huxerui_codegen_tests huxerui_codegen_runtime_tests huxerui_macos_tests \
             huxerui_header_checks huxerui_macos_header_checks \
-            example_multi_window example_window_relationship
+            example_multi_window example_window_relationship example_desktop_pet
       - name: Common and codegen suites
         run: |
           ctest --test-dir build --output-on-failure -L common
