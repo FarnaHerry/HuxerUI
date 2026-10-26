@@ -29,6 +29,7 @@ User guides describe the current public SDK, development guides cover this repos
 - [Desktop Pet Example](../examples/desktop_pet/README.md): a Windows assistant orb with retained wave animation, transparent utility presentation, passive display, native input passthrough, and tray recovery.
 - [Farna graphics TODO](development/farna-graphics-todo.md): downstream-only future work for compositing, glass primitives, and backend qualification; not an upstream roadmap.
 - [Farna floating-window and desktop-assistant TODO](development/farna-desktop-assistant-todo.md): delivered Windows baseline, validation limits, remaining foundations, and optional native services; not an upstream roadmap.
+- [Farna Linux accessibility TODO](development/farna-linux-accessibility-todo.md): downstream plans to bridge existing semantics to Linux accessibility, with GTK compatibility decisions and interactive Linux validation gates.
 - [SDK Packaging](development/sdk-packaging.md): produce and validate release-ready SDK archives.
 
 ## Design reference

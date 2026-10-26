@@ -1542,7 +1542,7 @@ struct Win32Renderer::State {
       clip_stack_.clear();
       device_context_->SetTarget(group_target.Get());
       active_target_ = group_target;
-      device_context_->Clear(D2D1::ColorF(0.0F, 0.0F));
+      device_context_->Clear(D2D1::ColorF(0.0F, 0.0F, 0.0F, 0.0F));
     } else if (opacity < 1.0F) {
       ThrowIfFailed(
           device_context_->CreateLayer(nullptr, opacity_layer.GetAddressOf()),
@@ -1680,7 +1680,7 @@ struct Win32Renderer::State {
     if (!clip_stack_.empty()) {
       const ComPtr<ID2D1Bitmap1> mask_target = CreateBackdropTarget();
       device_context_->SetTarget(mask_target.Get());
-      device_context_->Clear(D2D1::ColorF(0.0F, 0.0F));
+      device_context_->Clear(D2D1::ColorF(0.0F, 0.0F, 0.0F, 0.0F));
       ResumeClips();
       D2D1_MATRIX_3X2_F current;
       device_context_->GetTransform(&current);

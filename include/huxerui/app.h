@@ -898,11 +898,11 @@ public:
   /// native cascade only.
   /// @param owner New owner window of this native attachment, or null for an independent window.
   /// Called on the application thread. The default ignores the request on hosts without native ownership.
-  virtual void ApplyWindowOwnership(UiWindow* owner) {}
+  virtual void ApplyWindowOwnership([[maybe_unused]] UiWindow* owner) {}
   /// Applies the derived modal state of this window. A window is modal when its relationship says so and blocked
   /// while any live modal window covers it; the Runtime computes both and pushes every change.
   /// Called on the application thread. The default ignores the request on hosts without native modality.
-  virtual void ApplyWindowModalState(bool modal, bool blocked) {}
+  virtual void ApplyWindowModalState([[maybe_unused]] bool modal, [[maybe_unused]] bool blocked) {}
   /// Updates native system-bar foreground contrast on the application thread.
   /// The first SystemBarContentBrightness argument describes the status bar; the second describes the navigation bar.
   /// The UI paints backgrounds separately. Hosts without these system bars may ignore the request.

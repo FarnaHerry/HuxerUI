@@ -269,9 +269,9 @@ TEST_CASE("Win32RuntimeWindowsOpenAndCloseWithoutRetainingHandles", "[.][win32-n
     auto placement_result = placement->get_future();
     {
       std::lock_guard lock(test_state_mutex);
-      const ApplicationHandle application = *captured_application;
-      application_dispatch([application, secondary_title_narrow, preferred_origin, placement, cycle] {
-        const WindowHandle window = application.OpenWindow({
+      const ApplicationHandle application_handle = *captured_application;
+      application_dispatch([application_handle, secondary_title_narrow, preferred_origin, placement, cycle] {
+        const WindowHandle window = application_handle.OpenWindow({
             .title = secondary_title_narrow,
             .initial_size = {320.0F, 220.0F},
             .initial_position = preferred_origin,

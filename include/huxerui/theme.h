@@ -572,8 +572,8 @@ struct RefreshBoxStyle {
   float refresh_distance = 56.0F;
   /// Whether the pull displaces the content itself. `true` keeps the classic behavior (the whole page
   /// slides down under the finger and stays pulled while refreshing); `false` leaves the content exactly
-  /// where it is — the pull is still tracked and reported, but its overscroll no longer moves the
-  /// descendants — and only moves the circular indicator. The "content stays put" pull-to-refresh look.
+  /// where it is. The pull is still tracked and reported, but its overscroll only moves the circular
+  /// indicator, leaving descendants in place for the "content stays put" pull-to-refresh look.
   bool move_content = true;
   /// Motion used to reveal or settle the retained displacement.
   TweenSpec settle_motion{0.2, Easing::EaseOut};
