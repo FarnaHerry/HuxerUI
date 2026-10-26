@@ -16,7 +16,7 @@
 
 namespace huxerui::detail {
 
-// Embedded and quiet runs have no local window. Passive runs may still display progress.
+// Embedded and quiet runs have no visible interface. Burn still receives a hidden native window.
 [[nodiscard]] inline bool InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY display) {
   return display == BOOTSTRAPPER_DISPLAY_EMBEDDED || display == BOOTSTRAPPER_DISPLAY_NONE;
 }

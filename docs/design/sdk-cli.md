@@ -462,6 +462,7 @@ Its Task is launched from the interface's composition-owned `TaskScope`, whose q
 
 Burn callbacks publish immutable status changes through the Windows UI dispatcher before notifying composition dependencies.
 User commands enter Burn from the bootstrapper UI thread, while callback-driven continuation follows Burn's callback thread model.
+Embedded and quiet runs use a hidden top-level native owner HWND without initializing HuxerUI composition. Its owning thread pumps messages until a terminal result, destroys the window, and then calls Burn Quit; detection and apply always receive the live HWND. The thread retains the bootstrapper across synchronous shutdown callbacks, which must not wait for the thread already calling Quit.
 Synchronous engine questions expose one identified prompt at a time; answering a stale prompt has no effect.
 Closing during an active apply requests cancellation and allows Burn to finish rollback before the bootstrapper exits.
 The installer operation is root-owned and never belongs to a component `TaskScope`, because unmounting one component must not cancel a process-wide installation transaction.

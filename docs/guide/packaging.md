@@ -254,7 +254,7 @@ Both installed states support repair and uninstall; a surviving bundle registrat
 `ChooseDestinationAsync()` opens the Windows folder picker from a Task launched by the component's `TaskScope` and returns no value when the user dismisses it.
 `InstallerStatus` is the single observable status value for phase, detected product state, expanded defaults, action, progress, current package, prompt, failure, and restart requirement.
 Runs that leave no user available to click — related-bundle runs embedded by a parent bundle (such as a previous version asked to uninstall itself during an upgrade), quiet or passive displays, or explicit action switches such as `/uninstall` — execute the engine's action automatically after detection and exit when it completes; they never wait on a page, and engine questions carry the engine or parent resolution instead of a local prompt.
-Embedded related-bundle and quiet runs create no installer window. Passive runs may show the installer progress window, while full-display launches retain the normal interface.
+Embedded related-bundle and quiet runs create no visible installer interface. They keep a hidden native owner window and message loop alive through detection, planning, and apply because Burn requires a valid HWND even without local prompts. Passive runs may show the installer progress window, while full-display launches retain the normal interface.
 Interactive launches keep the full page flow, including the newer-version gate that blocks downgrade attempts.
 Do not use this API in the ordinary application executable or introduce another installer state store beside it.
 

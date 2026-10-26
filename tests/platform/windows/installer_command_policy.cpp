@@ -3,6 +3,7 @@
 #include <huxerui/windows/installer.h>
 
 #include "installer_command_policy.h"
+#include "installer_native_window.h"
 
 namespace huxerui::test {
 
@@ -18,7 +19,24 @@ constexpr BOOTSTRAPPER_RELATION_TYPE kNoRelation = BOOTSTRAPPER_RELATION_NONE;
 
 } // namespace
 
-TEST_CASE("installer display selects a window only when useful", "[installer][windows]") {
+TEST_CASE("installer hidden owner survives message dispatch and is retired on exit", "[installer][windows]") {
+  HWND retired = nullptr;
+  {
+    detail::InstallerNativeWindow window;
+    retired = window.Handle();
+    REQUIRE(IsWindow(retired));
+    CHECK_FALSE(IsWindowVisible(retired));
+    CHECK(GetAncestor(retired, GA_ROOT) == retired);
+    REQUIRE(PostMessageW(retired, WM_NULL, 0, 0));
+    REQUIRE(detail::InstallerNativeWindow::RequestExit(retired, ERROR_INSTALL_USEREXIT));
+    CHECK(window.Run() == ERROR_INSTALL_USEREXIT);
+    CHECK(IsWindow(retired));
+    CHECK_FALSE(IsWindowVisible(retired));
+  }
+  CHECK_FALSE(IsWindow(retired));
+}
+
+TEST_CASE("installer display selects an interface only when useful", "[installer][windows]") {
   CHECK(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_EMBEDDED));
   CHECK(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_NONE));
   CHECK_FALSE(detail::InstallerRunsHeadless(BOOTSTRAPPER_DISPLAY_PASSIVE));
@@ -139,7 +157,7 @@ TEST_CASE("terminal events quit the engine when the window already exited", "[in
           detail::InstallerTerminalAction::CloseWindow);
   }
 
-  SECTION("headless runs quit without waiting for a window") {
+  SECTION("headless runs quit without waiting for user interaction") {
     CHECK(detail::InstallerTerminalActionFor(/*ui_closed=*/false, /*preempts=*/true, /*headless=*/true) ==
           detail::InstallerTerminalAction::QuitEngine);
   }
