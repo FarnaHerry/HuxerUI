@@ -100,6 +100,24 @@ The example runner accepts `-PhuxeruiExampleProfiling=OFF` for an optimized timi
 Profiling-enabled Android builds expose ATrace sections for backdrop frame replay, hardware raster capture, optical planes, export and export-fence waiting.
 See [Android execution](../guide/testing.md#android-execution) for the resource and runner contract.
 
+### Known Linux test failures
+
+`LinuxTextLayoutCaretHitTestingPreservesAlignedBidiGeometry` remains a known upstream text-layout issue, deferred by maintainer decision.
+At a bidirectional boundary in `abc אבג xyz`, a caret at `(x=82, y=5, height=20)` can round-trip through hit testing to `(x=82, y=0, height=27)` on the development host.
+The Pango backend preserves run-specific cursor extents while hit testing selects candidates mainly by horizontal distance; the test requires the caret's vertical origin to remain stable.
+The relevant hit-test changes and regression test are present in upstream commit `fce6295db4e9c04c8a88ad7bf9a09a69f297b788`; the underlying strong/weak cursor implementation predates it.
+The window integration leaves both the implementation and assertion unchanged.
+A future fix must settle the caret geometry contract and cover bidirectional boundaries, soft wraps, font fallback, and text-input geometry.
+
+The hidden `UiWindow profiling distinguishes mounting invalidation and cached layout` case also reproduces a duplicate-root-service error in the pre-integration Runtime binary.
+Default Runtime tests exclude that hidden case; explicit name or wildcard selection can include it.
+Its failure remains unresolved and must be reported separately from the default Runtime suite.
+
+```bash
+build/bin/huxerui_linux_tests LinuxTextLayoutCaretHitTestingPreservesAlignedBidiGeometry
+build/bin/huxerui_runtime_tests "UiWindow profiling distinguishes mounting invalidation and cached layout"
+```
+
 ## Runtime profiling
 
 For native Windows paint-resource comparisons, use the separate [Windows Paint Benchmark](windows-paint-benchmark.md), which measures submission and GPU timestamps without swap-chain presentation.
