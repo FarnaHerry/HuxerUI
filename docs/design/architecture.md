@@ -71,6 +71,31 @@ Any hook exception propagates after the existing Runtime retirement path release
 Each UiWindow invokes that list during its own initialization before first composition; attaching or replacing a window does not repeat application hooks.
 Both context references are borrowed only for their callback duration, and hook invocation is never triggered by recomposition or foreground/background transitions.
 
+## Top-level window ownership and dispatch
+
+The hosted application has one Runtime and one application thread.
+The platform application runner pumps AppKit, Win32, or GLib once for all windows; UIKit, Android, and browsers supply their own host loop.
+Each UiWindow still owns its input routing, frame requests, composition, layout, and render commits; a shared event queue does not impose a global frame transaction.
+
+`ApplicationHandle::OpenWindow(ViewFactory, WindowOptions)` validates input and timing before invoking the Runtime's native `CreateWindow` override.
+The platform prepares a hidden window and its text, rendering, accessibility, frame, and platform-view facilities before calling `InitializeWindow(runtime, content, options, configuration, lifecycle)`.
+Shared initialization installs a fresh root Environment and window services, runs window hooks, then admits native callbacks.
+Runtime takes unique ownership before presenting the completed window.
+A failed factory or installation unwinds only the partial window; external UI attachments remain owned by their native hosts.
+The initial desktop window follows this same path using the Application declaration's root and options.
+
+A window service supplies observable `IsOpen` state, independent of visibility and foreground state.
+Accepted native or handle-driven closure marks the window closed and stops admitting new native work immediately.
+Runtime queues retirement, with the existing execution context guard retaining an application-level count of active UI calls so nested native loops cannot reclaim a window still on a callback stack.
+Native callback boundaries covering work after shared dispatch also hold that guard.
+The outermost UI return and the end of window installation rearm deferred maintenance; no per-window message queue or public lifetime token is introduced.
+These boundary retries do not throw if the native dispatcher rejects a wake: maintenance remains needed for a later boundary, and an original installation failure is preserved.
+Retirement disconnects component work, event contexts, services, and the retained content factory before native facilities are destroyed.
+
+After reclaiming closed owned windows, Runtime requests shutdown only when at least one was removed, none remain, and `quit_on_last_window_closed` is true.
+Explicit Quit uses the same safe boundary and bypasses close interception, retiring all attached UI state and owned native windows before application tasks and services.
+Windows URL, file, and notification activation is received by the Runtime's hidden facilities HWND, whose identity survives the last visible window; receiving activation does not select or create a target UI automatically.
+
 ## Runtime and UiWindow subsystem ownership
 
 Runtime owns one application's services, frozen factory catalog, event dispatch, and ordinary timers. Each attached UiWindow owns its mounted surface and coordinates frame transactions. Its host-facing input methods are the native window boundary; their presence does not require every input algorithm to be a UiWindow member.

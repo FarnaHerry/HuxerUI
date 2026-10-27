@@ -530,6 +530,18 @@ Task<bool> ApplicationService::OpenPermissionSettings(Permission permission) con
   return permissions_->OpenSettings(permission);
 }
 
+bool ApplicationService::SupportsMultipleWindows() const {
+  if (!runtime_) return false;
+  runtime_->state_->RequireThread();
+  return runtime_->state_->phase != ApplicationRuntimeState::Phase::Stopping &&
+         runtime_->state_->phase != ApplicationRuntimeState::Phase::Stopped && runtime_->SupportsMultipleWindows();
+}
+
+WindowHandle ApplicationService::OpenWindow(ViewFactory content, WindowOptions options) const {
+  if (!runtime_) throw std::logic_error("HuxerUI application is disconnected");
+  return runtime_->OpenWindow(std::move(content), std::move(options));
+}
+
 void ApplicationService::Quit() const {
   if (runtime_ != nullptr) {
     runtime_->RequestShutdown();
@@ -659,6 +671,14 @@ Task<PermissionStatus> ApplicationHandle::RequestPermissionAsync(Permission perm
 
 Task<bool> ApplicationHandle::OpenPermissionSettingsAsync(Permission permission) const {
   return service_->OpenPermissionSettings(permission);
+}
+
+bool ApplicationHandle::SupportsMultipleWindows() const {
+  return service_->SupportsMultipleWindows();
+}
+
+WindowHandle ApplicationHandle::OpenWindow(ViewFactory content, WindowOptions options) const {
+  return service_->OpenWindow(std::move(content), std::move(options));
 }
 
 void ApplicationHandle::Quit() const {

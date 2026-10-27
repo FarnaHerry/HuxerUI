@@ -239,6 +239,50 @@ Register primary tray activation once through `SystemTrayHandle::OnActivate(hand
 See [Application Permissions](../design/permissions.md) for status meanings, native declarations, and platform limitations.
 See [Local Notifications](../design/local-notifications.md) for notification authorization, identifiers, ordering, scheduling, and target platform mappings.
 
+## Multiple windows
+
+One Runtime serves all windows on the application's UI thread.
+`RunApplication()` opens the initial root with `AppOptions::window`.
+From an event handler or application task, query `UseApplication().SupportsMultipleWindows()` and call `OpenWindow(content, options)` to create and present another top-level window:
+
+```cpp
+auto application = UseApplication();
+auto model = UseService<DocumentModel>();
+return Button("New window").OnClick([application, model] {
+  application.OpenWindow([model] { return DocumentView(model); }, {
+      .title = "Document",
+      .initial_size = {800.0F, 600.0F},
+  });
+}).With(Enabled(application.SupportsMultipleWindows()));
+```
+
+The returned `WindowHandle` does not own the window; discarding it leaves the window open.
+Its `IsOpen()` method is observable during composition and becomes false when closure is accepted, even before native destruction completes.
+Hidden and minimized windows remain open.
+Retained handles never target a replacement window; commands after closure are ignored.
+`Close()` preserves `OnCloseRequest()` interception; a handler returning true consumes the request.
+Minimize and close handlers may issue the other command; recursive requests for the same command are consumed.
+If a handler closes the window, the pending native operation is suppressed even when the handler returns false.
+
+Each new window has its own root scope, local `UseState`, Environment, resource configuration, services, layers, focus, and frame scheduling.
+Application services and application-owned State are shared, so a State write invalidates subscribed scopes in every live window.
+The content factory is retained and evaluated later in that window; capture data with the required lifetime.
+Neither `WindowOptions` nor an opener's Environment is inherited: pass content data and options explicitly, and provide window-local values within the new content.
+Window hooks see the new native window's resource configuration from the beginning; later scale or locale changes update that window independently.
+
+`OpenWindow()` runs on the original application's thread, outside composition and application/window installation.
+Empty content and invalid options throw `std::invalid_argument`; invalid thread, lifetime, or timing throws `std::logic_error`; unsupported native creation throws `std::runtime_error`.
+A hook exception propagates after partial window cleanup without affecting other windows or causing application exit.
+Successful creation does not guarantee that the first frame has rendered.
+macOS, Windows, and Linux support this API; Android, iOS, and Web currently report false while retaining their host-managed UI attachments.
+
+Closing the last framework-owned desktop window requests application shutdown by default.
+Set `AppOptions::quit_on_last_window_closed = false` to keep application services, tasks, and activation handlers available without windows; an application or tray callback can then open a new window.
+Hidden windows count, while initial windowless startup, failed creation, and retirement of external UI attachments do not trigger this policy.
+`ApplicationHandle::Quit()` shuts down the entire application without invoking per-window close interception, retiring windows before application services.
+
+[Multiple-window example](../../examples/multi_window/main.cpp) demonstrates shared and local counters, observable closure, and reopening.
+
 ## Runtime model
 
 Each UiWindow owns composition, reconciliation, layout, interaction, scrolling, animation, semantics, and retained scene generation. Its Runtime owns application services, dispatch, and ordinary timers.

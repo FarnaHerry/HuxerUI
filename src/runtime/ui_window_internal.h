@@ -486,7 +486,7 @@ struct LayerController::State {
 /// Application services stay on Runtime; execution_ records the original window context for retained callbacks.
 /// Shared retirement clears native access before the derived window releases its platform members.
 struct UiWindow::State {
-  State(UiWindow& owner, const Application& application);
+  State(UiWindow& owner, const AppOptions& application, ViewFactory content, const WindowOptions& options);
   ~State();
 
   UiWindow& owner_;
@@ -495,7 +495,8 @@ struct UiWindow::State {
   std::shared_ptr<detail::ExecutionContext> execution_;
   bool initialized_ = false;
   bool retired_ = false;
-  RootFactory root_factory_;
+  bool closing_ = false;
+  ViewFactory root_factory_;
   ViewportBreakpoints viewport_breakpoints_;
   std::shared_ptr<detail::WindowState> window_;
   ViewportClass viewport_class_ = ViewportClass::Compact;

@@ -18,6 +18,8 @@ namespace detail {
 struct MountedNode;
 struct ApplicationRuntimeState;
 
+void ValidateWindowOptions(const WindowOptions& options);
+
 inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
   if (!options.minimum_size.has_value()) {
     return options.initial_size;
@@ -46,6 +48,10 @@ class WindowService : public std::enable_shared_from_this<WindowService> {
 public:
   explicit WindowService(UiWindow& ui_window);
 
+  [[nodiscard]] bool IsOpen() const;
+  void Open();
+  void BeginClose();
+
   void Request(WindowCommand command);
   [[nodiscard]] bool HandleRequest(WindowCommand command);
   [[nodiscard]] std::function<void()>
@@ -73,6 +79,9 @@ private:
   void DisconnectRequest(WindowCommand command, std::uint64_t connection) noexcept;
 
   UiWindow* ui_window_;
+  State<bool> open_{false};
+  bool handling_minimize_request_ = false;
+  bool handling_close_request_ = false;
   RequestHandler minimize_handler_;
   RequestHandler close_handler_;
   std::uint64_t next_connection_ = 1;

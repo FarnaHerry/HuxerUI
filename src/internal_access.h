@@ -63,6 +63,10 @@ struct InternalAccess {
   static void InitializeWindow(UiWindow& ui_window, Runtime& runtime,
       std::optional<ResourceConfiguration> configuration = std::nullopt,
       WindowLifecycleState lifecycle = WindowLifecycleState::Background);
+  /// Borrows the frozen application catalog while preparing native facilities before UI installation.
+  static PlatformRegistry& ApplicationRegistry(Runtime& runtime);
+  /// Captures a native callback's window provenance; an uninitialized attachment returns no context.
+  static std::shared_ptr<ExecutionContext> WindowExecution(const UiWindow& ui_window);
   /// Retires shared UI state while native window facilities are still alive.
   /// @param ui_window Original attachment; retirement is idempotent and stays on the application thread.
   static void RetireWindow(UiWindow& ui_window) noexcept;

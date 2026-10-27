@@ -24,6 +24,7 @@
 #include <emscripten/eventloop.h>
 #include <emscripten/val.h>
 
+#include "internal_access.h"
 #include "application/platform_frame_internal.h"
 #include "resources/resource_internal.h"
 #include "text/text_internal.h"
@@ -996,9 +997,11 @@ public:
       : session_id_(session_id), renderer_(session_id, canvas), configuration_(configuration),
         text_input_(session_id), host_(std::move(host)), root_(std::move(root)), base_canvas_(std::move(canvas)) {
     try {
-      InitializeWindow(*WebApplication(), configuration, static_cast<WindowLifecycleState>(BrowserLifecycleState()));
       text_input_.SetUiWindow(this);
-      platform_views_ = std::make_unique<WebPlatformViews>(renderer_, PlatformRegistry(), *this, root_, base_canvas_);
+      platform_views_ = std::make_unique<WebPlatformViews>(
+          renderer_, InternalAccess::ApplicationRegistry(*WebApplication()), *this, root_, base_canvas_);
+      InitializeWindow(*WebApplication(), CurrentApplication().root_factory, CurrentApplication().options.window,
+                       configuration, static_cast<WindowLifecycleState>(BrowserLifecycleState()));
     } catch (...) {
       Retire();
       throw;

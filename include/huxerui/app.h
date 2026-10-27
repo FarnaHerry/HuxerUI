@@ -377,6 +377,9 @@ struct AppOptions {
   /// Whether UiWindow installs the built-in debug overlay above application root hooks.
   bool show_debug_overlay = true;
 #endif
+  /// Whether closing the last framework-owned desktop window requests application shutdown.
+  /// Hidden windows still count. External UI attachments and an initially windowless Runtime do not trigger this.
+  bool quit_on_last_window_closed = true;
   /// Application installers, called once per Runtime in declaration order before windows or queued work.
   /// The list may be empty; an empty callback throws std::invalid_argument during application initialization.
   std::vector<ApplicationHook> application_hooks{};
@@ -412,7 +415,7 @@ public:
   Application(Application&&) = delete;
   Application& operator=(Application&&) = delete;
 
-  /// Root factory used by every UiWindow for this declaration.
+  /// Root factory for the initial desktop window and host-created UI attachments.
   const RootFactory root_factory;
   /// Immutable UiWindow and platform-shell options.
   const AppOptions options;
@@ -508,6 +511,11 @@ protected:
   /// handles.
   /// Must run on the application thread once state exists; this teardown does not invoke OnRuntimeStopped.
   void Retire() noexcept;
+  /// Reports whether this host can create additional native top-level windows on the application thread.
+  virtual bool SupportsMultipleWindows() const noexcept;
+  /// Creates an initialized, hidden window belonging to this Runtime without starting another event loop.
+  /// Shared admission and configuration checks precede this call. Failure must release partial native facilities.
+  virtual std::unique_ptr<UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options);
   /// Captures platform-selected application storage directories during initialization.
   /// @return Directory values without performing application I/O, or std::nullopt if unsupported.
   virtual std::optional<AppDirectories> CreateAppDirectories();
@@ -544,12 +552,21 @@ private:
   void FinishShutdown();
   /// Idempotently closes the ordinary timer queue before its dispatcher or native owner can disappear.
   void CloseTimers() noexcept;
+  WindowHandle OpenWindow(ViewFactory content, WindowOptions options);
+  void CloseWindow(UiWindow& window);
+  void ScheduleWindowMaintenance();
+  void ResumeWindowMaintenance() noexcept;
+  void MaintainWindows();
   UiThreadDispatcher application_dispatcher_;
   std::shared_ptr<detail::ApplicationTimerQueue> timers_;
   std::shared_ptr<detail::ApplicationRuntimeState> state_;
+  std::vector<std::unique_ptr<UiWindow>> owned_windows_;
+  bool window_maintenance_needed_ = false;
+  bool window_maintenance_pending_ = false;
 
   friend class UiWindow;
   friend class detail::ApplicationService;
+  friend class detail::ExecutionGuard;
   friend struct detail::InternalAccess;
   friend detail::PlatformChannelEndpoint detail::MakePlatformChannelEndpoint(Runtime& runtime);
 };
@@ -571,6 +588,16 @@ private:
 /// Route startup input once during application installation, or derive initial UI from startup without side effects.
 class ApplicationHandle final {
 public:
+  /// Queries programmatic native top-level window support on the original application's thread.
+  /// External UI attachments do not imply support. A stopped application reports false.
+  [[nodiscard]] bool SupportsMultipleWindows() const;
+  /// Creates and presents an independently composed window sharing this application's services and State.
+  /// The retained factory executes later in the new window's root scope, with a fresh root Environment.
+  /// Requires the original application thread, outside composition and application/window installation.
+  /// Invalid input throws std::invalid_argument; invalid lifetime/thread throws std::logic_error; unsupported or
+  /// failed native creation throws std::runtime_error. Success does not imply that the first frame has rendered.
+  /// Discarding the returned handle leaves the window open. Options do not inherit from the opening window.
+  WindowHandle OpenWindow(ViewFactory content, WindowOptions options = {}) const;
   /// Reads the immutable activation that originally started this application.
   /// @return A service-owned optional value valid while this handle retains the service; empty for background-only
   /// startup.
@@ -844,7 +871,7 @@ public:
   void UpdateWindowLifecycleState(WindowLifecycleState lifecycle_state);
   /// Consults application handlers before a native minimize or close operation.
   /// @param command Minimize or Close request emitted by the native host.
-  /// @return True when an installed handler consumes the request; false allows the native default operation.
+  /// @return True when consumed, recursively requested, or closed during dispatch; false allows the native default.
   [[nodiscard]] bool HandleWindowRequest(WindowCommand command);
   /// Dispatches an immediate platform Back action on the application thread.
   /// @return Whether the active shared Back route consumed the request.
@@ -901,12 +928,19 @@ protected:
   bool IsInitialized() const noexcept;
   /// Installs this native attachment once after its derived facilities are ready.
   /// @param application Already initialized Runtime on whose application thread this window will operate.
+  /// @param content Retained factory evaluated in this window's own root scope.
+  /// @param options Independent startup geometry and chrome policy for this window.
   /// @param configuration Optional per-window resource overrides; absence uses application defaults.
   /// @param initial_lifecycle Initial native foreground state, visible to WindowHook before first composition.
   /// Runs window_hooks, installs shared UI services, then admits native input. Failure retires partial UI state.
   /// @throws std::logic_error If initialized twice, the application is not running, or the calling thread differs.
-  void InitializeWindow(Runtime& application, std::optional<ResourceConfiguration> configuration = std::nullopt,
+  void InitializeWindow(Runtime& application, ViewFactory content, const WindowOptions& options,
+                        std::optional<ResourceConfiguration> configuration = std::nullopt,
                         WindowLifecycleState initial_lifecycle = WindowLifecycleState::Background);
+  /// Commits an accepted close of a Runtime-owned top-level window, without consulting close handlers again.
+  /// Immediately stops native callback admission; shared and native cleanup waits for active UI calls to return.
+  /// External attachments remain host-owned and use Retire at their host's safe teardown boundary.
+  void CloseWindow();
   /// Idempotently tears down the mounted UI before the native attachment releases its facilities.
   /// Runs on the application thread, clears the window identity, retires component work and window services, and leaves
   /// application-owned services and Tasks alive. Native callbacks must stop entering this window as retirement begins.

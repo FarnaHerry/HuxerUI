@@ -11,6 +11,7 @@
 #include "runtime/ui_window_internal.h"
 #include "window_internal.h"
 #include "application_internal.h"
+#include "internal_access.h"
 
 namespace huxerui {
 
@@ -177,8 +178,46 @@ bool IsValidSystemBarsAppearance(const SystemBarsAppearance& appearance) noexcep
          valid_brightness(appearance.status_bar_content) && valid_brightness(appearance.navigation_bar_content);
 }
 
+void ValidateWindowOptions(const WindowOptions& window_options) {
+  if (!std::isfinite(window_options.initial_size.width) || window_options.initial_size.width <= 0.0F ||
+      !std::isfinite(window_options.initial_size.height) || window_options.initial_size.height <= 0.0F) {
+    throw std::invalid_argument("HuxerUI initial window size must be finite and positive");
+  }
+  if (window_options.minimum_size.has_value() &&
+      (!std::isfinite(window_options.minimum_size->width) || window_options.minimum_size->width <= 0.0F ||
+       !std::isfinite(window_options.minimum_size->height) || window_options.minimum_size->height <= 0.0F)) {
+    throw std::invalid_argument("HuxerUI minimum window size must be finite and positive");
+  }
+  if (window_options.content_mode != WindowContentMode::SafeArea &&
+      window_options.content_mode != WindowContentMode::EdgeToEdge) {
+    throw std::invalid_argument("HuxerUI window content mode is invalid");
+  }
+  if (window_options.chrome_mode != WindowChromeMode::System &&
+      window_options.chrome_mode != WindowChromeMode::Custom) {
+    throw std::invalid_argument("HuxerUI window chrome mode is invalid");
+  }
+  if (!std::isfinite(window_options.title_bar_height) || window_options.title_bar_height <= 0.0F) {
+    throw std::invalid_argument("HuxerUI window title-bar height must be finite and positive");
+  }
+}
+
 WindowService::WindowService(UiWindow& ui_window)
     : ui_window_(&ui_window), application_(CurrentApplicationRuntime()) {}
+
+bool WindowService::IsOpen() const {
+  const auto application = application_.lock();
+  if (!application || application->phase == ApplicationRuntimeState::Phase::Stopped) return false;
+  application->RequireThread();
+  return open_.Get();
+}
+
+void WindowService::Open() {
+  open_ = true;
+}
+
+void WindowService::BeginClose() {
+  open_ = false;
+}
 
 WindowLifecycleState WindowService::LifecycleState() const {
   return lifecycle_state_.Get();
@@ -229,22 +268,35 @@ std::function<void()> WindowService::ConnectLifecycle(std::function<void(WindowL
 }
 
 void WindowService::Request(WindowCommand command) {
-  if (ui_window_ == nullptr) {
-    return;
+  if (!ui_window_) return;
+  const auto application = application_.lock();
+  if (!application) return;
+  application->RequireThread();
+  if (application->window_installations) {
+    throw std::logic_error("HuxerUI window commands are unavailable during window installation");
   }
-  if ((command == WindowCommand::Minimize || command == WindowCommand::Close) &&
-      HandleRequest(command)) {
-    return;
-  }
-  ui_window_->RequestWindowCommand(command);
+  if (!IsOpen()) return;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  if ((command == WindowCommand::Minimize || command == WindowCommand::Close) && HandleRequest(command)) return;
+  if (ui_window_ && IsOpen()) ui_window_->RequestWindowCommand(command);
 }
 
 bool WindowService::HandleRequest(WindowCommand command) {
+  if (!IsOpen()) return true;
   RequestHandler& request = Handler(command);
-  if (!request.handler) {
-    return false;
+  bool& handling_request = command == WindowCommand::Minimize ? handling_minimize_request_ : handling_close_request_;
+  if (handling_request) return true;
+  auto handler = request.handler;
+  if (!handler) return false;
+  handling_request = true;
+  try {
+    const bool handled = handler();
+    handling_request = false;
+    return handled || !IsOpen();
+  } catch (...) {
+    handling_request = false;
+    throw;
   }
-  return request.handler();
 }
 
 std::function<void()>
@@ -296,6 +348,8 @@ void WindowService::DisconnectRequest(WindowCommand command, std::uint64_t conne
 }
 
 void WindowService::Disconnect() noexcept {
+  if (!ui_window_) return;
+  BeginClose();
   ui_window_ = nullptr;
   minimize_handler_ = {};
   close_handler_ = {};
@@ -391,6 +445,10 @@ LayoutResult WindowTitleBar::Measure(LayoutContext& context, ViewNode& node, Con
   }
   result.SetSize(constraints.Constrain({content.MeasuredSize().width + reserved_width, content.MeasuredSize().height}));
   return result;
+}
+
+bool WindowHandle::IsOpen() const {
+  return service_->IsOpen();
 }
 
 void WindowHandle::Show() const {

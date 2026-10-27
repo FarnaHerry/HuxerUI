@@ -147,6 +147,8 @@ cmake --build build --target example_ui_gallery
 
 [`example_shared_transition`](../../examples/shared_transition/main.cpp) demonstrates titles moving from a reading list to a detail page, covers growing from thumbnails, and descriptions crossfading with SharedBounds. A separate local card demonstrates expansion, an arc, and interrupted retargeting without navigation; its control stays outside the animated scope. Both modes offer slow playback. Keep participating regions fully in view. Build with `cmake --build build --target example_shared_transition`; Android selects `-PhuxeruiExample=shared_transition` and the iOS runner selects `HUXERUI_APP_TARGET=example_shared_transition`.
 
+[`example_multi_window`](../../examples/multi_window/main.cpp) opens independent desktop windows sharing an application counter, with local counters and observable close/reopen behavior. Build with `cmake --build build --target example_multi_window`; unsupported hosts disable the open-window command.
+
 Desktop binaries or application bundles are emitted under the configured build output.
 Android examples use `platform/android/example_runner`, and iOS examples use the repository platform runner.
 The Android runner resolves the selected example's final CMake shared-library name into `BuildConfig.HUXERUI_APP_LIBRARY`; MainActivity loads it before creating the hosted Runtime, without a fixed application `.so` name.

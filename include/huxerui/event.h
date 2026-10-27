@@ -698,10 +698,11 @@ private:
 };
 
 struct ExecutionContext;
+struct ApplicationRuntimeState;
 
 /// Installs callback provenance on the current thread and restores the previous context on scope exit.
-/// A null source leaves the current context unchanged. The guard owns no native object, does not dispatch work, and
-/// does not validate availability; the callback owner must enforce its thread and retirement rules before delivery.
+/// A null source leaves the current context unchanged. Window contexts defer native window reclamation until calls
+/// return, including across nested event loops. The callback owner still enforces thread and availability rules.
 class ExecutionGuard final {
 public:
   explicit ExecutionGuard(std::shared_ptr<ExecutionContext> source);
@@ -710,6 +711,7 @@ public:
   ExecutionGuard& operator=(const ExecutionGuard&) = delete;
 private:
   std::shared_ptr<ExecutionContext> previous_;
+  std::shared_ptr<ApplicationRuntimeState> window_application_;
 };
 
 /// Typed event handlers plus the provenance of the declaration that installed them.

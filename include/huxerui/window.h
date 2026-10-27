@@ -346,7 +346,8 @@ public:
 ///
 /// Commands request native operations and do not mutate UiWindow placement state directly. Minimize and close handlers
 /// are tied to the calling composition scope through Lifecycle: returning true consumes the request, while returning
-/// false continues the platform's default operation.
+/// false continues the platform's default operation if the window is still open.
+/// Recursive requests for the same command are consumed; a handler may issue the other command independently.
 ///
 /// Example:
 /// @code
@@ -365,6 +366,10 @@ public:
 /// @endcode
 class WindowHandle {
 public:
+  /// Whether this attachment is initialized and has not committed closure or retirement.
+  /// Reads on the application thread and observes changes during composition. Hidden/minimized windows remain open.
+  /// A handle outliving its original window or Runtime reports false and never targets a replacement window.
+  [[nodiscard]] bool IsOpen() const;
   /// Reads this window's current native foreground state on the application thread.
   /// @return The latest state; reading during composition subscribes the current scope to changes.
   /// The returned value describes only this window, not the aggregate ApplicationHandle lifecycle.
@@ -455,6 +460,7 @@ private:
   std::shared_ptr<detail::WindowService> service_;
 
   friend WindowHandle UseWindow();
+  friend class Runtime;
 };
 
 /// Returns a handle for the UiWindow in the current composition or captured window callback context.

@@ -94,11 +94,10 @@ public:
     try {
       if (!maximum_callbacks) throw std::invalid_argument("HuxerUI testing callback budget must be positive");
       InternalAccess::InitializeRuntime(window, application, options.activation);
-      InternalAccess::InitializeWindow(window, window);
+      InternalAccess::InitializeWindow(window, window, options.resources);
       metrics.viewport = options.viewport;
       metrics.safe_area = options.safe_area;
       window.SetWindowMetrics(metrics);
-      window.UiWindow::UpdateResourceConfiguration(options.resources);
       Pump(0);
     } catch (...) {
       Shutdown();
