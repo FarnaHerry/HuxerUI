@@ -38,7 +38,7 @@ struct SharedCounter {
 };
 
 struct WindowRecord {
-  WindowIdentity identity;
+  std::string label;
   std::optional<WindowHandle> handle;
   std::optional<State<int>> local;
   int compositions = 0;
@@ -91,12 +91,12 @@ struct NativeWatch {
 
 struct NativeScenario {
   std::map<std::uint32_t, WindowRecord> records;
+  std::uint32_t next_slot = 2;
   std::optional<ApplicationHandle> application;
   std::shared_ptr<SharedCounter> shared;
-  std::weak_ptr<detail::ApplicationRuntimeState> runtime;
   std::vector<std::unique_ptr<NativeWatch>> watches;
   std::function<bool()> advance;
-  std::function<View(const WindowIdentity&)> content;
+  std::function<View(std::uint32_t)> content;
   std::exception_ptr failure;
   std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
   bool block_extra_close = true;
@@ -125,28 +125,27 @@ struct NativeScenario {
 
 NativeScenario* current_scenario = nullptr;
 
-View NativeMultiWindowRoot() {
+View NativeWindowContent(std::uint32_t slot, const std::string& label) {
   auto& scenario = *current_scenario;
-  const auto identity = UseEnvironment<WindowIdentity>();
-  if (identity.key == "throw") throw std::runtime_error("HuxerUI native test composition failure");
-  auto& record = scenario.records[identity.ordinal];
-  record.identity = identity;
+  if (label == "throw") throw std::runtime_error("HuxerUI native test composition failure");
+  auto& record = scenario.records[slot];
+  record.label = label;
   record.handle = UseWindow();
   record.local = UseState(0);
   record.shared_value = UseService<SharedCounter>()->value.Get();
   ++record.compositions;
   scenario.application = UseApplication();
   Lifecycle([&record] { return [&record] { ++record.unmounts; }; });
-  if (identity.ordinal == 1) {
+  if (slot == 1) {
     record.handle->OnCloseRequest([&scenario] {
       ++scenario.close_requests;
       return scenario.block_extra_close;
     });
   }
-  if (scenario.content) return scenario.content(identity);
-  return Text::Format("{}: {} / {}", identity.key, record.local->Get(), record.shared_value)
+  if (scenario.content) return scenario.content(slot);
+  return Text::Format("{}: {} / {}", label, record.local->Get(), record.shared_value)
       .On<ViewEvents::KeyIntercept>([&scenario, &record, window = *record.handle](const KeyEvent& event) {
-        if (record.identity.key != "key-close" || event.type != KeyEventType::Down || event.key != Key::Escape) {
+        if (record.label != "key-close" || event.type != KeyEventType::Down || event.key != Key::Escape) {
           return false;
         }
         window.Close();
@@ -154,6 +153,8 @@ View NativeMultiWindowRoot() {
         return true;
       });
 }
+
+View NativeMultiWindowRoot() { return NativeWindowContent(0, "primary"); }
 
 void RunScenario(NativeScenario& scenario, const std::string& expected_failure = {}) {
   current_scenario = &scenario;
@@ -174,8 +175,6 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
         gtk_window_close(native);
       }
       g_object_unref(native);
-    } else if (scenario.records.contains(0) && scenario.records.at(0).unmounts == 0) {
-      scenario.records.at(0).handle->Close();
     } else if (scenario.application) {
       scenario.application->Quit();
     }
@@ -186,16 +185,19 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
     const Application application{
         NativeMultiWindowRoot,
         {
-            .window = {.title = "HuxerUI native primary", .key = "primary", .initial_size = {320.0F, 240.0F}},
-            .extra_windows = {{
-                .title = "HuxerUI native extra", .key = "extra", .initial_size = {200.0F, 160.0F},
-
-            }},
+            .window = {.title = "HuxerUI native primary", .initial_size = {320.0F, 240.0F}},
             .show_debug_overlay = false,
             .application_hooks = {[&scenario](ApplicationContext& context) {
-              scenario.runtime = detail::CurrentApplicationRuntime();
               scenario.shared = std::make_shared<SharedCounter>();
               context.Provide(scenario.shared);
+              UseApplicationTaskScope().Post([application = UseApplication()] {
+                application.OpenWindow(
+                    [] { return NativeWindowContent(1, "extra"); },
+                    {
+                    .title = "HuxerUI native extra", .initial_size = {200.0F, 160.0F},
+                }
+                );
+              });
             }},
         },
     };
@@ -240,13 +242,13 @@ TEST_CASE("LinuxNativeRetirementReleasesRenderedFramesAndReopens", "[.][linux-na
   publish();
   std::uint32_t ordinal = 0;
   int stage = 0;
-  scenario.content = [&](const WindowIdentity& identity) -> View {
-    if (identity.ordinal == ordinal && texture) return Image(texture).With(Frame{128.0F, 128.0F});
+  scenario.content = [&](std::uint32_t slot) -> View {
+    if (slot == ordinal && texture) return Image(texture).With(Frame{128.0F, 128.0F});
     return Text("application stays alive");
   };
   scenario.advance = [&] {
     if (stage == 0) {
-      if (!scenario.records.contains(ordinal) || frame.use_count() < 2) return false;
+      if (!scenario.records.contains(ordinal) || !scenario.records.contains(1) || frame.use_count() < 2) return false;
       scenario.Watch(ordinal == 0 ? "HuxerUI native primary" : "HuxerUI native reopened");
       texture.reset();
       if (retire_all && ordinal == 0) scenario.records.at(1).handle->Retire();
@@ -256,18 +258,21 @@ TEST_CASE("LinuxNativeRetirementReleasesRenderedFramesAndReopens", "[.][linux-na
       if (scenario.records.at(ordinal).unmounts == 0) return false;
       scenario.Check(frame.expired(), "Retired window retained its rendered pixel frame");
       if (!scenario.watches.back()->Released()) return false;
-      const auto runtime = scenario.runtime.lock();
-      scenario.Check(runtime && runtime->windows.size() == (retire_all ? 0U : 1U),
-                     "Retired C++ windows remained owned by the application");
+      scenario.Check(!scenario.records.at(ordinal).handle->IsOpen(), "Retired window remained open");
       scenario.Check(scenario.records.at(1).unmounts == (retire_all ? 1 : 0),
                      "Retirement changed the other window's lifetime");
       if (ordinal != 0) return true;
       scenario.shared->value = 7;
       ordinal = 2;
       publish();
-      static_cast<void>(scenario.application->OpenWindow({
-          .title = "HuxerUI native reopened", .key = "reopened", .initial_size = {320.0F, 240.0F},
-      }));
+      static_cast<void>(scenario.application->OpenWindow(
+          [slot = scenario.next_slot++, label = std::string{"reopened"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {
+          .title = "HuxerUI native reopened", .initial_size = {320.0F, 240.0F},
+      }
+      ));
       stage = 0;
     }
     return false;
@@ -276,7 +281,7 @@ TEST_CASE("LinuxNativeRetirementReleasesRenderedFramesAndReopens", "[.][linux-na
   REQUIRE(scenario.records.at(2).shared_value == 7);
 }
 
-TEST_CASE("LinuxNativeDestroyedHostReleasesItsCppWindow", "[.][linux-native-retire]") {
+TEST_CASE("LinuxNativeDestroyedHostClosesAndReleasesAttachment", "[.][linux-native-retire]") {
   NativeScenario scenario;
   bool destroyed = false;
   scenario.advance = [&] {
@@ -288,8 +293,7 @@ TEST_CASE("LinuxNativeDestroyedHostReleasesItsCppWindow", "[.][linux-native-reti
       destroyed = true;
       return false;
     }
-    const auto runtime = scenario.runtime.lock();
-    return runtime && runtime->windows.size() == 1 && scenario.records.at(1).unmounts == 1 &&
+    return !scenario.records.at(1).handle->IsOpen() && scenario.records.at(1).unmounts == 1 &&
         scenario.watches.back()->Released();
   };
   RunScenario(scenario);
@@ -298,8 +302,8 @@ TEST_CASE("LinuxNativeDestroyedHostReleasesItsCppWindow", "[.][linux-native-reti
 TEST_CASE("LinuxNativeRenderFailureDefersHostCleanup", "[.][linux-native-retire]") {
   NativeScenario scenario;
   bool fail = false;
-  scenario.content = [&](const WindowIdentity& identity) -> View {
-    if (fail && identity.ordinal == 1) throw std::runtime_error("HuxerUI native retirement render failure");
+  scenario.content = [&](std::uint32_t slot) -> View {
+    if (fail && slot == 1) throw std::runtime_error("HuxerUI native retirement render failure");
     return Text("render failure cleanup");
   };
   scenario.advance = [&] {
@@ -334,8 +338,7 @@ TEST_CASE("LinuxNativeRetirementDetachesRetainedGtkCallbacks", "[.][linux-native
       stage = 1;
       return false;
     }
-    const auto runtime = scenario.runtime.lock();
-    if (!runtime || runtime->windows.size() != 1) return false;
+    if (scenario.records.at(1).unmounts != 1 || scenario.records.at(1).handle->IsOpen()) return false;
     for (auto& controller : controllers) {
       if (GTK_IS_EVENT_CONTROLLER_KEY(controller.get())) {
         gboolean handled = FALSE;
@@ -448,8 +451,8 @@ TEST_CASE("LinuxNativeApplicationDragUsesOnePhysicalSequence", "[.][linux-native
   SECTION("Successful cross-window drop") {}
   SECTION("Source retirement cancels native transport") { cancel_source = true; }
   SECTION("Dropped handler retires its source") { retire_on_drop = true; }
-  scenario.content = [&](const WindowIdentity& identity) -> View {
-    if (identity.ordinal == 0) {
+  scenario.content = [&](std::uint32_t slot) -> View {
+    if (slot == 0) {
       return Text("source")
           .With(Frame{160.0F, 80.0F}, DragSource(7).Scope(DragDropScope::Application))
           .On<DragSourceEvents::Started>([&](const DragEvent&) { events.emplace_back("started"); })

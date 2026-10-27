@@ -26,7 +26,7 @@ struct SharedCounter {
 };
 
 struct WindowRecord {
-  WindowIdentity identity;
+  std::string label;
   std::optional<WindowHandle> handle;
   std::optional<State<int>> local;
   int compositions = 0;
@@ -75,6 +75,7 @@ NSUInteger CountTestWindows() {
 
 struct NativeScenario {
   std::map<std::uint32_t, WindowRecord> records;
+  std::uint32_t next_slot = 2;
   std::optional<ApplicationHandle> application;
   std::shared_ptr<SharedCounter> shared;
   std::vector<std::unique_ptr<NativeWatch>> watches;
@@ -106,27 +107,26 @@ struct NativeScenario {
 
 NativeScenario* current_scenario = nullptr;
 
-View NativeMultiWindowRoot() {
+View NativeWindowContent(std::uint32_t slot, const std::string& label) {
   auto& scenario = *current_scenario;
-  const auto identity = UseEnvironment<WindowIdentity>();
-  if (identity.key == "throw") throw std::runtime_error("HuxerUI native test composition failure");
-  auto& record = scenario.records[identity.ordinal];
-  record.identity = identity;
+  if (label == "throw") throw std::runtime_error("HuxerUI native test composition failure");
+  auto& record = scenario.records[slot];
+  record.label = label;
   record.handle = UseWindow();
   record.local = UseState(0);
   record.shared_value = UseService<SharedCounter>()->value.Get();
   ++record.compositions;
   scenario.application = UseApplication();
   Lifecycle([&record] { return [&record] { ++record.unmounts; }; });
-  if (identity.ordinal == 1) {
+  if (slot == 1) {
     record.handle->OnCloseRequest([&scenario] {
       ++scenario.close_requests;
       return scenario.block_extra_close;
     });
   }
-  return Text::Format("{}: {} / {}", identity.key, record.local->Get(), record.shared_value)
+  return Text::Format("{}: {} / {}", label, record.local->Get(), record.shared_value)
       .On<ViewEvents::KeyIntercept>([&scenario, &record, window = *record.handle](const KeyEvent& event) {
-        if (record.identity.key != "key-close" || event.type != KeyEventType::Down || event.key != Key::Escape) {
+        if (record.label != "key-close" || event.type != KeyEventType::Down || event.key != Key::Escape) {
           return false;
         }
         window.Close();
@@ -136,6 +136,8 @@ View NativeMultiWindowRoot() {
         return true;
       });
 }
+
+View NativeMultiWindowRoot() { return NativeWindowContent(0, "primary"); }
 
 void RunScenario(NativeScenario& scenario, const std::string& expected_failure = {}) {
   current_scenario = &scenario;
@@ -160,8 +162,16 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
         NSWindow* native = scenario.watches.front()->Window();
         if (scenario.destroy_primary) [native close];
         else [native performClose:nil];
-      } else if (scenario.records.contains(0) && scenario.records.at(0).unmounts == 0) {
-        scenario.records.at(0).handle->Close();
+        dispatch_async(dispatch_get_main_queue(), ^{
+          try {
+            scenario.Check(!scenario.records.at(0).handle->IsOpen(), "Primary window remained open");
+            scenario.Check(scenario.records.at(scenario.next_slot - 1).handle->IsOpen(),
+                           "Closing the primary window closed an independent window");
+          } catch (...) {
+            scenario.failure = std::current_exception();
+          }
+          scenario.application->Quit();
+        });
       } else if (scenario.application) {
         scenario.application->Quit();
       }
@@ -172,15 +182,20 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
     const Application application{
         NativeMultiWindowRoot,
         {
-            .window = {.title = "HuxerUI native primary", .key = "primary", .initial_size = {320.0F, 240.0F}},
-            .extra_windows = {{
-                .title = "HuxerUI native extra", .key = "extra", .initial_size = {200.0F, 160.0F},
-                .minimum_size = Size{360.0F, 220.0F}, .chrome_mode = WindowChromeMode::Custom,
-            }},
+            .window = {.title = "HuxerUI native primary", .initial_size = {320.0F, 240.0F}},
             .show_debug_overlay = false,
             .application_hooks = {[&scenario](ApplicationContext& context) {
               scenario.shared = std::make_shared<SharedCounter>();
               context.Provide(scenario.shared);
+              UseApplicationTaskScope().Post([application = UseApplication()] {
+                application.OpenWindow(
+                    [] { return NativeWindowContent(1, "extra"); },
+                    {
+                    .title = "HuxerUI native extra", .initial_size = {200.0F, 160.0F},
+                    .minimum_size = Size{360.0F, 220.0F}, .chrome_mode = WindowChromeMode::Custom,
+                }
+                );
+              });
             }},
         },
     };
@@ -227,10 +242,10 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
 
 TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-native]") {
   NativeScenario scenario;
-  SECTION("The initial handle requests application shutdown") {}
+  SECTION("Explicit application Quit releases every window") {}
   SECTION("Native application Quit returns after orderly shutdown") { scenario.native_quit = true; }
-  SECTION("Native initial-window close requests application shutdown") { scenario.native_primary_close = true; }
-  SECTION("Native initial-window destruction requests application shutdown") {
+  SECTION("Native initial-window close preserves independent windows") { scenario.native_primary_close = true; }
+  SECTION("Native initial-window destruction preserves independent windows") {
     scenario.native_primary_close = true;
     scenario.destroy_primary = true;
   }
@@ -245,7 +260,7 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
     auto& extra = records.at(1);
     switch (phase) {
     case 0: {
-      scenario.Check(primary.identity.key == "primary" && extra.identity.key == "extra", "Window keys mismatch");
+      scenario.Check(primary.label == "primary" && extra.label == "extra", "Window content labels mismatch");
       scenario.Watch("HuxerUI native primary");
       scenario.Watch("HuxerUI native extra");
       NSWindow* native = scenario.watches.back()->Window();
@@ -285,7 +300,12 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
         bool rejected = false;
         @autoreleasepool {
           try {
-            static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native invalid", .title_bar_height = -1.0F}));
+            static_cast<void>(scenario.application->OpenWindow(
+                [slot = scenario.next_slot++, label = std::string{"window"}] {
+                  return NativeWindowContent(slot, label);
+                },
+                {.title = "HuxerUI native invalid", .title_bar_height = -1.0F}
+            ));
           } catch (const std::invalid_argument&) {
             rejected = true;
           }
@@ -293,13 +313,18 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
         scenario.Check(rejected, "Invalid window options were accepted");
         scenario.Check(CountTestWindows() == baseline,
                        "Failed window creation retained an AppKit window");
-        // Failed creation consumes an ordinal; successful windows must not depend on contiguous identities.
+        // The test allocates its capture slot before the rejected creation attempt.
         ++cycle_ordinal;
       }
       ++phase;
       return false;
     case 4:
-      static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native cycle", .key = "cycle"}));
+      static_cast<void>(scenario.application->OpenWindow(
+          [slot = scenario.next_slot++, label = std::string{"cycle"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native cycle"}
+      ));
       ++phase;
       return false;
     case 5:
@@ -322,7 +347,12 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
         phase = 4;
       } else {
         primary.handle->Show();
-        static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native survivor", .key = "survivor"}));
+        static_cast<void>(scenario.application->OpenWindow(
+            [slot = scenario.next_slot++, label = std::string{"survivor"}] {
+              return NativeWindowContent(slot, label);
+            },
+            {.title = "HuxerUI native survivor"}
+        ));
         ++phase;
       }
       return false;
@@ -343,7 +373,12 @@ TEST_CASE("MacNativeWindowFrameFailuresPropagateFromTheSharedLoop", "[macos-nati
       opened = true;
       scenario.Watch("HuxerUI native primary");
       scenario.Watch("HuxerUI native extra");
-      static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native failure", .key = "throw"}));
+      static_cast<void>(scenario.application->OpenWindow(
+          [slot = scenario.next_slot++, label = std::string{"throw"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native failure"}
+      ));
       scenario.Watch("HuxerUI native failure");
     }
     return false;
@@ -360,7 +395,12 @@ TEST_CASE("MacNativeWindowCloseWaitsForKeyDispatchToReturn", "[macos-native]") {
     case 0:
       scenario.Watch("HuxerUI native primary");
       scenario.Watch("HuxerUI native extra");
-      static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native key close", .key = "key-close"}));
+      static_cast<void>(scenario.application->OpenWindow(
+          [slot = scenario.next_slot++, label = std::string{"key-close"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native key close"}
+      ));
       ++phase;
       return false;
     case 1:
@@ -394,7 +434,12 @@ TEST_CASE("MacNativeOwnedModalsPreserveIndependentWindowsAndCascade", "[macos-na
       scenario.Watch("HuxerUI native primary");
       scenario.Watch("HuxerUI native extra");
       static_cast<void>(scenario.application->OpenWindow(
-          {.title = "HuxerUI native modal", .key = "modal"}, {.owner = *records.at(1).handle, .modal = true}));
+          [slot = scenario.next_slot++, label = std::string{"modal"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native modal"},
+          {.owner = *records.at(1).handle, .modal = true}
+      ));
       ++phase;
       return false;
     case 1: {
@@ -408,7 +453,12 @@ TEST_CASE("MacNativeOwnedModalsPreserveIndependentWindowsAndCascade", "[macos-na
       scenario.Check(!IsInteractive(owner), "Modal owner remained interactive");
       scenario.Check(IsInteractive(primary), "Independent window was blocked");
       static_cast<void>(scenario.application->OpenWindow(
-          {.title = "HuxerUI native helper"}, {.owner = *records.at(2).handle}));
+          [slot = scenario.next_slot++, label = std::string{"window"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native helper"},
+          {.owner = *records.at(2).handle}
+      ));
       ++phase;
       return false;
     }
@@ -418,7 +468,12 @@ TEST_CASE("MacNativeOwnedModalsPreserveIndependentWindowsAndCascade", "[macos-na
       scenario.Check(IsInteractive(scenario.watches[3]->Window()),
                      "Modal-owned helper was blocked");
       static_cast<void>(scenario.application->OpenWindow(
-          {.title = "HuxerUI native newer modal"}, {.owner = *records.at(1).handle, .modal = true}));
+          [slot = scenario.next_slot++, label = std::string{"window"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native newer modal"},
+          {.owner = *records.at(1).handle, .modal = true}
+      ));
       ++phase;
       return false;
     case 3:
@@ -476,13 +531,23 @@ TEST_CASE("MacNativeApplicationModalsStackAndCoverNewWindows", "[macos-native]")
       scenario.Watch("HuxerUI native primary");
       scenario.Watch("HuxerUI native extra");
       static_cast<void>(scenario.application->OpenWindow(
-          {.title = "HuxerUI native app modal"}, {.modal = true}));
+          [slot = scenario.next_slot++, label = std::string{"window"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native app modal"},
+          {.modal = true}
+      ));
       ++phase;
       return false;
     case 1:
       if (!records.contains(2)) return false;
       scenario.Watch("HuxerUI native app modal");
-      static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native late window", .key = "key-close"}));
+      static_cast<void>(scenario.application->OpenWindow(
+          [slot = scenario.next_slot++, label = std::string{"key-close"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native late window"}
+      ));
       ++phase;
       return false;
     case 2:
@@ -495,7 +560,12 @@ TEST_CASE("MacNativeApplicationModalsStackAndCoverNewWindows", "[macos-native]")
       static_cast<void>(scenario.watches[3]->SendEscape());
       scenario.Check(!scenario.key_close_returned, "Blocked window dispatched a queued key event");
       static_cast<void>(scenario.application->OpenWindow(
-          {.title = "HuxerUI native top app modal"}, {.modal = true}));
+          [slot = scenario.next_slot++, label = std::string{"window"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native top app modal"},
+          {.modal = true}
+      ));
       ++phase;
       return false;
     case 3:
@@ -553,7 +623,12 @@ TEST_CASE("MacNativeRetirementKeepsWindowlessRuntimeAliveAndCanReopen", "[macos-
       scenario.shared->value = 42;
       records.at(0).handle->Retire();
       records.at(1).handle->Retire();
-      static_cast<void>(scenario.application->OpenWindow({.title = "HuxerUI native reopened"}));
+      static_cast<void>(scenario.application->OpenWindow(
+          [slot = scenario.next_slot++, label = std::string{"window"}] {
+            return NativeWindowContent(slot, label);
+          },
+          {.title = "HuxerUI native reopened"}
+      ));
       ++phase;
       return false;
     default:

@@ -31,7 +31,7 @@ Linux/X11 converts root pixels to logical client coordinates, excluding GTK deco
 Wayland and host-managed mobile and Web surfaces use platform placement instead.
 
 ```cpp
-const WindowHandle secondary = application.OpenWindow({
+const WindowHandle secondary = application.OpenWindow([] { return InspectorView(); }, {
     .title = "Inspector",
     .initial_size = {400.0F, 300.0F},
     .initial_position = Point{120.0F, 160.0F},
@@ -56,7 +56,7 @@ Hosts reject nondefault presentation policies their active backend cannot honor 
 Other backends retain that explicit rejection behavior.
 
 ```cpp
-const auto pet = application.OpenWindow({
+const auto pet = application.OpenWindow([] { return CompanionView(); }, {
     .title = "Companion",
     .initial_size = {200.0F, 200.0F},
     .presentation = WindowPresentation::Utility,

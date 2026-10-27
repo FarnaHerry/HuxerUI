@@ -1172,10 +1172,11 @@ std::unique_ptr<detail::TextLayout> UiWindow::CreateTextLayout(const AttributedT
 
 using namespace detail;
 
-UiWindow::State::State(UiWindow& owner, const Application& application, const WindowOptions& window_options)
-    : owner_(owner), root_factory_(application.root_factory),
-      viewport_breakpoints_(application.options.viewport_breakpoints),
-      window_(std::make_shared<WindowState>(window_options)),
+UiWindow::State::State(UiWindow& owner, const AppOptions& application, ViewFactory content,
+                       const WindowOptions& options)
+    : owner_(owner), root_factory_(std::move(content)),
+      viewport_breakpoints_(application.viewport_breakpoints),
+      window_(std::make_shared<WindowState>(options)),
       root_scope_(std::make_shared<RecomposeScope>(owner, NextCompositionIdentity())), layer_controller_(owner) {}
 
 UiWindow::State::~State() = default;
@@ -1183,13 +1184,11 @@ UiWindow::State::~State() = default;
 UiWindow::UiWindow() = default;
 
 bool UiWindow::IsInitialized() const noexcept {
-  return state_ && state_->initialized_ && !state_->retired_;
+  return state_ && state_->initialized_ && !state_->closing_ && !state_->retired_;
 }
 
-void UiWindow::InitializeWindow(Runtime& application_runtime, const WindowOptions& window_options,
-                                std::uint32_t window_ordinal,
-                                std::optional<ResourceConfiguration> configuration,
-                                WindowLifecycleState initial_lifecycle) {
+void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory content, const WindowOptions& window_options,
+                                std::optional<ResourceConfiguration> configuration, WindowLifecycleState initial_lifecycle) {
   if (state_)
     throw std::logic_error("HuxerUI UI window has already been initialized");
   const auto application_state = application_runtime.state_;
@@ -1217,11 +1216,13 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, const WindowOption
       (window_options.topmost && !capabilities.topmost)) {
     throw std::logic_error("HuxerUI requested window presentation is unavailable on this attachment");
   }
+  if (!content) throw std::invalid_argument("HuxerUI window content must not be empty");
+  ++application_state->window_installations;
   try {
     application_runtime_ = &application_runtime;
     external_texture_frame_requester_ =
         std::make_shared<ExternalTextureFrameRequester>(*this, application_state->Dispatcher());
-    state_ = std::make_unique<State>(*this, application, window_options);
+    state_ = std::make_unique<State>(*this, application.options, std::move(content), window_options);
     state_->application_ = application_state;
     state_->ui_execution_ = std::make_shared<UiExecutionState>();
     state_->ui_execution_->ui_window = this;
@@ -1235,7 +1236,6 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, const WindowOption
     state_->root_environment_ = std::make_shared<Environment>();
     state_->execution_->environment = state_->root_environment_;
     state_->root_environment_->Set(detail::ViewportEnvironment{state_->viewport_class_});
-    state_->root_environment_->Set(WindowIdentity{window_options.key, window_ordinal});
     WindowContext root{
         state_->layer_controller_,
         *state_->root_environment_,
@@ -1284,10 +1284,18 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, const WindowOption
     });
     application_state->uis.push_back(state_->ui_execution_);
     state_->initialized_ = true;
+    state_->window_service_->Open();
+    --application_state->window_installations;
   } catch (...) {
     Retire();
+    --application_state->window_installations;
+    application_runtime.ResumeWindowMaintenance();
     throw;
   }
+}
+
+void UiWindow::CloseWindow() {
+  ApplicationRuntime().CloseWindow(*this);
 }
 
 UiWindow::~UiWindow() {
@@ -1333,6 +1341,7 @@ void UiWindow::Retire() noexcept {
   DiscardLifecycleCommits();
   state_->mounted_root_.reset();
   state_->root_scope_.reset();
+  state_->root_factory_ = {};
   for (detail::LifecycleCleanup& cleanup : state_->retired_lifecycle_cleanups_) {
     cleanup.Run();
   }
@@ -3655,10 +3664,23 @@ void VirtualMeasureSession::RestoreOwner() noexcept {
 }
 
 void InternalAccess::InitializeWindow(
-    UiWindow& ui_window, Runtime& runtime, const WindowOptions& window_options, std::uint32_t window_ordinal,
+    UiWindow& ui_window, Runtime& runtime, std::optional<ResourceConfiguration> configuration,
+    WindowLifecycleState lifecycle
+) {
+  const auto& application = *runtime.state_->declaration;
+  ui_window.InitializeWindow(runtime, application.root_factory, application.options.window,
+                            std::move(configuration), lifecycle);
+}
+
+void InternalAccess::InitializeWindow(
+    UiWindow& ui_window, Runtime& runtime, ViewFactory content, const WindowOptions& options,
     std::optional<ResourceConfiguration> configuration, WindowLifecycleState lifecycle
 ) {
-  ui_window.InitializeWindow(runtime, window_options, window_ordinal, std::move(configuration), lifecycle);
+  ui_window.InitializeWindow(runtime, std::move(content), options, std::move(configuration), lifecycle);
+}
+
+std::shared_ptr<ExecutionContext> InternalAccess::WindowExecution(const UiWindow& ui_window) {
+  return ui_window.state_ ? ui_window.state_->execution_ : nullptr;
 }
 
 void InternalAccess::RetireWindow(UiWindow& ui_window) noexcept {

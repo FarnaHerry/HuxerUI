@@ -14,6 +14,7 @@
 #include <huxerui/app.h>
 #include <huxerui/file_drop.h>
 
+#include "internal_access.h"
 #include "io/file_internal.h"
 
 namespace huxerui::detail {
@@ -106,6 +107,7 @@ public:
   }
 
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* object, DWORD, POINTL point, DWORD* effect) override {
+    ExecutionGuard guard(ui_window_ ? InternalAccess::WindowExecution(*ui_window_) : nullptr);
     if (!effect) {
       return E_POINTER;
     }
@@ -129,6 +131,7 @@ public:
   }
 
   HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL point, DWORD* effect) override {
+    ExecutionGuard guard(ui_window_ ? InternalAccess::WindowExecution(*ui_window_) : nullptr);
     if (!effect) {
       return E_POINTER;
     }
@@ -156,11 +159,13 @@ public:
   }
 
   HRESULT STDMETHODCALLTYPE DragLeave() override {
+    ExecutionGuard guard(ui_window_ ? InternalAccess::WindowExecution(*ui_window_) : nullptr);
     Leave();
     return S_OK;
   }
 
   HRESULT STDMETHODCALLTYPE Drop(IDataObject* object, DWORD, POINTL point, DWORD* effect) override {
+    ExecutionGuard guard(ui_window_ ? InternalAccess::WindowExecution(*ui_window_) : nullptr);
     if (!effect) {
       return E_POINTER;
     }

@@ -150,14 +150,13 @@ struct FloatingScenario {
 
 FloatingScenario* current_scenario = nullptr;
 
-View FloatingPetRoot() {
+View FloatingPetContent(bool pet, bool modal = false) {
   auto& scenario = *current_scenario;
-  const auto identity = UseEnvironment<WindowIdentity>();
-  if (identity.key == "modal") {
+  if (modal) {
     ++scenario.modal_compositions;
     return Text("Native modal settings");
   }
-  if (identity.key == "pet") {
+  if (pet) {
     ++scenario.pet_compositions;
     scenario.pet = UseWindow();
     scenario.application = UseApplication();
@@ -179,6 +178,8 @@ View FloatingPetRoot() {
   scenario.application = UseApplication();
   return Text("Floating primary");
 }
+
+View FloatingPetRoot() { return FloatingPetContent(false); }
 
 void RunFloatingScenario(FloatingScenario& scenario) {
   current_scenario = &scenario;
@@ -249,7 +250,6 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
   const auto pet_options = [] {
     return WindowOptions{
         .title = "HuxerUI native pet",
-        .key = "pet",
         .initial_size = {200.0F, 200.0F},
         .initial_position = Point{120.0F, 140.0F},
         .presentation = WindowPresentation::Utility,
@@ -264,7 +264,7 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
     switch (phase) {
     case 0: {
       if (!checks.application || !checks.primary) return false;
-      checks.pet = checks.application->OpenWindow(pet_options());
+      checks.pet = checks.application->OpenWindow([] { return FloatingPetContent(true); }, pet_options());
       checks.Watch("HuxerUI native pet");
       checks.Watch("HuxerUI native floating primary");
       ++phase;
@@ -387,7 +387,7 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
       checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Disconnected,
                    "a retired handle still performed native requests");
       checks.Check(checks.pet->Capabilities() == WindowCapabilities{}, "a retired handle still reported capabilities");
-      checks.pet = checks.application->OpenWindow(pet_options());
+      checks.pet = checks.application->OpenWindow([] { return FloatingPetContent(true); }, pet_options());
       checks.Watch("HuxerUI native pet");
       ++phase;
       return false;
@@ -419,15 +419,17 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
     switch (phase) {
     case 0: {
       if (!checks.application || !checks.primary) return false;
-      checks.pet = checks.application->OpenWindow({
+      checks.pet = checks.application->OpenWindow(
+          [] { return FloatingPetContent(true); },
+          {
           .title = "HuxerUI native pet",
-          .key = "pet",
           .initial_size = {200.0F, 200.0F},
           .initial_position = Point{120.0F, 140.0F},
           .presentation = WindowPresentation::Utility,
           .transparent_surface = true,
           .show_without_activation = true,
-      });
+      }
+      );
       checks.Watch("HuxerUI native pet");
       checks.Watch("HuxerUI native floating primary");
       ++phase;
@@ -490,8 +492,10 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
                        Near(after_drag->x, checks.drag_origin.x, 1.0F) && Near(after_drag->y, checks.drag_origin.y, 1.0F),
                    "the synthetic session moved the window without physical pointer input");
       checks.modal = checks.application->OpenWindow(
-          {.title = "HuxerUI native pet modal", .key = "modal", .initial_size = {240.0F, 160.0F}},
-          {.owner = *checks.pet, .modal = true});
+          [] { return FloatingPetContent(false, true); },
+          {.title = "HuxerUI native pet modal", .initial_size = {240.0F, 160.0F}},
+          {.owner = *checks.pet, .modal = true}
+      );
       checks.Watch("HuxerUI native pet modal");
       ++phase;
       return false;

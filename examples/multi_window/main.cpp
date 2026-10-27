@@ -1,24 +1,18 @@
 #include <huxerui/huxerui.h>
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 
 using namespace huxerui;
-
-namespace {
 
 struct SharedCounter {
   State<int> value{0};
 };
 
-void InstallSharedCounter(ApplicationContext& context) {
-  context.Provide(std::make_shared<SharedCounter>());
-}
-
 [[huxerui::composable]]
-View WindowTransfer() {
-  const auto identity = UseEnvironment<WindowIdentity>();
-  const std::string label = identity.key.empty() ? "primary" : identity.key;
+View WindowTransfer(std::string label) {
   auto received = UseState(std::string{"Drop a window label here"});
   auto hovered = UseState(false);
   const auto& theme = UseTheme();
@@ -46,61 +40,50 @@ View WindowTransfer() {
 }
 
 [[huxerui::composable]]
-View SecondaryContent() {
+View CounterPanel(std::shared_ptr<SharedCounter> model, std::string label) {
   auto local = UseState(0);
-  const auto shared = UseService<SharedCounter>();
-
+  auto window = UseWindow();
   return Column {
-    Text("Secondary window").With(FontSize(24.0F)),
-    WindowTransfer(),
-    Text::Format("Local count: {}", local),
-    Text::Format("Shared count: {}", shared->value.Get()),
-    Button("+1 local").OnClick([local] { local += 1; }),
-    Button("+1 shared").OnClick([shared] { shared->value += 1; }),
-  }.With(
-      Padding(24.0F),
-      Spacing(12.0F)
-  );
+    WindowTransfer(std::move(label)),
+    Text("Shared: " + std::to_string(model->value.Get())),
+    Button("Increment shared").OnClick([model] { model->value += 1; }),
+    Text("This window: " + std::to_string(local.Get())),
+    Button("Increment local").OnClick([local] { local += 1; }),
+    Button("Close this window").OnClick([window] { window.Close(); }),
+  }.With(Padding(24.0F), Spacing(12.0F));
 }
-
-[[huxerui::composable]]
-View PrimaryContent() {
-  auto local = UseState(0);
-  const auto shared = UseService<SharedCounter>();
-  const auto application = UseApplication();
-
-  return Column {
-    Text("Primary window").With(FontSize(24.0F)),
-    WindowTransfer(),
-    Text::Format("Local count: {}", local),
-    Text::Format("Shared count: {}", shared->value.Get()),
-    Button("+1 local").OnClick([local] { local += 1; }),
-    Button("+1 shared").OnClick([shared] { shared->value += 1; }),
-    Button("Open secondary window").OnClick([application] {
-      static_cast<void>(application.OpenWindow({.title = "HuxerUI Secondary", .key = "secondary"}));
-    }),
-  }.With(
-      Padding(24.0F),
-      Spacing(12.0F)
-  );
-}
-
-} // namespace
 
 View App() {
-  const WindowIdentity identity = UseEnvironment<WindowIdentity>();
+  auto application = UseApplication();
+  auto model = UseService<SharedCounter>();
+  auto secondary = UseState(std::optional<WindowHandle>{});
+  const bool open = secondary.Get().has_value() && secondary.Get()->IsOpen();
   return MaterialTheme {
-    identity.key == "secondary" ? SecondaryContent() : PrimaryContent(),
+    Column {
+      Text("Multiple windows"),
+      CounterPanel(model, "primary"),
+      Text(open ? "Secondary window is open" : "Secondary window is closed"),
+      Button(open ? "Activate secondary" : "Open secondary").OnClick([application, model, secondary] {
+        if (secondary.Get().has_value() && secondary.Get()->IsOpen()) {
+          secondary.Get()->Activate();
+        } else {
+          secondary = application.OpenWindow([model] { return MaterialTheme {CounterPanel(model, "secondary")}; }, {
+              .title = "Independent counter",
+              .initial_size = {380.0F, 320.0F},
+          });
+        }
+      }).With(Enabled(application.SupportsMultipleWindows())),
+      Button("Quit application").OnClick([application] { application.Quit(); }),
+    }.With(Padding(24.0F), Spacing(12.0F)),
   };
 }
 
 const Application application{
     App,
     {
-        .window = {
-            .title = "HuxerUI Multi-Window",
-            .initial_size = {520.0F, 420.0F},
-        },
-        .application_hooks = {InstallSharedCounter},
-    }
+        .window = {.title = "HuxerUI Multiple Windows", .initial_size = {480.0F, 520.0F}},
+        .application_hooks = {[](ApplicationContext& context) {
+          context.Provide(std::make_shared<SharedCounter>());
+        }},
+    },
 };

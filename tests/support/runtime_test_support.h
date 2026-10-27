@@ -309,7 +309,7 @@ public:
         application_runtime_(&dynamic_cast<huxerui::Runtime&>(platform)), runtime_(platform) {
     try {
       detail::InternalAccess::InitializeRuntime(*application_runtime_, *application_, std::move(startup_activation));
-      detail::InternalAccess::InitializeWindow(runtime_, *application_runtime_, application_->options.window);
+      detail::InternalAccess::InitializeWindow(runtime_, *application_runtime_);
     } catch (...) {
       detail::InternalAccess::RetireWindow(runtime_);
       detail::InternalAccess::RetireRuntime(*application_runtime_);
@@ -321,16 +321,17 @@ public:
       std::optional<ResourceConfiguration> configuration = std::nullopt,
       WindowLifecycleState lifecycle = WindowLifecycleState::Background)
       : UiWindow(
-            application, platform, huxerui::detail::CurrentApplication().options.window, 0, std::move(configuration),
+            application, platform, huxerui::detail::CurrentApplication().root_factory,
+            huxerui::detail::CurrentApplication().options.window, std::move(configuration),
             lifecycle
         ) {}
 
-  UiWindow(huxerui::Runtime& application, huxerui::UiWindow& platform, const WindowOptions& window_options,
-      std::uint32_t window_ordinal, std::optional<ResourceConfiguration> configuration = std::nullopt,
+  UiWindow(huxerui::Runtime& application, huxerui::UiWindow& platform, ViewFactory content,
+      const WindowOptions& window_options, std::optional<ResourceConfiguration> configuration = std::nullopt,
       WindowLifecycleState lifecycle = WindowLifecycleState::Background)
       : application_runtime_(&application), runtime_(platform) {
     detail::InternalAccess::InitializeWindow(
-        runtime_, application, window_options, window_ordinal, std::move(configuration), lifecycle
+        runtime_, application, std::move(content), window_options, std::move(configuration), lifecycle
     );
   }
 
@@ -594,14 +595,22 @@ public:
   explicit TestPlatform(huxerui::UiThreadDispatcher dispatch_to_ui_thread)
       : Runtime(std::move(dispatch_to_ui_thread)) {}
 
-  ~TestPlatform() override { huxerui::UiWindow::Retire(); huxerui::Runtime::Retire(); }
+  ~TestPlatform() override {
+    huxerui::UiWindow::Retire();
+    huxerui::Runtime::Retire();
+    if (on_destroy) on_destroy();
+  }
 
   void OnRuntimeStopped() override { ++application_quit_requests; }
 
-  std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
-                                                        std::uint32_t window_ordinal) override {
+  bool SupportsMultipleWindows() const noexcept override { return multiple_windows_supported; }
+
+  std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
     auto window = std::make_unique<TestPlatform>();
-    detail::InternalAccess::InitializeWindow(*window, *this, options, window_ordinal);
+    window->owned_native_window = true;
+    window->on_destroy = [this] { ++destroyed_windows; };
+    window->on_discard = [this] { ++discarded_windows; };
+    detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
     created_windows.push_back(window.get());
     return window;
   }
@@ -909,6 +918,7 @@ public:
 
   void RequestWindowCommand(huxerui::WindowCommand command) override {
     window_commands.push_back(command);
+    if (owned_native_window && command == WindowCommand::Close) huxerui::UiWindow::CloseWindow();
   }
 
   void ApplyWindowOwnership(huxerui::UiWindow* owner) override {
@@ -924,6 +934,7 @@ public:
   }
 
   void DiscardHost() override {
+    if (!host_discarded && on_discard) on_discard();
     host_discarded = true;
   }
 
@@ -955,10 +966,16 @@ public:
   std::vector<huxerui::UiWindow*> applied_owners;
   std::vector<std::pair<bool, bool>> applied_modal_states;
   int application_quit_requests = 0;
+  int destroyed_windows = 0;
+  int discarded_windows = 0;
+  bool owned_native_window = false;
+  std::function<void()> on_destroy;
+  std::function<void()> on_discard;
+  bool multiple_windows_supported = true;
   bool host_discarded = false;
   /// Drives CanDiscardHost so tests can model hosts that do not support explicit native retirement.
   bool discard_host_supported = true;
-  /// Windows produced by CreateNativeWindow for multi-window tests, valid until the Runtime retires them.
+  /// Windows produced by CreateWindow for multi-window tests, valid until the Runtime retires them.
   std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;
   std::shared_ptr<TestPermissionTransport> permission_transport;

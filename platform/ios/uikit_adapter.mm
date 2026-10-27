@@ -21,6 +21,7 @@
 #include <huxerui/app.h>
 #include <huxerui/ios/platform_registry.h>
 
+#include "internal_access.h"
 #include "ios_application_internal.h"
 #include "ios_file_internal.h"
 #include "ios_http_internal.h"
@@ -552,17 +553,16 @@ public:
 
       auto configuration = application.Resources()->Configuration();
       if (view_.window.screen != nil) configuration.display_scale = static_cast<float>(view_.window.screen.scale);
-      InitializeWindow(application, CurrentApplication().options.window, 0, configuration);
-      view_->huxeruiWindow = this;
-      platform_views_ = std::make_unique<UIKitPlatformViews>(renderer_, PlatformRegistry(), *this);
-
-      [window_ makeKeyAndVisible];
-      [view_controller_.view layoutIfNeeded];
-
+      platform_views_ = std::make_unique<UIKitPlatformViews>(
+          renderer_, InternalAccess::ApplicationRegistry(application), *this);
       text_input_ = std::make_unique<UIKitTextInput>(*this, view_);
       accessibility_ =
           std::make_unique<UIKitAccessibility>(*this, view_, *platform_views_, text_input_->Responder());
       frame_scheduler_ = [[HuxerUIIOSFrameScheduler alloc] initWithView:view_];
+      InitializeWindow(application, CurrentApplication().root_factory, CurrentApplication().options.window, configuration);
+      view_->huxeruiWindow = this;
+      [window_ makeKeyAndVisible];
+      [view_controller_.view layoutIfNeeded];
 
       NSNotificationCenter* notifications = NSNotificationCenter.defaultCenter;
       [notifications addObserver:view_

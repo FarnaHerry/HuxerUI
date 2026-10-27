@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <chrono>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <utility>
@@ -26,6 +27,7 @@
 #include "runtime/task_internal.h"
 #include "system_tray_internal.h"
 #include "internal_access.h"
+#include "runtime/ui_window_internal.h"
 
 namespace huxerui::detail {
 
@@ -77,12 +79,19 @@ void ValidateStateLifetime(const StateCellBase& cell) {
 
 ExecutionGuard::ExecutionGuard(std::shared_ptr<ExecutionContext> source) : previous_(execution_context) {
   if (source) {
+    if (source->requires_ui) {
+      window_application_ = source->application.lock();
+      if (window_application_) ++window_application_->active_ui_calls;
+    }
     execution_context = std::move(source);
   }
 }
 
 ExecutionGuard::~ExecutionGuard() {
   execution_context = std::move(previous_);
+  if (window_application_ && --window_application_->active_ui_calls == 0 && window_application_->owner) {
+    window_application_->owner->ResumeWindowMaintenance();
+  }
 }
 
 std::shared_ptr<ExecutionContext> CurrentExecutionContext() {
@@ -368,45 +377,6 @@ bool Runtime::IsInitialized() const noexcept {
   return state_ && state_->phase == ApplicationRuntimeState::Phase::Running;
 }
 
-WindowHandle Runtime::OpenWindow(const WindowOptions& options) {
-  if (!state_) {
-    throw std::logic_error("HuxerUI cannot create a window before the application is initialized");
-  }
-  state_->RequireThread();
-  if (state_->phase != ApplicationRuntimeState::Phase::Running) {
-    throw std::logic_error("HuxerUI cannot create a window while the application is not running");
-  }
-  const std::uint32_t ordinal = state_->next_window_ordinal++;
-  detail::ValidateWindowOptions(options);
-  std::unique_ptr<UiWindow> window = CreateNativeWindow(options, ordinal);
-  if (!window || !window->IsInitialized()) {
-    throw std::logic_error("HuxerUI host did not return an initialized window");
-  }
-  const std::shared_ptr<detail::WindowService> service = detail::InternalAccess::WindowServiceOf(*window);
-  if (!service) {
-    throw std::logic_error("HuxerUI host returned a window without its window service");
-  }
-  state_->windows.push_back(std::move(window));
-  RebuildWindowBlocking({});
-  return detail::MakeWindowHandle(std::move(service));
-}
-
-std::unique_ptr<UiWindow> Runtime::CreateNativeWindow(const WindowOptions&, std::uint32_t) {
-  throw std::logic_error("HuxerUI host does not support runtime window creation");
-}
-
-WindowHandle Runtime::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) {
-  const std::shared_ptr<detail::WindowService> owner_service =
-      relationship.owner.has_value() ? detail::WindowServiceFor(*relationship.owner) : nullptr;
-  if (owner_service != nullptr) {
-    static_cast<void>(RequireLiveWindow(*owner_service));
-  }
-  WindowHandle handle = OpenWindow(options);
-  ApplyWindowRelationship(*detail::WindowServiceFor(handle), owner_service.get(), relationship.modal);
-  RebuildWindowBlocking({});
-  return handle;
-}
-
 void Runtime::SetRelationship(detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner_service,
                               bool modal) {
   if (!state_) {
@@ -417,6 +387,7 @@ void Runtime::SetRelationship(detail::WindowService& target, const std::shared_p
     throw std::logic_error("HuxerUI cannot change a window relationship while the application is not running");
   }
   UiWindow* const target_window = RequireLiveWindow(target);
+  ExecutionGuard guard(InternalAccess::WindowExecution(*target_window));
   UiWindow* owner = nullptr;
   if (owner_service != nullptr) {
     if (owner_service.get() == &target) {
@@ -438,74 +409,6 @@ void Runtime::SetRelationship(detail::WindowService& target, const std::shared_p
   RebuildWindowBlocking({});
 }
 
-void Runtime::RetireOwned(UiWindow& owner) {
-  if (!state_) {
-    return;
-  }
-  state_->RequireThread();
-  std::vector<UiWindow*> retiring;
-  const std::function<void(UiWindow*)> collect = [&](UiWindow* window) {
-    const auto edges = state_->owned_window_edges.find(window);
-    if (edges == state_->owned_window_edges.end()) {
-      return;
-    }
-    for (UiWindow* child : edges->second) {
-      if (child == nullptr || !child->IsInitialized()) {
-        continue;
-      }
-      collect(child);
-      retiring.push_back(child);
-    }
-  };
-  collect(&owner);
-  // Reject unsupported hosts before RetireWindow's shared teardown or this cascade dismantles
-  // anything: the capability error keeps every window in the chain fully intact.
-  if (!owner.CanDiscardHost()) {
-    throw std::logic_error("HuxerUI host does not support explicit window retirement");
-  }
-  for (UiWindow* window : retiring) {
-    if (window == nullptr || !window->CanDiscardHost()) {
-      throw std::logic_error("HuxerUI host does not support explicit window retirement");
-    }
-  }
-  std::vector<UiWindow*> reactivate;
-  for (UiWindow* window : retiring) {
-    if (UiWindow* activation = RemoveWindowRelations(*window); activation != nullptr) {
-      reactivate.push_back(activation);
-    }
-    window->Retire();
-    window->DiscardHost();
-  }
-  if (UiWindow* activation = RemoveWindowRelations(owner); activation != nullptr) {
-    reactivate.push_back(activation);
-  }
-  RebuildWindowBlocking(reactivate);
-}
-
-void Runtime::RetireWindow(detail::WindowService& target) {
-  if (!state_) {
-    throw std::logic_error("HuxerUI cannot retire a window before the application is initialized");
-  }
-  state_->RequireThread();
-  if (state_->phase == ApplicationRuntimeState::Phase::Stopping ||
-      state_->phase == ApplicationRuntimeState::Phase::Stopped) {
-    return;
-  }
-  if (state_->phase != ApplicationRuntimeState::Phase::Running) {
-    throw std::logic_error("HuxerUI cannot retire a window while the application is not running");
-  }
-  UiWindow* const window = WindowForService(target);
-  if (window == nullptr) {
-    return;
-  }
-  RetireOwned(*window);
-  // Shared teardown precedes the native discard so the platform teardown path observes a retired window; on hosts
-  // whose initial window close requests application shutdown, this is what keeps an explicit Retire() running.
-  window->Retire();
-  RebuildWindowBlocking({});
-  window->DiscardHost();
-}
-
 UiWindow* Runtime::WindowForService(const detail::WindowService& service) const {
   if (!state_) {
     return nullptr;
@@ -515,7 +418,7 @@ UiWindow* Runtime::WindowForService(const detail::WindowService& service) const 
     return !ui || !ui->ui_window;
   });
   for (const auto& weak : state_->uis) {
-    if (const auto ui = weak.lock(); ui && ui->ui_window) {
+    if (const auto ui = weak.lock(); ui && ui->ui_window && ui->ui_window->IsInitialized()) {
       if (detail::InternalAccess::WindowServiceOf(*ui->ui_window).get() == &service) {
         return ui->ui_window;
       }
@@ -538,7 +441,7 @@ std::vector<UiWindow*> Runtime::LiveWindows() const {
     return live;
   }
   for (const auto& weak : state_->uis) {
-    if (const auto ui = weak.lock(); ui && ui->ui_window) {
+    if (const auto ui = weak.lock(); ui && ui->ui_window && ui->ui_window->IsInitialized()) {
       live.push_back(ui->ui_window);
     }
   }
@@ -696,23 +599,216 @@ void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
   }
 }
 
+bool Runtime::SupportsMultipleWindows() const noexcept {
+  return false;
+}
+
+std::unique_ptr<UiWindow> Runtime::CreateWindow(ViewFactory, const WindowOptions&) {
+  throw std::runtime_error("HuxerUI host does not support creating top-level windows");
+}
+
+WindowHandle Runtime::OpenWindow(ViewFactory content, WindowOptions options) {
+  return OpenWindow(std::move(content), std::move(options), {});
+}
+
+WindowHandle Runtime::OpenWindow(
+    ViewFactory content, WindowOptions options, const WindowRelationship& relationship) {
+  state_->RequireThread();
+  if (state_->phase != ApplicationRuntimeState::Phase::Running || state_->window_installations) {
+    throw std::logic_error("HuxerUI cannot open a window during installation or shutdown");
+  }
+  if (Composer::Current()) throw std::logic_error("HuxerUI cannot open a window during composition");
+  if (const auto source = CurrentExecutionContext(); source && source->application.lock() != state_) {
+    throw std::logic_error("HuxerUI window belongs to another application lifetime");
+  }
+  if (!content) throw std::invalid_argument("HuxerUI window content must not be empty");
+  ValidateWindowOptions(options);
+  const auto owner_service = relationship.owner ? detail::WindowServiceFor(*relationship.owner) : nullptr;
+  if (owner_service) static_cast<void>(RequireLiveWindow(*owner_service));
+  if (!SupportsMultipleWindows()) {
+    throw std::runtime_error("HuxerUI host does not support creating top-level windows");
+  }
+  ExecutionGuard application_guard(state_->execution);
+  std::unique_ptr<UiWindow> window;
+  ++state_->window_installations;
+  try {
+    window = CreateWindow(std::move(content), options);
+    if (!window || !window->IsInitialized() || &window->ApplicationRuntime() != this) {
+      throw std::logic_error("HuxerUI window factory must return an initialized window of its Runtime");
+    }
+  } catch (...) {
+    --state_->window_installations;
+    ResumeWindowMaintenance();
+    throw;
+  }
+  --state_->window_installations;
+  ResumeWindowMaintenance();
+  WindowHandle handle(window->state_->window_service_);
+  auto* created = window.get();
+  owned_windows_.push_back(std::move(window));
+  try {
+    ExecutionGuard window_guard(created->state_->execution_);
+    ApplyWindowRelationship(*created->state_->window_service_, owner_service.get(), relationship.modal);
+    RebuildWindowBlocking({});
+    if (created->IsInitialized()) {
+      created->RequestWindowCommand(options.show_without_activation ? WindowCommand::Show : WindowCommand::Activate);
+    }
+  } catch (...) {
+    const auto found = std::find_if(owned_windows_.begin(), owned_windows_.end(),
+                                  [created](const auto& entry) { return entry.get() == created; });
+    auto failed = std::move(*found);
+    owned_windows_.erase(found);
+    const auto failure = std::current_exception();
+    std::vector<UiWindow*> reactivate;
+    if (UiWindow* owner = RemoveWindowRelations(*failed)) reactivate.push_back(owner);
+    failed->Retire();
+    try {
+      RebuildWindowBlocking(reactivate);
+    } catch (...) {
+    }
+    std::rethrow_exception(failure);
+  }
+  return handle;
+}
+
+void Runtime::CloseWindow(UiWindow& window) {
+  QueueWindowRetirement(window, true);
+}
+
+void Runtime::RetireWindow(detail::WindowService& target) {
+  if (!state_) throw std::logic_error("HuxerUI cannot retire a window before application initialization");
+  state_->RequireThread();
+  if (state_->phase == ApplicationRuntimeState::Phase::Stopping ||
+      state_->phase == ApplicationRuntimeState::Phase::Stopped) return;
+  if (UiWindow* window = WindowForService(target)) QueueWindowRetirement(*window, false);
+}
+
+void Runtime::QueueWindowRetirement(UiWindow& window, bool close_request) {
+  state_->RequireThread();
+  if (!window.state_ || window.state_->closing_ || window.state_->retired_) return;
+  if (state_->phase != ApplicationRuntimeState::Phase::Running || state_->window_installations) {
+    throw std::logic_error("HuxerUI cannot retire a window during installation or shutdown");
+  }
+  const auto owned = std::find_if(owned_windows_.begin(), owned_windows_.end(),
+                                [&window](const auto& entry) { return entry.get() == &window; });
+  if (close_request && owned == owned_windows_.end()) {
+    throw std::logic_error("HuxerUI cannot close an externally owned UI attachment");
+  }
+  const auto retiring = OwnedSubtree(window, true);
+  if (!close_request) {
+    for (UiWindow* entry : retiring) {
+      if (entry->IsInitialized() && !entry->CanDiscardHost()) {
+        throw std::logic_error("HuxerUI host does not support explicit window retirement");
+      }
+    }
+  }
+  for (UiWindow* entry : retiring) {
+    if (!entry->state_ || entry->state_->retired_) continue;
+    entry->state_->closing_ = true;
+    entry->state_->window_service_->BeginClose();
+  }
+  window.state_->close_requested_ = close_request;
+  window_maintenance_needed_ = true;
+  ScheduleWindowMaintenance();
+}
+
+void Runtime::OrderWindowRetirement(std::vector<UiWindow*>& windows) const {
+  const auto depth = [this](const UiWindow* window) {
+    std::size_t result = 0;
+    for (auto found = state_->window_relations.find(const_cast<UiWindow*>(window));
+         found != state_->window_relations.end() && found->second.owner;
+         found = state_->window_relations.find(found->second.owner)) {
+      ++result;
+    }
+    return result;
+  };
+  std::stable_sort(windows.begin(), windows.end(), [&](const UiWindow* left, const UiWindow* right) {
+    return depth(left) > depth(right);
+  });
+}
+
+void Runtime::ScheduleWindowMaintenance() {
+  if (!window_maintenance_needed_ || window_maintenance_pending_ || !state_ ||
+      state_->phase == ApplicationRuntimeState::Phase::Stopped) return;
+  window_maintenance_pending_ = true;
+  const std::weak_ptr<ApplicationRuntimeState> weak = state_;
+  try {
+    state_->Post([weak] {
+      if (const auto state = weak.lock(); state && state->owner) state->owner->MaintainWindows();
+    });
+  } catch (...) {
+    window_maintenance_pending_ = false;
+    throw;
+  }
+}
+
+void Runtime::ResumeWindowMaintenance() noexcept {
+  if (state_->active_ui_calls || state_->window_installations) return;
+  try {
+    ScheduleWindowMaintenance();
+  } catch (...) {
+    // Keep cleanup pending for a later boundary without throwing from a destructor or replacing an active exception.
+  }
+}
+
+void Runtime::MaintainWindows() {
+  window_maintenance_pending_ = false;
+  if (state_->active_ui_calls || state_->window_installations) return;
+  window_maintenance_needed_ = false;
+  if (state_->phase == ApplicationRuntimeState::Phase::Stopping) {
+    FinishShutdown();
+    return;
+  }
+  std::vector<UiWindow*> retiring;
+  for (const auto& weak : state_->uis) {
+    if (const auto ui = weak.lock(); ui && ui->ui_window && ui->ui_window->state_->closing_) {
+      retiring.push_back(ui->ui_window);
+    }
+  }
+  for (const auto& owned : owned_windows_) {
+    if (owned->state_->retired_ && std::find(retiring.begin(), retiring.end(), owned.get()) == retiring.end()) {
+      retiring.push_back(owned.get());
+    }
+  }
+  OrderWindowRetirement(retiring);
+  bool closed_window = false;
+  std::vector<UiWindow*> reactivate;
+  for (UiWindow* window : retiring) {
+    closed_window |= window->state_->close_requested_;
+    if (UiWindow* owner = RemoveWindowRelations(*window)) reactivate.push_back(owner);
+    window->Retire();
+    if (window->CanDiscardHost()) window->DiscardHost();
+    const auto owned = std::find_if(owned_windows_.begin(), owned_windows_.end(),
+                                  [window](const auto& entry) { return entry.get() == window; });
+    if (owned != owned_windows_.end()) {
+      auto released = std::move(*owned);
+      owned_windows_.erase(owned);
+    }
+  }
+  std::erase_if(reactivate, [&](UiWindow* owner) {
+    return std::find(retiring.begin(), retiring.end(), owner) != retiring.end();
+  });
+  RebuildWindowBlocking(reactivate);
+  std::erase_if(state_->uis, [](const auto& weak) {
+    const auto ui = weak.lock();
+    return !ui || !ui->ui_window;
+  });
+  if (closed_window && owned_windows_.empty() && state_->declaration->options.quit_on_last_window_closed) {
+    RequestShutdown();
+  }
+}
+
 void Runtime::RequestShutdown() {
   state_->RequireThread();
   if (state_->phase == ApplicationRuntimeState::Phase::Stopping ||
-      state_->phase == ApplicationRuntimeState::Phase::Stopped) {
-    return;
-  }
-  if (state_->phase == ApplicationRuntimeState::Phase::Installing) {
-    throw std::logic_error("HuxerUI cannot request shutdown during application installation");
+      state_->phase == ApplicationRuntimeState::Phase::Stopped) return;
+  if (state_->phase == ApplicationRuntimeState::Phase::Installing || state_->window_installations) {
+    throw std::logic_error("HuxerUI cannot request shutdown during installation");
   }
   state_->phase = ApplicationRuntimeState::Phase::Stopping;
   state_->accepts_tasks = false;
-  const std::weak_ptr<ApplicationRuntimeState> weak = state_;
-  state_->Post([weak] {
-    if (const auto state = weak.lock(); state && state->owner) {
-      state->owner->FinishShutdown();
-    }
-  });
+  window_maintenance_needed_ = true;
+  ScheduleWindowMaintenance();
 }
 
 void Runtime::Retire() noexcept {
@@ -723,14 +819,28 @@ void Runtime::Retire() noexcept {
     std::terminate();
   }
   ExecutionGuard guard(state_->execution);
+  window_maintenance_needed_ = false;
   state_->phase = ApplicationRuntimeState::Phase::Stopping;
   state_->accepts_tasks = false;
+  std::vector<UiWindow*> windows;
   for (const auto& weak : state_->uis) {
-    if (const auto ui = weak.lock(); ui && ui->ui_window) {
-      ui->ui_window->Retire();
+    if (const auto ui = weak.lock(); ui && ui->ui_window) windows.push_back(ui->ui_window);
+  }
+  OrderWindowRetirement(windows);
+  for (UiWindow* window : windows) {
+    static_cast<void>(RemoveWindowRelations(*window));
+    window->Retire();
+    const auto owned = std::find_if(owned_windows_.begin(), owned_windows_.end(),
+                                  [window](const auto& entry) { return entry.get() == window; });
+    if (owned != owned_windows_.end()) {
+      auto released = std::move(*owned);
+      owned_windows_.erase(owned);
     }
   }
-  state_->windows.clear();
+  owned_windows_.clear();
+  state_->window_relations.clear();
+  state_->owned_window_edges.clear();
+  state_->window_blocked_state.clear();
   CloseTaskScope(state_->tasks);
   DisconnectHttpOperations(*state_);
   for (auto cleanup = state_->handler_cleanups.rbegin(); cleanup != state_->handler_cleanups.rend(); ++cleanup) {
@@ -802,6 +912,15 @@ void Runtime::UpdateResourceConfiguration(ResourceConfiguration configuration) {
 
 ApplicationContext::ApplicationContext(detail::ApplicationRuntimeState& state)
     : state_(&state), registry_(&state.registry) {}
+
+detail::PlatformRegistry& detail::InternalAccess::ApplicationRegistry(Runtime& runtime) {
+  if (!runtime.state_) throw std::logic_error("HuxerUI platform catalog requires an initialized Runtime");
+  runtime.state_->RequireThread();
+  if (runtime.state_->phase != ApplicationRuntimeState::Phase::Running) {
+    throw std::logic_error("HuxerUI platform catalog requires a running Runtime");
+  }
+  return runtime.state_->registry;
+}
 
 void ApplicationContext::ProvideService(std::type_index type, std::shared_ptr<void> service) {
   state_->RequireThread();

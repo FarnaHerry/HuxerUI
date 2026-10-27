@@ -487,7 +487,7 @@ struct LayerController::State {
 /// Application services stay on Runtime; execution_ records the original window context for retained callbacks.
 /// Shared retirement clears native access before the derived window releases its platform members.
 struct UiWindow::State {
-  State(UiWindow& owner, const Application& application, const WindowOptions& window_options);
+  State(UiWindow& owner, const AppOptions& application, ViewFactory content, const WindowOptions& options);
   ~State();
 
   struct TouchpadScrollSample {
@@ -510,7 +510,9 @@ struct UiWindow::State {
   std::shared_ptr<detail::ExecutionContext> execution_;
   bool initialized_ = false;
   bool retired_ = false;
-  RootFactory root_factory_;
+  bool closing_ = false;
+  bool close_requested_ = false;
+  ViewFactory root_factory_;
   ViewportBreakpoints viewport_breakpoints_;
   std::shared_ptr<detail::WindowState> window_;
   ViewportClass viewport_class_ = ViewportClass::Compact;

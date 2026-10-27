@@ -8,10 +8,10 @@
 #include <huxerui/modifier.h>
 
 #include "huxerui_builtin_resources.h"
-#include "internal_access.h"
 #include "runtime/ui_window_internal.h"
 #include "window_internal.h"
 #include "application_internal.h"
+#include "internal_access.h"
 
 namespace huxerui {
 
@@ -229,6 +229,21 @@ UiWindow* WindowService::NativeWindow() const {
   return ui_window_;
 }
 
+bool WindowService::IsOpen() const {
+  const auto application = application_.lock();
+  if (!application || application->phase == ApplicationRuntimeState::Phase::Stopped) return false;
+  application->RequireThread();
+  return open_.Get();
+}
+
+void WindowService::Open() {
+  open_ = true;
+}
+
+void WindowService::BeginClose() {
+  open_ = false;
+}
+
 WindowLifecycleState WindowService::LifecycleState() const {
   return lifecycle_state_.Get();
 }
@@ -285,14 +300,17 @@ std::function<void()> WindowService::ConnectLifecycle(std::function<void(WindowL
 }
 
 void WindowService::Request(WindowCommand command) {
-  if (ui_window_ == nullptr) {
-    return;
+  if (!ui_window_) return;
+  const auto application = application_.lock();
+  if (!application) return;
+  application->RequireThread();
+  if (application->window_installations) {
+    throw std::logic_error("HuxerUI window commands are unavailable during window installation");
   }
-  if ((command == WindowCommand::Minimize || command == WindowCommand::Close) &&
-      HandleRequest(command)) {
-    return;
-  }
-  ui_window_->RequestWindowCommand(command);
+  if (!IsOpen()) return;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  if ((command == WindowCommand::Minimize || command == WindowCommand::Close) && HandleRequest(command)) return;
+  if (ui_window_ && IsOpen()) ui_window_->RequestWindowCommand(command);
 }
 
 void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal) {
@@ -320,33 +338,24 @@ void WindowService::Retire() {
   });
 }
 
-void WindowService::ReleaseRetiredWindow() {
-  const auto state = application_.lock();
-  if (!state) return;
-  state->RequireThread();
-  if (ui_window_ != nullptr) {
-    throw std::logic_error("HuxerUI cannot release a window before shared retirement");
-  }
-  if (state->phase != ApplicationRuntimeState::Phase::Running) return;
-  const std::weak_ptr<ApplicationRuntimeState> application = state;
-  const std::weak_ptr<WindowService> weak = weak_from_this();
-  state->Post([application, weak] {
-    const auto state = application.lock();
-    const auto service = weak.lock();
-    if (!state || !service || service->ui_window_ != nullptr) return;
-    std::erase_if(state->windows, [&](const auto& window) {
-      return InternalAccess::WindowServiceOf(*window) == service;
-    });
-    std::erase_if(state->uis, [](const auto& ui) { return ui.expired(); });
-  });
-}
+
 
 bool WindowService::HandleRequest(WindowCommand command) {
+  if (!IsOpen()) return true;
   RequestHandler& request = Handler(command);
-  if (!request.handler) {
-    return false;
+  bool& handling_request = command == WindowCommand::Minimize ? handling_minimize_request_ : handling_close_request_;
+  if (handling_request) return true;
+  auto handler = request.handler;
+  if (!handler) return false;
+  handling_request = true;
+  try {
+    const bool handled = handler();
+    handling_request = false;
+    return handled || !IsOpen();
+  } catch (...) {
+    handling_request = false;
+    throw;
   }
-  return request.handler();
 }
 
 std::function<void()>
@@ -398,6 +407,8 @@ void WindowService::DisconnectRequest(WindowCommand command, std::uint64_t conne
 }
 
 void WindowService::Disconnect() noexcept {
+  if (!ui_window_) return;
+  BeginClose();
   ui_window_ = nullptr;
   minimize_handler_ = {};
   close_handler_ = {};
@@ -493,6 +504,10 @@ LayoutResult WindowTitleBar::Measure(LayoutContext& context, ViewNode& node, Con
   }
   result.SetSize(constraints.Constrain({content.MeasuredSize().width + reserved_width, content.MeasuredSize().height}));
   return result;
+}
+
+bool WindowHandle::IsOpen() const {
+  return service_->IsOpen();
 }
 
 void WindowHandle::Show() const {

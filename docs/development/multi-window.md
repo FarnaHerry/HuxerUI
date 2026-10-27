@@ -5,15 +5,15 @@ It complements the ownership contract in [Multi-Window Design](../design/multi-w
 
 ## Current status
 
-| Platform | Runtime `OpenWindow` | Status |
+| Platform | `ApplicationHandle::OpenWindow` | Status |
 |---|:---:|---|
-| Windows | Supported | Implemented, built, and tested on the development host. |
-| Linux | Implemented | Native coordinate and lifecycle validation belongs to Linux maintainers on supported Linux hosts. |
-| macOS | Preview | Runtime-owned AppKit loop, per-window callback routing, ownership, modality, and retirement; validated by the macOS CI workflow, with interactive device validation still required. |
-| Web | Throws `std::logic_error` | Sessions remain host-driven; no runtime creation entry exists yet. |
-| Android, iOS | Throws `std::logic_error` | Platform-driven attachments by design; no runtime creation is planned. |
+| Windows | Supported | Win32 backend; native compilation and execution require a Windows host. |
+| Linux | Supported | GTK backend with native lifecycle, retirement, floating-window, and coordinate checks on Linux. |
+| macOS | Preview | Runtime-owned AppKit loop, per-window routing, ownership, modality, and retirement; requires macOS CI and interactive validation. |
+| Web | Throws `std::runtime_error` | Sessions remain host-driven; no runtime creation entry exists yet. |
+| Android, iOS | Throws `std::runtime_error` | Platform-driven attachments by design; no runtime creation is planned. |
 
-The unsupported-host error is the intended contract, not a regression: the shared `Runtime::CreateNativeWindow` default throws, and only hosts that override it gain the capability.
+Unsupported hosts report false from `SupportsMultipleWindows()` and throw `std::runtime_error` from `OpenWindow`; desktop hosts implement the Runtime `CreateWindow` factory.
 
 ## Windows validation
 
@@ -33,11 +33,13 @@ A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes
 The Linux port has the mirror-image `[linux-native]` test (`LinuxRuntimeWindowsOpenAndCloseIndependently`): it opens and closes a runtime window twice against a real display, asserts the requested `initial_position` on platforms that honor placement, retires the runtime windows through the close path while the initial window stays alive, and finishes by closing the initial window to exercise whole-application shutdown; run it explicitly with `huxerui_linux_tests [linux-native]` because it creates real GTK toplevels.
 The interactive demo is `example_multi_window`: the primary window opens a secondary one at runtime, both windows share one counter service, and each window keeps its own local state.
 
-## Linux validation ownership
+## Linux validation
 
-Linux maintainers validate the GTK adapter on supported Linux hosts; WSL is not a supported HuxerUI validation host and its results do not establish Linux compatibility.
-The X11 placement origin, DPI conversion, and close-from-input lifecycle need Linux follow-up; the native placement test and its failure cleanup also need review.
-The Linux changes in the macOS preview PR address CMake/mcpp X11 build dependencies, without claiming those native runtime issues are resolved.
+Use a native Linux session with distribution-owned GTK dependencies for CMake; WSL results do not establish Linux compatibility.
+Run each hidden native tag in a separate process, particularly `[linux-native]`, whose application loop uses a worker thread.
+Retirement and independent-window lifecycle checks run on both X11 and Wayland; floating-window geometry and physical pointer input require the backend capabilities described in [Platform Interfaces](../guide/platforms.md).
+Use an isolated X11 display for synthetic pointer sequences, since desktop focus, stacking, and window-manager animations can prevent deterministic delivery.
+CMake links Xext when XShape is available; the mcpp payload configuration declares XShape support and probes `xext` explicitly so its consumers receive the same link dependency.
 
 ## macOS preview validation
 
@@ -62,16 +64,16 @@ The Linux development host cannot build or execute AppKit, and no local macOS re
 
 ## Behavioral notes
 
-- Closing the initial window requests whole-application shutdown, preserving historical single-window behavior on every platform. Closing a runtime-opened window retires only that window.
-- On Windows, a forwarded single-instance activation (URL or file) targets the visible initial window first, then the foreground window of the application class, then any visible window, so the surfaced target stays predictable while extra windows are open.
+- Close retires only the target window and its owned descendants. Closing the last framework-owned window requests application shutdown by default; `quit_on_last_window_closed = false` keeps the Runtime running. Hidden windows still count, and the initial window follows the same policy.
+- Windows receives forwarded URL, file, and notification activation through the Runtime-owned hidden facilities HWND. Application activation handlers choose whether to activate an existing window or create content; delivery does not require a visible UI window.
 - Tray hibernation is an application policy, not a framework switch: applications intercept minimize through `WindowHandle::OnMinimizeRequest`, then either `Hide()` (window stays alive) or `Retire()` (releases the mounted tree, window services, and native resources while the Runtime keeps running), and reopen it from `SystemTrayHandle::OnActivate` with application services surviving on the Runtime; a tray menu Quit calls `ApplicationHandle::Quit()`. Retiring the initial window keeps the application running, so the reopen path uses the same `OpenWindow` entry as any other window; on hosts that do not support runtime window creation, `Retire()` reports the same capability gap.
-- `WindowIdentity::ordinal` is assigned by `Runtime::OpenWindow`; callers that attach windows directly through `UiWindow::InitializeWindow` (embedded hosts and windowless tests) supply their own ordinal and are responsible for keeping it distinct.
-- Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the last semantic frame, the committed damage snapshot, and the native resources of hosts that override `CreateNativeWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`. Before any of that runs, `RetireWindow` verifies through `UiWindow::CanDiscardHost()` that the window and every initialized window in its owned chain support native discard, and rejects the whole retirement with the capability error when any of them does not; the rejection leaves every window fully intact.
+- Each window receives explicit content through `OpenWindow(content, options)` or `UiWindow::InitializeWindow(runtime, content, options, configuration)`. Applications retain handles and pass their own business metadata; no framework window ID is injected into Environment.
+- Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the last semantic frame, the committed damage snapshot, and the native resources of hosts that implement `CreateWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`. Before any of that runs, `RetireWindow` verifies through `UiWindow::CanDiscardHost()` that the window and every initialized window in its owned chain support native discard, and rejects the whole retirement with the capability error when any of them does not; the rejection leaves every window fully intact.
 - Working-set readings in Task Manager do not establish whether window objects have been destroyed; compare repeated create/retire cycles with object-lifetime checks and committed-memory measurements.
 - Applying modal blocking on Windows calls `EnableWindow` on the covered windows. When a modal window opens from a click, the press still holds mouse capture, and disabling the capturing window synchronously delivers `WM_CANCELMODE` or `WM_CAPTURECHANGED`; the adapter defers the nested pointer cancellation until the in-flight pointer dispatch returns (see `WindowsUiWindow::SendPointer`). Delivering that cancellation immediately re-enters the shared pointer interaction and ends the active session while the outer dispatch still holds it, which corrupts the session map. Host ports whose grab-loss notifications arrive synchronously during input dispatch need an equivalent guard. The Linux port applies modality through `gtk_window_set_modal` and `gtk_window_set_transient_for`, which is window-manager mediated and produced no synchronous grab-loss during validation, so no deferred-cancellation guard was needed; revisit if a compositor is found to deliver one.
-- GTK4 defers the native dispose of `gtk_window_destroy`, so the Linux close path for runtime-opened windows runs the shared teardown (owned chain, `Retire()`, native facility release) synchronously inside `CloseRequested` before calling `gtk_window_destroy`; explicit retirement through `DiscardHost` performs the same native facility release before destroying the window. Native facility release is guarded to run at most once per window because the IM client and platform views must detach while the widget tree is still alive. Run `G_DEBUG=fatal-criticals huxerui_linux_tests '[linux-native-retire]'` on both X11 and Wayland to check that rendered frames and native widgets are released before application shutdown, the application services survive, and a recreated window retires cleanly.
+- GTK4 defers native disposal. Accepted Close and explicit Retire use Runtime maintenance after active callbacks return; native facility release detaches IM, PlatformView, drag, canvas, and controller callbacks while the widget tree remains usable. Release runs at most once per attachment. Run `G_DEBUG=fatal-criticals huxerui_linux_tests '[linux-native-retire]'` on X11 and Wayland to verify release, surviving application services, and reopening.
 - On glibc Linux, explicit retirement of the last GTK toplevel also returns unused allocator pages with `malloc_trim(0)`, so a long-lived tray-only Runtime does not retain the UI's freed heap until later allocation pressure. GTK, font, and graphics-driver caches and loaded library pages may remain resident; retirement does not promise the same process footprint across platforms.
-- Linux detaches window, canvas, and controller callbacks before acknowledging native retirement through the internal `WindowService::ReleaseRetiredWindow`. The Runtime-owned C++ window is removed on a subsequent application dispatch, after the native callback returns, releasing its remaining IM context and window state without waiting for application shutdown. Collection uses the original service identity so retained old handles cannot target a replacement at the same address. File-picker parent lookup retains a weak GTK reference instead of borrowing the C++ window. `RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown` checks 1,000 cycles; `[linux-native-retire]` also checks application ownership and retained GTK callback safety.
+- The single Runtime window collection releases retired C++ attachments after the original native callback returns; retained old handles remain disconnected. Linux file-picker parent lookup uses a weak GTK reference. `RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown` covers 1,000 cycles; native retirement tests cover frame release and retained GTK callback safety.
 - `WindowHandle::Retire()` may run on any thread: it posts weak application/service references through the synchronized application queue, then resolves the Runtime only on its owning thread. `RuntimeOpenWindowRetirementMayRaceApplicationShutdown` exercises submissions concurrent with shutdown.
 - Window placement on Linux uses `XMoveWindow` after the native surface maps (`WindowOptions::initial_position`); GTK4 removed `gtk_window_move`. `WindowHandle::Position()` reports the client-area origin in logical screen coordinates through `XTranslateCoordinates` on X11 and `ClientToScreen` on Windows, and reports `std::nullopt` on Wayland where compositors own placement by protocol.
 - When several modal windows overlap in coverage, the most recently established relationship wins: each window is blocked only by modals newer than every modal whose own owned chain contains it. Sibling modals of one owner therefore stack newest-on-top instead of disabling each other, application modals stack the same way, and retiring the top modal unblocks the previous one. Re-affirming an unchanged relationship keeps its place in the stack; windows opened through the ordinary `OpenWindow` overload join the blocking set on the common creation path.
@@ -79,18 +81,18 @@ The Linux development host cannot build or execute AppKit, and no local macOS re
 
 ## Porting checklist for additional hosts
 
-Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateNativeWindow` construct and initialize the platform window, and retire runtime-opened windows independently of the initial one.
+Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateWindow` construct an initialized hidden attachment, and let Runtime own presentation and safe retirement.
 
 1. Hoist the per-window main loop to the Runtime owner and iterate until application shutdown, including when every window is hidden or explicitly retired.
-2. Implement `CreateNativeWindow(const WindowOptions&, std::uint32_t)` on the platform Runtime subclass: construct the platform `UiWindow`, create the native window, call `InitializeWindow(runtime, options, ordinal, configuration)`, and return it without entering a nested loop.
-3. Open the initial window and `AppOptions::extra_windows` through `Runtime::OpenWindow` in the platform entry so every window shares one path.
+2. Implement `SupportsMultipleWindows()` and `CreateWindow(ViewFactory, const WindowOptions&)` on the platform Runtime subclass: prepare native facilities, call `InitializeWindow(runtime, content, options, configuration)`, and return a hidden attachment without entering a nested loop.
+3. Open the initial window and `AppOptions::extra_windows` through `ApplicationHandle::OpenWindow(content, options)` in the platform entry so every window shares one path.
 4. Route native callbacks from the handle or object that originated them instead of a single stored window pointer.
-5. Define close behavior: the initial window keeps the platform's historical shutdown behavior; runtime-opened windows destroy only their own native window.
+5. Route accepted native closure to `UiWindow::CloseWindow`, honor the shared last-window policy, and preserve explicit retirement without application shutdown.
 6. Build and run the common suites plus the platform tests on the host, then record the result in this document.
 
 Host implementation anchors:
 
-- Linux (ported): the per-window `GMainContext` iteration moved to `LinuxRuntime::RunApplication`, `LinuxRuntime::CreateNativeWindow` constructs `LinuxUiWindow` through `Attach` (which no longer enters a nested loop), the initial window opens through `Runtime::OpenWindow`, `CloseRequested` splits on the ordinal (initial window keeps whole-application shutdown, runtime windows retire independently with a synchronous shared teardown before the deferred GTK dispose), and `CanDiscardHost`/`DiscardHost` are overridden so `WindowHandle::Retire()` works. GTK signal handlers were already routed per instance through user data. X11 placement and screen-origin queries use the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
+- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. `CanDiscardHost` and `DiscardHost` support explicit retirement. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest

@@ -333,8 +333,7 @@ void RunFloatingScenario(FloatingScenario& scenario) {
     const Application application{
         FloatingContentApp,
         {
-            .window = {.title = "HuxerUI floating probe", .key = "primary",
-                       .initial_size = {240.0F, 240.0F}},
+            .window = {.title = "HuxerUI floating probe", .initial_size = {240.0F, 240.0F}},
             .show_debug_overlay = false,
         },
     };
@@ -417,12 +416,15 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
     } else if (stage == 1) {
       // Shared validation rejects invalid floating configuration on every backend.
       try {
-        static_cast<void>(self.application->OpenWindow({
+        static_cast<void>(self.application->OpenWindow(
+            FloatingContentApp,
+            {
             .title = "HuxerUI floating invalid",
             .initial_size = {120.0F, 90.0F},
             .presentation = WindowPresentation::Standard,
             .transparent_surface = true,
-        }));
+        }
+        ));
       } catch (const std::invalid_argument&) {
         invalid_argument_rejected = true;
       }
@@ -442,7 +444,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
             } else {
               options.topmost = true;
             }
-            static_cast<void>(self.application->OpenWindow(options));
+            static_cast<void>(self.application->OpenWindow(FloatingContentApp, options));
           } catch (const std::logic_error&) {
             ++logic_error_rejections;
           }
@@ -463,7 +465,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
           options.show_without_activation = true;
           options.topmost = true;
         }
-        floating = self.application->OpenWindow(options);
+        floating = self.application->OpenWindow(FloatingContentApp, options);
         return false;
       }
       GtkWindow* pet = self.Native("HuxerUI floating pet");
@@ -656,12 +658,15 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
         if (self.Native("HuxerUI floating pet") != nullptr) {
           return false;  // The previous cycle's window is still tearing down.
         }
-        reopened = self.application->OpenWindow({
+        reopened = self.application->OpenWindow(
+            FloatingContentApp,
+            {
             .title = "HuxerUI floating pet",
             .initial_size = {200.0F, 200.0F},
             .presentation = WindowPresentation::Utility,
             .transparent_surface = true,
-        });
+        }
+        );
         return false;
       }
       GtkWindow* pet = self.Native("HuxerUI floating pet");
@@ -681,10 +686,13 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       // The transparent background override is window-scoped: an ordinary window opened afterwards
       // keeps the theme background and decoration.
       if (!plain.has_value()) {
-        plain = self.application->OpenWindow({
+        plain = self.application->OpenWindow(
+            FloatingContentApp,
+            {
             .title = "HuxerUI floating plain",
             .initial_size = {160.0F, 120.0F},
-        });
+        }
+        );
         return false;
       }
       GtkWindow* pet_plain = self.Native("HuxerUI floating plain");
@@ -718,14 +726,20 @@ TEST_CASE("LinuxNativeFloatingGeometryUsesLogicalClientCoordinates", "[.][linux-
   scenario.advance = [&]() {
     if (!scenario.application || !scenario.primary) return false;
     if (stage == 0) {
-      utility = scenario.application->OpenWindow({
+      utility = scenario.application->OpenWindow(
+          FloatingContentApp,
+          {
           .title = "HuxerUI logical utility", .initial_size = {120.0F, 100.0F},
           .initial_position = Point{80.0F, 70.0F}, .presentation = WindowPresentation::Utility,
-      });
-      decorated = scenario.application->OpenWindow({
+      }
+      );
+      decorated = scenario.application->OpenWindow(
+          FloatingContentApp,
+          {
           .title = "HuxerUI logical decorated", .initial_size = {140.0F, 110.0F},
           .initial_position = Point{120.0F, 100.0F},
-      });
+      }
+      );
       ++stage;
       return false;
     }

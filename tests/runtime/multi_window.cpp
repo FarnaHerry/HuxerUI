@@ -13,8 +13,6 @@ namespace huxerui::test {
 
 namespace {
 
-WindowIdentity primary_identity;
-WindowIdentity secondary_identity;
 int primary_compositions = 0;
 int secondary_compositions = 0;
 std::optional<State<int>> primary_state;
@@ -23,22 +21,19 @@ std::optional<WindowHandle> primary_handle;
 std::optional<WindowHandle> secondary_handle;
 std::optional<ApplicationHandle> captured_application;
 
-View IdentityApp() {
-  const WindowIdentity identity = UseEnvironment<WindowIdentity>();
-  if (identity.ordinal == 0) {
-    primary_identity = identity;
-    ++primary_compositions;
-  } else {
-    secondary_identity = identity;
-    ++secondary_compositions;
-  }
-  return Text(identity.key.empty() ? std::string{"primary"} : "secondary: " + identity.key);
+View PrimaryContent() {
+  ++primary_compositions;
+  return Text("primary");
 }
 
-View IsolatedCounterApp() {
-  const WindowIdentity identity = UseEnvironment<WindowIdentity>();
+View SecondaryContent(std::string label) {
+  ++secondary_compositions;
+  return Text("secondary: " + label);
+}
+
+View CounterContent(bool primary) {
   auto count = UseState(0);
-  if (identity.ordinal == 0) {
+  if (primary) {
     ++primary_compositions;
     primary_state = count;
     primary_handle = UseWindow();
@@ -50,14 +45,15 @@ View IsolatedCounterApp() {
   return Text::Format("{}", count.Get());
 }
 
+View PrimaryCounterApp() { return CounterContent(true); }
+View SecondaryCounterApp() { return CounterContent(false); }
+
 View CaptureApplicationApp() {
   captured_application = UseApplication();
   return Spacer();
 }
 
 void ResetMultiWindowGlobals() {
-  primary_identity = WindowIdentity{};
-  secondary_identity = WindowIdentity{};
   primary_compositions = 0;
   secondary_compositions = 0;
   primary_state.reset();
@@ -83,9 +79,6 @@ public:
   void DiscardHost() override {
     counts_.inside_discard = true;
     TestPlatform::DiscardHost();
-    const auto service = detail::InternalAccess::WindowServiceOf(*this);
-    service->ReleaseRetiredWindow();
-    service->ReleaseRetiredWindow();
     counts_.inside_discard = false;
   }
 private:
@@ -95,10 +88,9 @@ private:
 class ReclaimingRuntime final : public TestPlatform {
 public:
   explicit ReclaimingRuntime(RetirementCounts& counts) : counts_(counts) {}
-  std::unique_ptr<huxerui::UiWindow> CreateNativeWindow(const WindowOptions& options,
-      std::uint32_t ordinal) override {
+  std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
     auto window = std::make_unique<ReclaimingWindow>(counts_);
-    detail::InternalAccess::InitializeWindow(*window, *this, options, ordinal);
+    detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
     return window;
   }
 private:
@@ -107,19 +99,19 @@ private:
 
 } // namespace
 
-TEST_CASE("MultiWindowAttachmentsReceiveDistinctIdentities") {
+TEST_CASE("MultiWindowAttachmentsComposeExplicitContent") {
   ResetMultiWindowGlobals();
   TestPlatform owner;
-  Application application{IdentityApp, {.show_debug_overlay = false}};
+  Application application{PrimaryContent, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
-  UiWindow primary(owner, owner, application.options.window, 0);
+  UiWindow primary(owner, owner);
   const WindowOptions secondary_options{
       .title = "secondary",
-      .key = "secondary",
       .initial_size = {320.0F, 240.0F},
   };
   TestPlatform secondary_platform;
-  UiWindow secondary(owner, secondary_platform, secondary_options, 1);
+  const std::string label = "secondary";
+  UiWindow secondary(owner, secondary_platform, [label] { return SecondaryContent(label); }, secondary_options);
   primary.SetWindowMetrics({.viewport = {200.0F, 120.0F}});
   secondary.SetWindowMetrics({.viewport = {200.0F, 120.0F}});
 
@@ -127,20 +119,19 @@ TEST_CASE("MultiWindowAttachmentsReceiveDistinctIdentities") {
   REQUIRE(FirstText(secondary.BuildFrame()) == "secondary: secondary");
   REQUIRE(primary_compositions == 1);
   REQUIRE(secondary_compositions == 1);
-  REQUIRE(primary_identity.key.empty());
-  REQUIRE(primary_identity.ordinal == 0);
-  REQUIRE(secondary_identity.key == "secondary");
-  REQUIRE(secondary_identity.ordinal == 1);
 }
 
 TEST_CASE("RuntimeOpenWindowCreatesIndependentAttachments") {
   ResetMultiWindowGlobals();
   TestPlatform owner;
-  Application application{IdentityApp, {.show_debug_overlay = false}};
+  Application application{PrimaryContent, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
-  const WindowHandle first = owner.OpenWindow(application.options.window);
+  const WindowHandle first = UseApplication().OpenWindow(PrimaryContent, application.options.window);
   const WindowHandle second =
-      owner.OpenWindow({.title = "secondary", .key = "secondary", .initial_size = {320.0F, 240.0F}});
+      UseApplication().OpenWindow(
+          [] { return SecondaryContent("secondary"); },
+          {.title = "secondary", .initial_size = {320.0F, 240.0F}}
+      );
   REQUIRE(owner.created_windows.size() == 2);
   owner.created_windows[0]->SetWindowMetrics({.viewport = {200.0F, 120.0F}});
   owner.created_windows[1]->SetWindowMetrics({.viewport = {200.0F, 120.0F}});
@@ -149,8 +140,6 @@ TEST_CASE("RuntimeOpenWindowCreatesIndependentAttachments") {
   const FlattenedScene second_scene = FlattenedFrame(owner.created_windows[1]->BuildFrame());
   REQUIRE(FirstText(first_scene) == "primary");
   REQUIRE(FirstText(second_scene) == "secondary: secondary");
-  REQUIRE(primary_identity.ordinal == 0);
-  REQUIRE(secondary_identity.ordinal == 1);
   REQUIRE(first.LifecycleState() == WindowLifecycleState::Background);
   REQUIRE(second.LifecycleState() == WindowLifecycleState::Background);
 }
@@ -158,11 +147,11 @@ TEST_CASE("RuntimeOpenWindowCreatesIndependentAttachments") {
 TEST_CASE("MultiWindowStateDoesNotRecomposeOtherWindows") {
   ResetMultiWindowGlobals();
   TestPlatform owner;
-  Application application{IsolatedCounterApp, {.show_debug_overlay = false}};
+  Application application{PrimaryCounterApp, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
-  UiWindow primary(owner, owner, application.options.window, 0);
+  UiWindow primary(owner, owner);
   TestPlatform secondary_platform;
-  UiWindow secondary(owner, secondary_platform, WindowOptions{.title = "secondary"}, 1);
+  UiWindow secondary(owner, secondary_platform, SecondaryCounterApp, WindowOptions{.title = "secondary"});
   primary.SetWindowMetrics({.viewport = {200.0F, 120.0F}});
   secondary.SetWindowMetrics({.viewport = {200.0F, 120.0F}});
 
@@ -182,12 +171,12 @@ TEST_CASE("MultiWindowStateDoesNotRecomposeOtherWindows") {
 TEST_CASE("RetiringOneWindowLeavesOtherWindowsAlive") {
   ResetMultiWindowGlobals();
   TestPlatform owner;
-  Application application{IsolatedCounterApp, {.show_debug_overlay = false}};
+  Application application{PrimaryCounterApp, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
-  UiWindow primary(owner, owner, application.options.window, 0);
+  UiWindow primary(owner, owner);
   {
     TestPlatform secondary_platform;
-    UiWindow secondary(owner, secondary_platform, WindowOptions{.title = "secondary"}, 1);
+    UiWindow secondary(owner, secondary_platform, SecondaryCounterApp, WindowOptions{.title = "secondary"});
     secondary.SetWindowMetrics({.viewport = {200.0F, 120.0F}});
     REQUIRE(FirstText(secondary.BuildFrame()) == "0");
     REQUIRE(secondary_compositions == 1);
@@ -206,22 +195,29 @@ TEST_CASE("RetiringOneWindowLeavesOtherWindowsAlive") {
 TEST_CASE("RuntimeOpenWindowValidatesPhaseThreadAndOptions") {
   ResetMultiWindowGlobals();
   TestPlatform owner;
-  REQUIRE_THROWS_AS(owner.OpenWindow({}), std::logic_error);
+  REQUIRE_THROWS_AS(UseApplication().OpenWindow(PrimaryCounterApp, {}), std::logic_error);
 
-  Application application{IsolatedCounterApp, {.show_debug_overlay = false}};
+  Application application{PrimaryCounterApp, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
-  static_cast<void>(owner.OpenWindow(application.options.window));
-  REQUIRE_THROWS_AS(owner.OpenWindow({.initial_size = {0.0F, 0.0F}}), std::invalid_argument);
-  REQUIRE_THROWS_AS(owner.OpenWindow({.initial_position = Point{std::numeric_limits<float>::infinity(), 0.0F}}),
+  static_cast<void>(UseApplication().OpenWindow(PrimaryCounterApp, application.options.window));
+  REQUIRE_THROWS_AS(
+      UseApplication().OpenWindow(PrimaryCounterApp, {.initial_size = {0.0F, 0.0F}}), std::invalid_argument);
+  REQUIRE_THROWS_AS(UseApplication().OpenWindow(
+      PrimaryCounterApp,
+      {.initial_position = Point{std::numeric_limits<float>::infinity(), 0.0F}}
+  ),
                     std::invalid_argument);
-  REQUIRE_THROWS_AS(owner.OpenWindow({.initial_position = Point{0.0F, std::numeric_limits<float>::quiet_NaN()}}),
+  REQUIRE_THROWS_AS(UseApplication().OpenWindow(
+      PrimaryCounterApp,
+      {.initial_position = Point{0.0F, std::numeric_limits<float>::quiet_NaN()}}
+  ),
                     std::invalid_argument);
-  REQUIRE_NOTHROW(owner.OpenWindow({.initial_position = Point{-320.0F, -200.0F}}));
+  REQUIRE_NOTHROW(UseApplication().OpenWindow(PrimaryCounterApp, {.initial_position = Point{-320.0F, -200.0F}}));
 
   std::exception_ptr thread_failure;
-  std::thread worker([&owner, &thread_failure] {
+  std::thread worker([application = UseApplication(), &thread_failure] {
     try {
-      static_cast<void>(owner.OpenWindow({}));
+      static_cast<void>(application.OpenWindow(PrimaryCounterApp));
     } catch (...) {
       thread_failure = std::current_exception();
     }
@@ -237,12 +233,12 @@ TEST_CASE("ApplicationHandleOpenWindowReportsDisconnectedService") {
     TestPlatform owner;
     Application application{CaptureApplicationApp, {.show_debug_overlay = false}};
     RuntimeLifetime lifetime(application, owner);
-    UiWindow primary(owner, owner, application.options.window, 0);
+    UiWindow primary(owner, owner);
     primary.SetWindowMetrics({.viewport = {100.0F, 100.0F}});
     primary.BuildFrame();
     REQUIRE(captured_application.has_value());
   }
-  REQUIRE_THROWS_AS(captured_application->OpenWindow({}), std::logic_error);
+  REQUIRE_THROWS_AS(captured_application->OpenWindow(PrimaryCounterApp, {}), std::logic_error);
 }
 
 TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
@@ -252,14 +248,14 @@ TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
   RuntimeLifetime lifetime(application, owner);
   std::vector<WindowHandle> retired;
   for (int index = 0; index < 1000; ++index) {
-    auto window = owner.OpenWindow({});
+    auto window = UseApplication().OpenWindow([] { return Spacer(); }, {});
     window.Retire();
     REQUIRE(counts.destroyed == index);
     owner.RunPlatformModuleTasks();
     REQUIRE(counts.destroyed == index + 1);
     retired.push_back(window);
   }
-  auto replacement = owner.OpenWindow({});
+  auto replacement = UseApplication().OpenWindow([] { return Spacer(); }, {});
   for (const auto& window : retired) {
     window.Show();
     window.Close();
@@ -271,9 +267,9 @@ TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
   replacement.Retire();
   owner.RunPlatformModuleTasks();
   REQUIRE(counts.destroyed == 1001);
-  auto parent = owner.OpenWindow({});
-  auto child = owner.OpenWindow({}, {.owner = parent});
-  auto grandchild = owner.OpenWindow({}, {.owner = child});
+  auto parent = UseApplication().OpenWindow([] { return Spacer(); }, {});
+  auto child = UseApplication().OpenWindow([] { return Spacer(); }, {}, {.owner = parent});
+  auto grandchild = UseApplication().OpenWindow([] { return Spacer(); }, {}, {.owner = child});
   parent.Retire();
   owner.RunPlatformModuleTasks();
   REQUIRE(counts.destroyed == 1004);
@@ -291,7 +287,7 @@ TEST_CASE("RuntimeOpenWindowRetirementMayRaceApplicationShutdown") {
   });
   Application application{[]() -> View { return Spacer(); }, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
-  auto window = owner.OpenWindow({});
+  auto window = UseApplication().OpenWindow([] { return Spacer(); }, {});
   std::atomic<int> submissions{0};
   std::atomic<bool> stopped{false};
   std::thread worker([&] {

@@ -10,6 +10,7 @@
 #include <huxerui/app.h>
 #include <huxerui/file_drop.h>
 
+#include "internal_access.h"
 #include "io/file_internal.h"
 #include "linux_file_internal.h"
 #include "linux_file_picker_internal.h"
@@ -166,6 +167,7 @@ struct LinuxFileDrop::State {
 
   static GdkDragAction Entered(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
     auto& self = *static_cast<State*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self.ui_window));
     self.Leave();
     if (!(gdk_drop_get_actions(drop) & GDK_ACTION_COPY)) {
       return static_cast<GdkDragAction>(0);
@@ -183,6 +185,7 @@ struct LinuxFileDrop::State {
 
   static GdkDragAction Moved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
     auto& self = *static_cast<State*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self.ui_window));
     try {
       return self.current == drop && (gdk_drop_get_actions(drop) & GDK_ACTION_COPY) &&
                      self.ui_window.HandleFileDragMoved(self.session, {}, {static_cast<float>(x), static_cast<float>(y)})
@@ -195,6 +198,7 @@ struct LinuxFileDrop::State {
 
   static void Left(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
     auto& self = *static_cast<State*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self.ui_window));
     if (self.current == drop) {
       self.Leave();
     }
@@ -202,6 +206,7 @@ struct LinuxFileDrop::State {
 
   static gboolean Dropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
     auto& self = *static_cast<State*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self.ui_window));
     if (self.current != drop || !(gdk_drop_get_actions(drop) & GDK_ACTION_COPY)) {
       self.Leave();
       return FALSE;

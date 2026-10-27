@@ -12,8 +12,13 @@ using desktop_pet::PetModel;
 
 namespace {
 
+View PetContent();
+View SettingsContent();
+
 void InstallPet(ApplicationContext& context) {
-  const auto model = std::make_shared<PetModel>();
+  const auto model = std::make_shared<PetModel>(
+      [] { return MaterialTheme {PetContent()}; },
+      [] { return MaterialTheme {SettingsContent()}; });
   context.Provide(model);
   const auto application = UseApplication();
   UseApplicationTaskScope().Post([model, application] { model->Show(application); });
@@ -103,7 +108,7 @@ View SettingsContent() {
 
 View App() {
   return MaterialTheme {
-    UseEnvironment<WindowIdentity>().key == "settings" ? SettingsContent() : PetContent(),
+    PetContent(),
   };
 }
 

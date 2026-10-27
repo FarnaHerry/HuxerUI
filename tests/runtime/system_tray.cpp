@@ -326,7 +326,7 @@ TEST_CASE("System tray starts without a UI and opens windows on activation") {
         const auto application = UseApplication();
         const auto tray = application.SystemTray();
         tray.OnActivate([application, &window] {
-          window = application.OpenWindow({.title = "Deferred window"});
+          window = application.OpenWindow(SystemTrayApp, {.title = "Deferred window"});
         });
         tray.Show(TrayIcon(), {.menu = {MenuItem("Quit", [application] { application.Quit(); })}});
         UseApplicationTaskScope().Launch([&]() -> Task<void> {

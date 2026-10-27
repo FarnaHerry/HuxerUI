@@ -29,10 +29,9 @@ std::atomic<int> live_secondary_windows{0};
 std::atomic<bool> runner_finished{false};
 std::exception_ptr runner_failure;
 
-View NativeWindowLifecycleApp() {
-  const WindowIdentity identity = UseEnvironment<WindowIdentity>();
+View NativeWindowLifecycleContent(bool primary) {
   const WindowHandle window = UseWindow();
-  if (identity.ordinal == 0) {
+  if (primary) {
     const std::lock_guard lock(test_state_mutex);
     primary_window = window;
   } else {
@@ -57,6 +56,8 @@ View NativeWindowLifecycleApp() {
   }
   return Spacer();
 }
+
+View NativeWindowLifecycleApp() { return NativeWindowLifecycleContent(true); }
 
 void PumpUntil(const std::function<bool()>& condition, const char* description) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -126,7 +127,7 @@ TEST_CASE("LinuxRuntimeWindowsOpenAndCloseIndependently", "[.][linux-native]") {
       application_handle = captured_application;
     }
     post([handle = *application_handle, process, preferred_origin] {
-      static_cast<void>(handle.OpenWindow({
+      static_cast<void>(handle.OpenWindow([] { return NativeWindowLifecycleContent(false); }, {
           .title = "HuxerUI MW Native Secondary " + process,
           .initial_size = {320.0F, 220.0F},
           .initial_position = preferred_origin,

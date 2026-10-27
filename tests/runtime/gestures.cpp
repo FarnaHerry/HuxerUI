@@ -1638,10 +1638,9 @@ struct WindowDragObservations {
 
 WindowDragObservations* window_drag_observations = nullptr;
 
-View WindowDragRoot() {
+View WindowDragContent(bool source) {
   auto& observed = *window_drag_observations;
-  const auto identity = UseEnvironment<WindowIdentity>();
-  if (identity.ordinal == 0 || identity.key == "source") {
+  if (source) {
     observed.source_handle = UseWindow();
     if (!observed.source_present.Get()) return Spacer();
     return Text("source")
@@ -1692,14 +1691,16 @@ View WindowDragRoot() {
       .OnClick([&observed] { ++observed.target_clicks; });
 }
 
+View WindowDragRoot() { return WindowDragContent(true); }
+
 struct WindowDragFixture {
   WindowDragPlatform host;
   TestPlatform destination;
   Application application{WindowDragRoot, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime{application, host};
   WindowDragObservations observed;
-  UiWindow source{host, host, WindowOptions{}, 0, std::nullopt, WindowLifecycleState::Active};
-  UiWindow target{host, destination, WindowOptions{}, 1};
+  UiWindow source{host, host, WindowDragRoot, WindowOptions{}, std::nullopt, WindowLifecycleState::Active};
+  UiWindow target{host, destination, [] { return WindowDragContent(false); }, WindowOptions{}};
 
   WindowDragFixture() {
     window_drag_observations = &observed;
@@ -1914,7 +1915,7 @@ TEST_CASE("Application drag preserves frozen source scope and receiver-local coo
 TEST_CASE("Application drag keeps source-window identities distinct for equal pointer ids", "[window-drag]") {
   WindowDragFixture fixture;
   WindowDragPlatform second_host;
-  UiWindow second_source{fixture.host, second_host, WindowOptions{.key = "source"}, 2};
+  UiWindow second_source{fixture.host, second_host, WindowDragRoot, WindowOptions{}};
   second_source.SetWindowMetrics({.viewport = {200.0F, 100.0F}});
   second_source.BuildFrame();
   fixture.Begin();

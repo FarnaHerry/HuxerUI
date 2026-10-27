@@ -141,7 +141,6 @@ struct NativePetState {
 };
 
 View NativePetContent() {
-  if (UseEnvironment<WindowIdentity>().key == "modal") return Text("Native modal settings");
   const auto state = UseService<NativePetState>();
   state->window = UseWindow();
   state->application = UseApplication();
@@ -330,8 +329,10 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
   std::optional<WindowHandle> modal;
   runner.Invoke([&] {
     modal = runner.state->application->OpenWindow(
-        {.title = "HuxerUI Native Pet Modal", .key = "modal", .initial_size = {240.0F, 160.0F}},
-        {.owner = runner.state->window, .modal = true});
+        [] { return Text("Native modal settings"); },
+        {.title = "HuxerUI Native Pet Modal", .initial_size = {240.0F, 160.0F}},
+        {.owner = runner.state->window, .modal = true}
+    );
     static_cast<void>(runner.state->window->SetInputPassthrough(false));
   });
   REQUIRE_FALSE(IsWindowEnabled(native));
@@ -375,10 +376,13 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
   REQUIRE(result == WindowRequestResult::Disconnected);
   for (int cycle = 0; cycle < 4; ++cycle) {
     runner.Invoke([&] {
-      runner.state->window = runner.state->application->OpenWindow({
+      runner.state->window = runner.state->application->OpenWindow(
+          NativePetContent,
+          {
           .title = "HuxerUI Native Pet Reopened", .initial_size = {200.0F, 200.0F},
           .initial_position = Point{100.0F, 100.0F}, .presentation = WindowPresentation::Utility,
-          .transparent_surface = true, .show_without_activation = true, .topmost = true});
+          .transparent_surface = true, .show_without_activation = true, .topmost = true}
+      );
     });
     const HWND reopened = FindWindowW(nullptr, L"HuxerUI Native Pet Reopened");
     REQUIRE(reopened != nullptr);

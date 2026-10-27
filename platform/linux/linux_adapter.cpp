@@ -45,6 +45,7 @@
 #include <huxerui/resource.h>
 #include <huxerui/window.h>
 
+#include "internal_access.h"
 #include "io/file_internal.h"
 #include "internal_access.h"
 #include "io/http_internal.h"
@@ -494,9 +495,18 @@ public:
     StopObservingLifecycle();
     dispatcher_->Shutdown();
   }
-  /// Borrows the application dispatcher for window attachments.
-  /// @return Retained main-context dispatcher; its callback gate closes when this Runtime retires.
-  const std::shared_ptr<LinuxUiThreadDispatcher>& Dispatcher() const { return dispatcher_; }
+  bool SupportsMultipleWindows() const noexcept override { return true; }
+  std::unique_ptr<UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override;
+
+  void ReportFailure(std::exception_ptr failure) {
+    if (!failure_) failure_ = std::move(failure);
+    RequestShutdown();
+  }
+
+  void RethrowFailure() const {
+    if (failure_) std::rethrow_exception(failure_);
+  }
+
   /// Reports whether shared shutdown has completed on the GTK application thread.
   /// @return True after OnRuntimeStopped marks the native loop ready to exit.
   bool Stopped() const noexcept { return stopped_; }
@@ -511,31 +521,19 @@ public:
   }
 
   /// Creates the configured startup windows through OpenWindow, then runs the GTK main loop even without windows
-  /// until shutdown. The first window keeps the historical close behavior of requesting application shutdown;
-  /// windows created later retire independently. Rethrows the first recorded window failure after the loop.
+  /// until shutdown. Rethrows the first recorded window failure after the loop.
   int RunApplication(const Application& application) {
     if (application.options.create_initial_window) {
-      static_cast<void>(OpenWindow(application.options.window));
+      static_cast<void>(UseApplication().OpenWindow(application.root_factory, application.options.window));
     }
     for (const WindowOptions& extra : application.options.extra_windows) {
-      static_cast<void>(OpenWindow(extra));
+      static_cast<void>(UseApplication().OpenWindow(application.root_factory, extra));
     }
     while (!Stopped()) {
       g_main_context_iteration(nullptr, TRUE);
     }
-    if (failure_) {
-      std::exception_ptr failure = failure_;
-      failure_ = nullptr;
-      std::rethrow_exception(failure);
-    }
+    RethrowFailure();
     return 0;
-  }
-
-  /// Records the first window failure so RunApplication can rethrow it after the loop.
-  void RecordWindowFailure(std::exception_ptr failure) noexcept {
-    if (failure && !failure_) {
-      failure_ = std::move(failure);
-    }
   }
 
   /// Aggregates mapped, non-minimized GTK toplevels into application activity on the main thread.
@@ -559,11 +557,6 @@ public:
   PlatformClipboard* Clipboard() noexcept override {
     return this;
   }
-
-protected:
-  /// Creates one GTK window attachment for Runtime::OpenWindow; the shared main loop lives on this Runtime.
-  std::unique_ptr<UiWindow> CreateNativeWindow(const WindowOptions& options,
-                                               std::uint32_t window_ordinal) override;
 
 public:
 
@@ -774,9 +767,9 @@ private:
   std::shared_ptr<LinuxUiThreadDispatcher> dispatcher_;
   GListModel* windows_ = nullptr;
   std::vector<GObject*> observed_windows_;
-  std::exception_ptr failure_;
   bool stopped_ = false;
   bool clipboard_read_active_ = false;
+  std::exception_ptr failure_;
 };
 
 /// Owns one GTK window and its rendering/input facilities while sharing its application Runtime.
@@ -792,49 +785,30 @@ public:
     return configuration;
   }
 
-  /// Creates this window's native attachment and shows it; the shared GTK main loop lives on LinuxRuntime.
-  /// @param runtime Owning Runtime whose dispatcher this window borrows.
-  /// @param options This window's own configuration.
-  /// @param window_ordinal Creation order among the application's windows; zero is the initial window and keeps
-  /// the historical whole-application shutdown behavior on close.
-  void Attach(LinuxRuntime& runtime, const WindowOptions& options, std::uint32_t window_ordinal) {
+  void Initialize(LinuxRuntime& runtime, ViewFactory content, const WindowOptions& options) {
     runtime_ = &runtime;
-    try {
-      primary_ = window_ordinal == 0;
-      renderer_.Initialize();
-      const Size initial_size = ResolveInitialWindowSize(options);
-      CreateWindow(options, initial_size);
-      auto configuration = runtime.Resources()->Configuration();
-      configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
-      InitializeWindow(runtime, options, window_ordinal, configuration);
-      text_input_.SetUiWindow(this);
-      platform_views_ = std::make_unique<LinuxPlatformViews>(drawing_area_, renderer_, PlatformRegistry(), *this);
-      platform_views_->SetFocusChangedHandler([this](bool focused) {
-        if (focused) {
-          text_input_.SetFocus(false);
-          key_tracker_.Reset();
-        } else if (drawing_area_ != nullptr && gtk_widget_has_focus(drawing_area_)) {
-          text_input_.SetFocus(true);
-        }
-      });
-      file_drop_ = std::make_unique<LinuxFileDrop>(GTK_WIDGET(drawing_area_), *this, ui_dispatcher_->Bind());
-      UiWindow::UpdateResourceConfiguration(Configuration());
-      UpdateRuntimeViewport(initial_size);
-      running_ = true;
-      if (passive_display_) {
-        // Passive surfaces never request presentation focus; the pre-map input hint keeps the
-        // window manager from activating them when they map.
-        gtk_widget_set_visible(GTK_WIDGET(window_), TRUE);
-      } else {
-        gtk_window_present(window_);
+    renderer_.Initialize();
+    const Size initial_size = ResolveInitialWindowSize(options);
+    CreateWindow(options, initial_size);
+    auto configuration = runtime.Resources()->Configuration();
+    configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
+    text_input_.SetUiWindow(this);
+    platform_views_ = std::make_unique<LinuxPlatformViews>(
+        drawing_area_, renderer_, InternalAccess::ApplicationRegistry(runtime), *this);
+    platform_views_->SetFocusChangedHandler([this](bool focused) {
+      if (focused) {
+        text_input_.SetFocus(false);
+        key_tracker_.Reset();
+      } else if (drawing_area_ && gtk_widget_has_focus(drawing_area_)) {
+        text_input_.SetFocus(true);
       }
-      gtk_widget_grab_focus(GTK_WIDGET(drawing_area_));
-      RequestFrameAt(Now());
-    } catch (...) {
-      Cleanup();
-
-      throw;
-    }
+    });
+    file_drop_ = std::make_unique<LinuxFileDrop>(drawing_area_, *this, ui_dispatcher_->Bind());
+    running_ = true;
+    InitializeWindow(runtime, std::move(content), options, configuration);
+    UpdateRuntimeViewport(initial_size);
+    gtk_widget_grab_focus(drawing_area_);
+    RequestFrameAt(Now());
   }
 
   void RequestFrameAt(double deadline) override {
@@ -1166,7 +1140,7 @@ public:
   }
 
   void RequestWindowCommand(WindowCommand command) override {
-    if (window_ == nullptr) {
+    if (window_ == nullptr || !IsInitialized()) {
       return;
     }
     switch (command) {
@@ -1220,23 +1194,9 @@ public:
     try {
       return IsInitialized() && UiWindow::HandleWindowRequest(command);
     } catch (...) {
-      RecordFailure();
+      static_cast<LinuxRuntime&>(ApplicationRuntime()).ReportFailure(std::current_exception());
       return true;
     }
-  }
-
-  /// Stores the first window failure on the window and the Runtime, then stops this window. The application
-  /// loop rethrows the recorded failure after shutdown so a broken window fails the run instead of hanging.
-  void RecordFailure() noexcept {
-    if (!failure_) {
-      failure_ = std::current_exception();
-    }
-    running_ = false;
-    if (IsInitialized()) {
-      static_cast<LinuxRuntime&>(ApplicationRuntime()).RecordWindowFailure(failure_);
-      ApplicationRuntime().RequestShutdown();
-    }
-    // The queued shutdown detaches native facilities after this failing callback returns.
   }
 
 private:
@@ -1253,7 +1213,7 @@ private:
       try {
         transfer->Finish(canceled);
       } catch (...) {
-        runtime_->RecordWindowFailure(std::current_exception());
+        runtime_->ReportFailure(std::current_exception());
       }
     }
     gdk_drag_drop_done(drag, success);
@@ -1277,27 +1237,30 @@ private:
 
   static GdkDragAction NativeDragMoved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     const auto transfer = NativeTransfer(drop);
     try {
       if (self.IsInitialized() && !self.input_blocked_ && transfer &&
           transfer->Move(self, {static_cast<float>(x), static_cast<float>(y)})) return GDK_ACTION_COPY;
     } catch (...) {
-      self.runtime_->RecordWindowFailure(std::current_exception());
+      self.runtime_->ReportFailure(std::current_exception());
     }
     return static_cast<GdkDragAction>(0);
   }
 
   static void NativeDragLeft(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     try {
       if (const auto transfer = NativeTransfer(drop)) transfer->Leave(self);
     } catch (...) {
-      self.runtime_->RecordWindowFailure(std::current_exception());
+      self.runtime_->ReportFailure(std::current_exception());
     }
   }
 
   static gboolean NativeDragDropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     const auto transfer = NativeTransfer(drop);
     try {
       if (!self.IsInitialized() || self.input_blocked_ || !transfer ||
@@ -1309,7 +1272,7 @@ private:
       }, g_object_ref(drop), g_object_unref);
       return TRUE;
     } catch (...) {
-      self.runtime_->RecordWindowFailure(std::current_exception());
+      self.runtime_->ReportFailure(std::current_exception());
       return FALSE;
     }
   }
@@ -1511,6 +1474,7 @@ private:
   }
 
   void CommitFrame() {
+    ExecutionGuard guard(InternalAccess::WindowExecution(*this));
     frame_source_ = 0;
     // A ready GLib frame source can run after a close request destroys the drawing widget.
     if (!IsInitialized() || drawing_area_ == nullptr || !running_ ||
@@ -1534,7 +1498,7 @@ private:
         RequestFrameAt(*commit.next_frame_deadline);
       }
     } catch (...) {
-      RecordFailure();
+      runtime_->ReportFailure(std::current_exception());
     }
     FlushDeferredFrame();
   }
@@ -1546,7 +1510,7 @@ private:
   }
 
   void DrawFrame(GtkSnapshot* snapshot) {
-    if (committed_frame_ == nullptr) {
+    if (!IsInitialized() || committed_frame_ == nullptr) {
       return;
     }
     frame_state_.BeginPaint();
@@ -1561,7 +1525,7 @@ private:
         renderer_.Snapshot(snapshot, *committed_frame_);
       }
     } catch (...) {
-      RecordFailure();
+      runtime_->ReportFailure(std::current_exception());
     }
     if (const std::optional<double> deadline = frame_state_.EndPaint(drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*deadline);
@@ -1747,13 +1711,7 @@ private:
     g_object_unref(controllers);
   }
 
-  void QueueRetiredWindowRelease() {
-    if (release_requested_) return;
-    if (const auto service = InternalAccess::WindowServiceOf(*this)) {
-      release_requested_ = true;
-      service->ReleaseRetiredWindow();
-    }
-  }
+
 
   void Cleanup() noexcept {
     Retire();
@@ -1768,7 +1726,6 @@ private:
       drawing_area_ = nullptr;
       gtk_window_destroy(window);
     }
-    QueueRetiredWindowRelease();
   }
 
   /// Releases the per-window native subsystems while the widget tree can still serve detach calls.
@@ -1805,12 +1762,14 @@ private:
 
   static void Snapshot(GtkSnapshot* snapshot, int width, int height, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.UpdateRuntimeViewport({static_cast<float>(width), static_cast<float>(height)});
     self.DrawFrame(snapshot);
   }
 
   static void AllocatePlatformViews(GtkWidget*, int width, int height, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.platform_views_) {
       self.platform_views_->Allocate(width, height);
     }
@@ -1854,22 +1813,18 @@ private:
 
   static gboolean CloseRequested(GtkWindow*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (!self.performing_close_ && self.DispatchWindowRequest(WindowCommand::Close)) {
       return TRUE;
     }
     self.performing_close_ = false;
-    if (self.primary_ && self.IsInitialized()) {
-      self.ApplicationRuntime().RequestShutdown();
-      return TRUE;
-    }
-    // Retire owned transients first, then detach this host before GTK's deferred native disposal.
-    self.ApplicationRuntime().RetireOwned(self);
-    self.Cleanup();
+    if (self.IsInitialized()) self.CloseWindow();
     return TRUE;
   }
 
   static void ClientWidgetDestroyed(GtkWidget* widget, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.text_input_.Reset();
     if (self.drawing_area_ != nullptr && GTK_WIDGET(self.drawing_area_) == widget) {
       self.DetachCanvasCallbacks();
@@ -1881,19 +1836,20 @@ private:
   /// CloseRequested or RetireWindow, so this only releases window resources idempotently.
   static void Destroyed(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.CancelPointer();
     self.key_tracker_.Reset();
-    self.Retire();
+    if (self.IsInitialized()) self.CloseWindow();
     self.ReleaseNativeFacilities();
     self.DetachCanvasCallbacks();
-    if (self.window_ != nullptr) g_signal_handlers_disconnect_by_data(self.window_, &self);
+    if (self.window_) g_signal_handlers_disconnect_by_data(self.window_, &self);
     self.window_ = nullptr;
     self.drawing_area_ = nullptr;
-    self.QueueRetiredWindowRelease();
   }
 
   static void WindowMapped(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.text_input_.SetClientWidget(self.drawing_area_);
     self.text_input_.SetFocus(gtk_widget_has_focus(self.drawing_area_));
     self.AttachToplevelState();
@@ -1908,6 +1864,7 @@ private:
 
   static void WindowUnrealized(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     // GTK's destroy emission follows native disposal; detach IM delegates before unrealize destroys them.
     self.text_input_.SetFocus(false);
     self.text_input_.SetClientWidget(nullptr);
@@ -1916,6 +1873,7 @@ private:
 
   static void WindowUnmapped(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.CancelPointer();
     self.key_tracker_.Reset();
     self.UpdateLifecycleState();
@@ -1927,12 +1885,13 @@ private:
 
   static void ToplevelStateChanged(GObject*, GParamSpec*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     const bool minimized = self.toplevel_ != nullptr &&
                            (gdk_toplevel_get_state(self.toplevel_) & GDK_TOPLEVEL_STATE_MINIMIZED) != 0;
     if (minimized && !self.minimized_) {
       if (self.performing_minimize_) {
         self.performing_minimize_ = false;
-      } else if (self.DispatchWindowRequest(WindowCommand::Minimize)) {
+      } else if (self.DispatchWindowRequest(WindowCommand::Minimize) && self.IsInitialized()) {
         gtk_window_unminimize(self.window_);
       }
     }
@@ -1943,12 +1902,14 @@ private:
 
   static void WindowMaximizedChanged(GObject*, GParamSpec*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.UpdateRuntimeViewport();
     self.UpdateResizeCursor(self.last_pointer_position_);
   }
 
   static void ScaleChanged(GObject*, GParamSpec*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.IsInitialized()) {
       self.UiWindow::UpdateResourceConfiguration(self.Configuration());
       self.UpdateRuntimeViewport();
@@ -2001,6 +1962,7 @@ private:
       return FALSE;
     }
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.window_ != nullptr) {
       double offset_x = 0.0;
       double offset_y = 0.0;
@@ -2030,6 +1992,7 @@ private:
 
   static void TouchPressed(GtkGestureClick* gesture, int, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(gesture));
     const guint button = gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
     const Point position{static_cast<float>(x), static_cast<float>(y)};
@@ -2042,6 +2005,7 @@ private:
 
   static void TouchReleased(GtkGestureClick* gesture, int, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     const guint button = gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture));
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(gesture));
     const Point position{static_cast<float>(x), static_cast<float>(y)};
@@ -2060,6 +2024,7 @@ private:
 
   static void PointerEntered(GtkEventControllerMotion* controller, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     const Point position{static_cast<float>(x), static_cast<float>(y)};
     if (!self.RoutePointerToHuxerUI(position, PointerEventType::Move)) {
       return;
@@ -2071,6 +2036,7 @@ private:
 
   static void PointerMoved(GtkEventControllerMotion* controller, double x, double y, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     const Point position{static_cast<float>(x), static_cast<float>(y)};
     if (!self.RoutePointerToHuxerUI(position, PointerEventType::Move)) {
       return;
@@ -2082,6 +2048,7 @@ private:
 
   static void PointerLeft(GtkEventControllerMotion*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.pressed_buttons_ == PointerButton::None) {
       self.SendPointer(PointerEventType::Cancel, self.last_pointer_position_);
     }
@@ -2116,6 +2083,7 @@ private:
 
   static gboolean Scrolled(GtkEventControllerScroll* controller, double dx, double dy, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.IsInitialized()) {
       if (!self.RoutePointerToHuxerUI(self.last_pointer_position_, PointerEventType::Move)) {
         return FALSE;
@@ -2144,6 +2112,7 @@ private:
       GtkEventControllerKey* controller, guint key_value, guint key_code, GdkModifierType state, gpointer data
   ) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.platform_views_ && self.platform_views_->HasPlatformFocus()) {
       return FALSE;
     }
@@ -2160,6 +2129,7 @@ private:
       GtkEventControllerKey* controller, guint key_value, guint key_code, GdkModifierType state, gpointer data
   ) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     if (self.platform_views_ && self.platform_views_->HasPlatformFocus()) {
       return;
     }
@@ -2175,6 +2145,7 @@ private:
 
   static void FocusLeft(GtkEventControllerFocus*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.text_input_.SetFocus(false);
     self.key_tracker_.Reset();
   }
@@ -2199,10 +2170,8 @@ private:
   bool running_ = false;
   LinuxRuntime* runtime_ = nullptr;
   bool input_blocked_ = false;
-  bool primary_ = false;
   bool minimized_ = false;
   bool native_facilities_released_ = false;
-  bool release_requested_ = false;
   std::optional<Point> pending_initial_position_;
   bool performing_minimize_ = false;
   bool performing_close_ = false;
@@ -2221,13 +2190,11 @@ private:
   PointerCursorKind requested_pointer_cursor_ = PointerCursorKind::Default;
   std::optional<LinuxResizeEdge> hovered_resize_edge_;
   LinuxKeyTracker key_tracker_;
-  std::exception_ptr failure_;
 };
 
-std::unique_ptr<UiWindow> LinuxRuntime::CreateNativeWindow(const WindowOptions& options,
-                                                           std::uint32_t window_ordinal) {
+std::unique_ptr<UiWindow> LinuxRuntime::CreateWindow(ViewFactory content, const WindowOptions& options) {
   auto window = std::make_unique<LinuxUiWindow>(dispatcher_);
-  window->Attach(*this, options, window_ordinal);
+  window->Initialize(*this, std::move(content), options);
   return window;
 }
 

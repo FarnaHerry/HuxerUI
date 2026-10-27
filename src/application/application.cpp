@@ -530,24 +530,30 @@ Task<bool> ApplicationService::OpenPermissionSettings(Permission permission) con
   return permissions_->OpenSettings(permission);
 }
 
+bool ApplicationService::SupportsMultipleWindows() const {
+  if (!runtime_) return false;
+  runtime_->state_->RequireThread();
+  return runtime_->state_->phase != ApplicationRuntimeState::Phase::Stopping &&
+         runtime_->state_->phase != ApplicationRuntimeState::Phase::Stopped && runtime_->SupportsMultipleWindows();
+}
+
+WindowHandle ApplicationService::OpenWindow(ViewFactory content, WindowOptions options) const {
+  if (!runtime_) throw std::logic_error("HuxerUI application is disconnected");
+  return runtime_->OpenWindow(std::move(content), std::move(options));
+}
+
 void ApplicationService::Quit() const {
   if (runtime_ != nullptr) {
     runtime_->RequestShutdown();
   }
 }
 
-WindowHandle ApplicationService::OpenWindow(const WindowOptions& options) const {
+WindowHandle ApplicationService::OpenWindow(
+    ViewFactory content, WindowOptions options, const WindowRelationship& relationship) const {
   if (runtime_ == nullptr) {
     throw std::logic_error("HuxerUI application service is disconnected");
   }
-  return runtime_->OpenWindow(options);
-}
-
-WindowHandle ApplicationService::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const {
-  if (runtime_ == nullptr) {
-    throw std::logic_error("HuxerUI application service is disconnected");
-  }
-  return runtime_->OpenWindow(options, relationship);
+  return runtime_->OpenWindow(std::move(content), std::move(options), relationship);
 }
 
 void ApplicationService::Enqueue(ApplicationActivation activation) {
@@ -651,12 +657,9 @@ const AppDirectories& ApplicationHandle::Directories() const {
   return service_->Directories();
 }
 
-WindowHandle ApplicationHandle::OpenWindow(const WindowOptions& options) const {
-  return service_->OpenWindow(options);
-}
-
-WindowHandle ApplicationHandle::OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const {
-  return service_->OpenWindow(options, relationship);
+WindowHandle ApplicationHandle::OpenWindow(
+    ViewFactory content, WindowOptions options, const WindowRelationship& relationship) const {
+  return service_->OpenWindow(std::move(content), std::move(options), relationship);
 }
 
 File ApplicationHandle::CurrentDirectory() const {
@@ -681,6 +684,14 @@ Task<PermissionStatus> ApplicationHandle::RequestPermissionAsync(Permission perm
 
 Task<bool> ApplicationHandle::OpenPermissionSettingsAsync(Permission permission) const {
   return service_->OpenPermissionSettings(permission);
+}
+
+bool ApplicationHandle::SupportsMultipleWindows() const {
+  return service_->SupportsMultipleWindows();
+}
+
+WindowHandle ApplicationHandle::OpenWindow(ViewFactory content, WindowOptions options) const {
+  return service_->OpenWindow(std::move(content), std::move(options));
 }
 
 void ApplicationHandle::Quit() const {

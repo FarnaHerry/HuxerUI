@@ -27,6 +27,7 @@
 #include <huxerui/android/jni.h>
 #include <huxerui/android/platform_registry.h>
 
+#include "internal_access.h"
 #include "android_accessibility.h"
 #include "android_application_internal.h"
 #include "android_file_internal.h"
@@ -826,11 +827,14 @@ public:
       throw std::runtime_error("HuxerUI could not retain the Android platform Context");
     }
     try {
-      InitializeWindow(application, CurrentApplication().options.window, 0, Configuration(), lifecycle);
       platform_views_ = std::make_unique<AndroidPlatformViews>(
-          environment, view_, context_, renderer_, PlatformRegistry(), *this);
+          environment, view_, context_, renderer_, InternalAccess::ApplicationRegistry(application), *this);
+      InitializeWindow(application, CurrentApplication().root_factory, CurrentApplication().options.window,
+                       Configuration(), lifecycle);
     } catch (...) {
       Retire();
+      if (platform_views_) platform_views_->Shutdown(environment);
+      platform_views_.reset();
       environment->DeleteGlobalRef(context_);
       environment->DeleteGlobalRef(view_);
       context_ = nullptr;

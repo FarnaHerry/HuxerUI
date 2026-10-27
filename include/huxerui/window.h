@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -225,10 +224,6 @@ struct WindowOptions {
   /// The top-level window or surface title. Platforms without an application-owned title may ignore it.
   std::string title = "HuxerUI";
 
-  /// Stable application-defined identity of this window's content. Empty selects the default root content;
-  /// distinct keys let one root factory render different content per window through UseEnvironment<WindowIdentity>().
-  std::string key{};
-
   /// The preferred initial logical client size.
   Size initial_size = {520.0F, 360.0F};
 
@@ -269,23 +264,6 @@ struct WindowOptions {
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;
-};
-
-/// Identifies one attached window within its application, seeded into each root composition's Environment.
-/// Read it during composition with UseEnvironment<WindowIdentity>() to select content for the calling window.
-struct WindowIdentity {
-  /// WindowOptions::key of this window; empty unless the application set one.
-  std::string key{};
-
-  /// Creation order among this Runtime's windows; zero is the initial window.
-  std::uint32_t ordinal = 0;
-
-  static WindowIdentity Default() {
-    return {};
-  }
-
-  /// Compares both identity fields exactly.
-  bool operator==(const WindowIdentity&) const = default;
 };
 
 /// Current platform-submitted window geometry in logical units.
@@ -417,7 +395,8 @@ public:
 ///
 /// Commands request native operations and do not mutate UiWindow placement state directly. Minimize and close handlers
 /// are tied to the calling composition scope through Lifecycle: returning true consumes the request, while returning
-/// false continues the platform's default operation.
+/// false continues the platform's default operation if the window is still open.
+/// Recursive requests for the same command are consumed; a handler may issue the other command independently.
 ///
 /// Example:
 /// @code
@@ -454,6 +433,10 @@ public:
   /// Reads this window's current monitor work area in logical screen coordinates, or nullopt when unavailable.
   [[nodiscard]] std::optional<Rect> WorkArea() const;
 
+  /// Whether this attachment is initialized and has not committed closure or retirement.
+  /// Reads on the application thread and observes changes during composition. Hidden/minimized windows remain open.
+  /// A handle outliving its original window or Runtime reports false and never targets a replacement window.
+  [[nodiscard]] bool IsOpen() const;
   /// Reads this window's current native foreground state on the application thread.
   /// @return The latest state; reading during composition subscribes the current scope to changes.
   /// The returned value describes only this window, not the aggregate ApplicationHandle lifecycle.
@@ -565,6 +548,7 @@ private:
   friend WindowHandle UseWindow();
   friend WindowHandle detail::MakeWindowHandle(std::shared_ptr<detail::WindowService> service);
   friend std::shared_ptr<detail::WindowService> detail::WindowServiceFor(const WindowHandle& handle) noexcept;
+  friend class Runtime;
 };
 
 /// Describes how one window relates to the rest of the application: which window owns it and whether it blocks

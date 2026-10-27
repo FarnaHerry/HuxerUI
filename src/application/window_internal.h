@@ -49,6 +49,10 @@ class WindowService : public std::enable_shared_from_this<WindowService> {
 public:
   explicit WindowService(UiWindow& ui_window);
 
+  [[nodiscard]] bool IsOpen() const;
+  void Open();
+  void BeginClose();
+
   void Request(WindowCommand command);
   [[nodiscard]] UiWindow* NativeWindow() const;
   /// Applies one relationship change resolved by the Runtime after validation.
@@ -60,10 +64,6 @@ public:
   /// Requests retirement of this window through the Runtime after the current callback returns. See
   /// Runtime::RetireWindow. Safe to call from any thread; ignored when the window or the application has retired.
   void Retire();
-  /// Acknowledges that a retired native host has detached every callback borrowing its UiWindow.
-  /// Queues release of the Runtime-owned window after the current native callback returns. Call on the application
-  /// thread after shared retirement; retained WindowHandles remain disconnected and cannot target a replacement.
-  void ReleaseRetiredWindow();
   [[nodiscard]] bool HandleRequest(WindowCommand command);
   [[nodiscard]] std::function<void()>
   ConnectRequest(WindowCommand command, std::function<bool()> handler);
@@ -93,6 +93,9 @@ private:
   void DisconnectRequest(WindowCommand command, std::uint64_t connection) noexcept;
 
   UiWindow* ui_window_;
+  State<bool> open_{false};
+  bool handling_minimize_request_ = false;
+  bool handling_close_request_ = false;
   RequestHandler minimize_handler_;
   RequestHandler close_handler_;
   std::uint64_t next_connection_ = 1;

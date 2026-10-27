@@ -36,7 +36,7 @@ An owned window that is not modal is a transient helper such as an inspector or 
 A modal window blocks user input to its owner's whole owned subtree except windows the modal itself owns; with no owner, it blocks every other window of the application.
 An owned modal window, such as a settings dialog, combines both.
 
-`Runtime::OpenWindow` accepts an optional relationship, and `SetWindowRelationship(window, relationship)` changes it later.
+`ApplicationHandle::OpenWindow(content, options, relationship)` accepts an explicit relationship, and `SetWindowRelationship(window, relationship)` changes it later.
 Validation runs before any native change: a window cannot own itself, no owner chain may contain the target, and an owner that has already retired is rejected.
 `std::invalid_argument` reports caller input; a retired owner reports through the owning service contract.
 
@@ -46,7 +46,8 @@ Validation runs before any native change: a window cannot own itself, no owner c
 The registry updates only from `OpenWindow` and `SetRelationship` on the application thread.
 
 Retiring a window retires its owned windows first, deepest chain first, before the window itself finishes retirement.
-The platform adapter calls `Runtime::RetireOwned` before destroying a window through a user close, so a transient inspector or owned dialog disappears with its owner; application shutdown retires every window through the existing path and needs no separate cascade.
+Runtime marks the accepted close or explicit retirement of an owner and its owned descendants, then maintenance performs shared retirement and native release deepest-first after active callbacks return.
+The relation registry is separate from the single collection that owns native windows; application shutdown uses the same descendant-before-owner ordering.
 Reparenting an alive window moves its registry edges and restores or applies modality bookkeeping as needed; retiring a window drops it from every registry edge that names it.
 
 ## Modality without a nested loop
@@ -60,14 +61,14 @@ Nested modality follows the edge set: closing an inner modal restores its own sc
 
 ## Platform mapping
 
-- Windows marks the initial window with the ownership property, stores the owner through `GWLP_HWNDPARENT`, and applies modality by enabling or disabling the affected HWNDs; disabling the owner also disables its owned chain, matching the blocked-subtree rule. Focus returns to the owner on modal retirement.
+- Windows stores the owner through `GWLP_HWNDPARENT`, and applies modality by enabling or disabling the affected HWNDs; disabling the owner also disables its owned chain, matching the blocked-subtree rule. Focus returns to the owner on modal retirement.
 - Linux sets `GtkWindow` transient-for ownership and uses GTK modal grabbing, which already blocks the transient subtree without a nested main loop.
 - The macOS preview orders owned windows through `addChildWindow:ordered:` and removes the old parent when reparenting. Runtime computes the exact blocked set, including sibling and application-modal stacks; blocked NSWindows reject event delivery, mouse events, key status, and main status, covering embedded native views as well as shared controls. Pending pointer cancellation waits until in-flight pointer dispatch returns, and text input pauses while blocked. Native close queues retirement after the AppKit callback returns; owner cascade releases owned native windows first without a nested run loop.
 - Web, Android, and iOS do not support runtime window creation, so relationships stay unused there; their platform-driven presentations keep their native controller semantics.
 
 ## Interaction with the rest of the framework
 
-- The initial window keeps its historical shutdown behavior; cascade retirement never changes application lifetime by itself.
+- Close follows the last-window shutdown policy after the owned cascade completes; explicit Retire keeps the application running. The initial window has no separate shutdown rule.
 - `WindowHandle` commands keep working on blocked windows; modality blocks user input, not programmatic control.
 - Layers and dialogs inside one window are unchanged; a window-level modal and an in-window dialog may coexist, and the window-level rule wins for input crossing windows.
 - Accessibility sees disabled windows through the platform state; no semantic role is added.

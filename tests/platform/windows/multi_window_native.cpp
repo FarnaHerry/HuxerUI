@@ -186,7 +186,10 @@ TEST_CASE("Win32StartupCanDeferTheInitialWindowWithoutStoppingApplicationDispatc
   if (open_later) {
     for (int cycle = 0; cycle != 2; ++cycle) {
       post([handle, state, delayed_title] {
-        state->delayed = handle.OpenWindow({.title = delayed_title, .initial_size = {240.0F, 160.0F}});
+        state->delayed = handle.OpenWindow(
+            StartupWindowApp,
+            {.title = delayed_title, .initial_size = {240.0F, 160.0F}}
+        );
       });
       PumpUntil([&] { return FindWindowByTitle(delayed_title_wide) != nullptr; }, "the delayed window");
       const HWND native = FindWindowByTitle(delayed_title_wide);
@@ -271,12 +274,15 @@ TEST_CASE("Win32RuntimeWindowsOpenAndCloseWithoutRetainingHandles", "[.][win32-n
       std::lock_guard lock(test_state_mutex);
       const ApplicationHandle application_handle = *captured_application;
       application_dispatch([application_handle, secondary_title_narrow, preferred_origin, placement, cycle] {
-        const WindowHandle window = application_handle.OpenWindow({
+        const WindowHandle window = application_handle.OpenWindow(
+            NativeWindowLifecycleApp,
+            {
             .title = secondary_title_narrow,
             .initial_size = {320.0F, 220.0F},
             .initial_position = preferred_origin,
             .chrome_mode = cycle == 0 ? WindowChromeMode::System : WindowChromeMode::Custom,
-        });
+        }
+        );
         placement->set_value(window.Position());
       });
     }

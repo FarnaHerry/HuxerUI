@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 #include <huxerui/huxerui.h>
 
@@ -13,7 +14,6 @@ namespace desktop_pet {
 inline huxerui::WindowOptions PetOptions() {
   return {
       .title = "HuxerUI Desktop Pet",
-      .key = "pet",
       .initial_size = {200.0F, 200.0F},
       .presentation = huxerui::WindowPresentation::Utility,
       .transparent_surface = true,
@@ -23,6 +23,11 @@ inline huxerui::WindowOptions PetOptions() {
 }
 
 struct PetModel {
+  PetModel(huxerui::ViewFactory pet_factory, huxerui::ViewFactory settings_factory)
+      : pet_content(std::move(pet_factory)), settings_content(std::move(settings_factory)) {}
+
+  huxerui::ViewFactory pet_content;
+  huxerui::ViewFactory settings_content;
   std::optional<huxerui::WindowHandle> pet;
   std::optional<huxerui::WindowHandle> settings;
   huxerui::State<bool> energized{false};
@@ -39,12 +44,12 @@ struct PetModel {
       options.topmost = topmost.Get();
       options.initial_position = saved_position;
       try {
-        pet = application.OpenWindow(options);
+        pet = application.OpenWindow(pet_content, options);
       } catch (const std::logic_error&) {
         // Wayland rejects passive display and keep-above at creation; fall back to the base policy.
         options.show_without_activation = false;
         options.topmost = false;
-        pet = application.OpenWindow(options);
+        pet = application.OpenWindow(pet_content, options);
         topmost = false;
       }
     }
@@ -93,7 +98,7 @@ struct PetModel {
   void OpenSettings(const huxerui::ApplicationHandle& application) {
     if (!settings) {
       settings = application.OpenWindow(
-          {.title = "Desktop Pet Settings", .key = "settings", .initial_size = {380.0F, 440.0F}},
+          settings_content, {.title = "Desktop Pet Settings", .initial_size = {380.0F, 440.0F}},
           {.owner = pet});
     }
     settings->Activate();

@@ -1377,8 +1377,6 @@ bool TryForwardWin32ApplicationActivation(
   if (sent == 0 || result == 0) {
     return false;
   }
-  ShowWindow(target, IsIconic(target) ? SW_RESTORE : SW_SHOW);
-  static_cast<void>(SetForegroundWindow(target));
   return true;
 }
 

@@ -150,11 +150,6 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   std::vector<std::weak_ptr<HttpOperationState>> http_operations;
   std::shared_ptr<TaskScopeState> tasks;
   std::vector<std::weak_ptr<UiExecutionState>> uis;
-  /// Native windows created through Runtime::OpenWindow. Hosts acknowledge detached callbacks before deferred
-  /// object release; application shutdown clears any remaining windows before services.
-  std::vector<std::unique_ptr<UiWindow>> windows;
-  /// Next creation order assigned to a window; zero is the initial window.
-  std::uint32_t next_window_ordinal = 0;
   /// Window relationship registry on the application thread: per-window record plus deterministic owned edges.
   struct WindowRelationRecord {
     UiWindow* owner = nullptr;
@@ -173,6 +168,8 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   std::vector<std::function<void()>> handler_cleanups;
   bool event_dispatch_pending = false;
   bool hosted = false;
+  std::size_t window_installations = 0;
+  std::size_t active_ui_calls = 0;
 
 private:
   std::mutex queue_mutex_;
@@ -315,9 +312,10 @@ public:
   [[nodiscard]] const std::shared_ptr<SystemTrayService>& SystemTray() const noexcept;
   [[nodiscard]] const std::shared_ptr<huxerui::Clipboard>& Clipboard() const noexcept;
   [[nodiscard]] const AppDirectories& Directories() const;
-  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options) const;
-  [[nodiscard]] WindowHandle OpenWindow(const WindowOptions& options, const WindowRelationship& relationship) const;
+  WindowHandle OpenWindow(ViewFactory content, WindowOptions options, const WindowRelationship& relationship) const;
   void Quit() const;
+  [[nodiscard]] bool SupportsMultipleWindows() const;
+  WindowHandle OpenWindow(ViewFactory content, WindowOptions options) const;
   void Enqueue(ApplicationActivation activation);
   void UpdateLifecycleState(ApplicationLifecycleState lifecycle_state);
   void DispatchPending();
