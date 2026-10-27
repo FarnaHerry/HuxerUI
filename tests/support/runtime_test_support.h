@@ -605,7 +605,7 @@ public:
 
   bool SupportsMultipleWindows() const noexcept override { return multiple_windows_supported; }
 
-  std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
+  std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
     auto window = std::make_unique<TestPlatform>();
     window->owned_native_window = true;
     window->on_destroy = [this] { ++destroyed_windows; };

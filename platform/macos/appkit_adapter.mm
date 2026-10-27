@@ -307,7 +307,7 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override;
+  std::unique_ptr<UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override;
 
   void UpdateWindows();
 
@@ -856,7 +856,7 @@ public:
       }
       break;
     case WindowCommand::Close:
-      QueueClose();
+      CloseWindow();
       break;
     case WindowCommand::Show:
       [window_ orderFront:nil];
@@ -1386,10 +1386,9 @@ private:
   bool pointer_dispatching_ = false;
   bool pointer_cancel_pending_ = false;
   MacRuntime* runtime_ = nullptr;
-  bool performing_close_ = false;
 };
 
-std::unique_ptr<UiWindow> MacRuntime::CreateWindow(ViewFactory content, const WindowOptions& options) {
+std::unique_ptr<UiWindow> MacRuntime::CreateApplicationWindow(ViewFactory content, const WindowOptions& options) {
   auto window = std::make_unique<MacUiWindow>();
   window->Initialize(*this, std::move(content), options);
   return window;

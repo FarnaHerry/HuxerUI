@@ -763,7 +763,7 @@ public:
   std::vector<WindowOptions> attempted_options;
   std::vector<WindowOptions> opened_options;
 
-  std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
+  std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
     attempted_options.push_back(options);
     auto window = std::make_unique<PetModelWindow>(options, destroyed, passive_display_available);
     detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
@@ -1010,7 +1010,7 @@ public:
   using TestPlatform::TestPlatform;
   ~OwnedWindowPlatform() override { huxerui::Runtime::Retire(); }
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
+  std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
     ++creations;
     if (before_create) before_create();
     auto window = std::make_unique<OwnedTestWindow>(destroyed);
@@ -1562,7 +1562,7 @@ TEST_CASE("Relationships are installed before presentation and passive windows a
   class PresentationRuntime final : public TestPlatform {
   public:
     std::vector<PresentationWindow*> windows;
-    std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
+    std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
       auto window = std::make_unique<PresentationWindow>();
       detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
       windows.push_back(window.get());
@@ -1595,7 +1595,7 @@ TEST_CASE("Relationship changes defer native destruction through reentrant callb
   class RelationshipRuntime final : public TestPlatform {
   public:
     std::vector<RelationshipWindow*> windows;
-    std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
+    std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
       auto window = std::make_unique<RelationshipWindow>();
       window->owned_native_window = true;
       window->on_destroy = [this] { ++destroyed_windows; };

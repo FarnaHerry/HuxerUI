@@ -84,9 +84,9 @@ The application-facing contract and platform availability are documented in [Nat
 
 ## Platform mapping
 
-- Windows creates one HWND per `WindowsUiWindow` through `WindowsRuntime::CreateWindow` and a shared message loop. A separate hidden facilities HWND receives application activation and tray messages even when no UI window exists.
-- Linux creates one GtkWindow per `LinuxUiWindow` through `LinuxRuntime::CreateWindow` and shares one GLib event loop. PlatformView, IME, drag, frame, and canvas callbacks detach while their native widgets remain alive; Runtime maintenance releases the C++ attachment after active callbacks return.
-- The macOS preview creates NSWindow or utility NSPanel attachments through `MacRuntime::CreateWindow` and a single NSApplication loop. Each attachment has a window delegate; the application delegate owns activation and process lifecycle. Native input scopes also defer application tasks during reentrant AppKit input delivery.
+- Windows creates one HWND per `WindowsUiWindow` through `WindowsRuntime::CreateApplicationWindow` and a shared message loop. A separate hidden facilities HWND receives application activation and tray messages even when no UI window exists.
+- Linux creates one GtkWindow per `LinuxUiWindow` through `LinuxRuntime::CreateApplicationWindow` and shares one GLib event loop. PlatformView, IME, drag, frame, and canvas callbacks detach while their native widgets remain alive; Runtime maintenance releases the C++ attachment after active callbacks return.
+- The macOS preview creates NSWindow or utility NSPanel attachments through `MacRuntime::CreateApplicationWindow` and a single NSApplication loop. Each attachment has a window delegate; the application delegate owns activation and process lifecycle. Native input scopes also defer application tasks during reentrant AppKit input delivery.
 - Android, iOS, Web, and embedded UI attachments remain host-owned. They report no programmatic top-level window support and receive the declaration's initial content and options through shared initialization.
 
 ## Shutdown and failure

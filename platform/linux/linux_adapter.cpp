@@ -496,7 +496,7 @@ public:
     dispatcher_->Shutdown();
   }
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override;
+  std::unique_ptr<UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override;
 
   void ReportFailure(std::exception_ptr failure) {
     if (!failure_) failure_ = std::move(failure);
@@ -2192,7 +2192,7 @@ private:
   LinuxKeyTracker key_tracker_;
 };
 
-std::unique_ptr<UiWindow> LinuxRuntime::CreateWindow(ViewFactory content, const WindowOptions& options) {
+std::unique_ptr<UiWindow> LinuxRuntime::CreateApplicationWindow(ViewFactory content, const WindowOptions& options) {
   auto window = std::make_unique<LinuxUiWindow>(dispatcher_);
   window->Initialize(*this, std::move(content), options);
   return window;

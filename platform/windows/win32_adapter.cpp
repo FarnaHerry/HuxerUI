@@ -477,7 +477,7 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override;
+  std::unique_ptr<UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override;
   int Run();
 
   void ReportFailure(std::exception_ptr failure) {
@@ -2020,7 +2020,7 @@ private:
   std::unique_ptr<Win32FileDrop> file_drop_;
 };
 
-std::unique_ptr<UiWindow> WindowsRuntime::CreateWindow(ViewFactory content, const WindowOptions& options) {
+std::unique_ptr<UiWindow> WindowsRuntime::CreateApplicationWindow(ViewFactory content, const WindowOptions& options) {
   if (!ui_class_registered_) {
     const HINSTANCE instance = GetModuleHandleW(nullptr);
     window_icon_ = LoadApplicationIcon(instance, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));

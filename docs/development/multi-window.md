@@ -86,10 +86,10 @@ The Linux development host cannot build or execute AppKit, and no local macOS re
 
 ## Porting checklist for additional hosts
 
-Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateWindow` construct an initialized hidden attachment, and let Runtime own presentation and safe retirement.
+Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateApplicationWindow` construct an initialized hidden attachment, and let Runtime own presentation and safe retirement.
 
 1. Hoist the per-window main loop to the Runtime owner and iterate until application shutdown, including when every window is hidden or explicitly retired.
-2. Implement `SupportsMultipleWindows()` and `CreateWindow(ViewFactory, const WindowOptions&)` on the platform Runtime subclass: prepare native facilities, call `InitializeWindow(runtime, content, options, configuration)`, and return a hidden attachment without entering a nested loop.
+2. Implement `SupportsMultipleWindows()` and `CreateApplicationWindow(ViewFactory, const WindowOptions&)` on the platform Runtime subclass: prepare native facilities, call `InitializeWindow(runtime, content, options, configuration)`, and return a hidden attachment without entering a nested loop.
 3. Open the initial window and `AppOptions::extra_windows` through `ApplicationHandle::OpenWindow(content, options)` in the platform entry so every window shares one path.
 4. Route native callbacks from the handle or object that originated them instead of a single stored window pointer.
 5. Route accepted native closure to `UiWindow::CloseWindow`, honor the shared last-window policy, and preserve explicit retirement without application shutdown.
@@ -97,7 +97,7 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 
 Host implementation anchors:
 
-- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. `CanDiscardHost` and `DiscardHost` support explicit retirement. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
+- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateApplicationWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. `CanDiscardHost` and `DiscardHost` support explicit retirement. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest
