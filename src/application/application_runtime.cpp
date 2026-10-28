@@ -381,7 +381,7 @@ bool Runtime::SupportsMultipleWindows() const noexcept {
   return false;
 }
 
-std::unique_ptr<UiWindow> Runtime::CreateWindow(ViewFactory, const WindowOptions&) {
+std::unique_ptr<UiWindow> Runtime::CreateApplicationWindow(ViewFactory, const WindowOptions&) {
   throw std::runtime_error("HuxerUI host does not support creating top-level windows");
 }
 
@@ -403,7 +403,7 @@ WindowHandle Runtime::OpenWindow(ViewFactory content, WindowOptions options) {
   std::unique_ptr<UiWindow> window;
   ++state_->window_installations;
   try {
-    window = CreateWindow(std::move(content), options);
+    window = CreateApplicationWindow(std::move(content), options);
     if (!window || !window->IsInitialized() || &window->ApplicationRuntime() != this) {
       throw std::logic_error("HuxerUI window factory must return an initialized window of its Runtime");
     }
