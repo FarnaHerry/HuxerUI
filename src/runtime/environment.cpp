@@ -6,6 +6,10 @@
 
 namespace huxerui {
 
+ThemeBrightness UseSystemThemeBrightness() {
+  return UseEnvironment<detail::SystemThemeEnvironment>().brightness;
+}
+
 Environment::Environment(const Environment& other) {
   for (const auto& [key, entry] : other.entries_) {
     if (entry.value.has_value()) {

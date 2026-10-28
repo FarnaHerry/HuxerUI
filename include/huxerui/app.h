@@ -922,6 +922,14 @@ public:
 
 protected:
   UiWindow();
+  /// Queries the native host after derived facilities are ready; unavailable preferences use Light.
+  /// Must not block on asynchronous platform queries. Called on the application thread.
+  virtual ThemeBrightness QuerySystemThemeBrightness() const;
+  /// Publishes a host preference to this initialized window's composition dependencies.
+  /// Call on the application thread; native callbacks must stop entering when retirement begins.
+  /// @throws std::logic_error If this window is not initialized or the calling thread differs.
+  /// @throws std::invalid_argument If brightness is not a declared ThemeBrightness value.
+  void UpdateSystemThemeBrightness(ThemeBrightness brightness);
   /// Tests whether this window completed shared initialization and has not begun retirement.
   /// @return False during WindowHook installation, after initialization failure, or after retirement begins.
   /// Native callbacks may enter shared UI operations only while this is true.

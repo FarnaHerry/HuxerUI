@@ -499,6 +499,16 @@ public:
 
   using UiWindow::IsInitialized;
 
+  ThemeBrightness QuerySystemThemeBrightness() const override {
+    NSAppearance* appearance = view_ != nil ? view_.effectiveAppearance : NSApp.effectiveAppearance;
+    NSString* match = [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+    return [match isEqualToString:NSAppearanceNameDarkAqua] ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void RefreshSystemTheme() {
+    if (IsInitialized()) UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
+  }
+
   void Initialize(MacRuntime& application_runtime, ViewFactory content, const WindowOptions& options) {
     @autoreleasepool {
       delegate_ = [[HuxerUIWindowDelegate alloc] init];
@@ -552,6 +562,7 @@ public:
       [window_ center];
       [window_ makeFirstResponder:view_];
       UiWindow::UpdateResourceConfiguration(Configuration());
+      RefreshSystemTheme();
       UpdateWindowLifecycleState();
       UpdateWindowMetrics({
           static_cast<float>(view_.bounds.size.width),
@@ -839,6 +850,7 @@ public:
         ? WindowLifecycleState::Background
         : window_.keyWindow && NSApplication.sharedApplication.active
             ? WindowLifecycleState::Active : WindowLifecycleState::Inactive;
+    if (state != WindowLifecycleState::Background) RefreshSystemTheme();
     UiWindow::UpdateWindowLifecycleState(state);
   }
 
@@ -1240,6 +1252,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
   [super viewDidMoveToWindow];
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
+    huxeruiWindow->RefreshSystemTheme();
     huxeruiWindow->WindowGeometryChanged();
   }
 }
@@ -1262,6 +1275,11 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     huxeruiWindow->InvalidateAppKitSurface();
     huxeruiWindow->WindowGeometryChanged();
   }
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+  [super viewDidChangeEffectiveAppearance];
+  if (huxeruiWindow != nullptr) huxeruiWindow->RefreshSystemTheme();
 }
 
 - (void)resourceConfigurationDidChange:(NSNotification*)notification {

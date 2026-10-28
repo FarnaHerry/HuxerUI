@@ -579,6 +579,10 @@ public:
 
   void OnRuntimeStopped() override { ++application_quit_requests; }
 
+  using huxerui::UiWindow::UpdateSystemThemeBrightness;
+  ThemeBrightness QuerySystemThemeBrightness() const override { return system_theme_brightness; }
+  ThemeBrightness system_theme_brightness = ThemeBrightness::Light;
+
   std::chrono::steady_clock::time_point TimerNow() const noexcept override {
     return std::chrono::steady_clock::time_point{} +
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(current_time));

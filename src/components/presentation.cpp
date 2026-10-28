@@ -91,7 +91,6 @@ private:
   );
   ViewFactory PresentedContent(
       ViewFactory content,
-      const DialogStyle& style,
       std::shared_ptr<LayerTransitionState> transition,
       std::shared_ptr<LayerId> id,
       bool dismissible
@@ -716,8 +715,9 @@ std::shared_ptr<detail::LayerTransitionState> PresentationTransition(
 }
 
 void UpdatePresentationTransition(
-    const std::shared_ptr<detail::LayerTransitionState>& transition, const PresentationMotion& motion
+    const std::shared_ptr<detail::LayerTransitionState>& transition, const std::optional<PresentationMotion>& recipe
 ) {
+  const auto motion = recipe.value_or(PresentationMotion{.enter = SnapSpec{}, .exit = SnapSpec{}});
   transition->hidden_opacity = 0.0F;
   transition->enter = motion.enter;
   transition->exit = motion.exit;
@@ -875,7 +875,6 @@ ViewFactory SnackBarContent(
     StringVariant message,
     std::optional<detail::SnackBarActionRequest> action,
     std::optional<double> duration,
-    SnackBarStyle style,
     std::shared_ptr<detail::LayerTransitionState> transition,
     std::shared_ptr<SnackBarPauseState> pause
 ) {
@@ -884,9 +883,11 @@ ViewFactory SnackBarContent(
           message = std::move(message),
           action = std::move(action),
           duration,
-          style = std::move(style),
           transition = std::move(transition),
           pause = std::move(pause)] {
+    const auto style = ResolveSnackBarStyle(detail::CurrentEnvironment());
+    ValidateSnackBarStyle(style);
+    if (transition) UpdatePresentationTransition(transition, style.motion);
     std::string resolved_message = UseString(message);
     if (IsBlankResolvedString(resolved_message)) {
       throw std::invalid_argument("HuxerUI SnackBar message must not be empty");
@@ -944,13 +945,13 @@ ViewFactory SnackBarContent(
           SnackBarLifetime{service, pause, *id, duration, application_active}
       ),
     }.With(Padding{style.viewport_padding});
-    if (!transition || !style.motion.has_value()) {
+    if (!transition) {
       return result;
     }
     return std::move(result).With(
         PresentationContentMotion{
             .state = transition,
-            .motion = *style.motion,
+            .motion = style.motion.value_or(PresentationMotion{.enter = SnapSpec{}, .exit = SnapSpec{}}),
             .slide_direction = {0.0F, 1.0F},
             .origin = TransformOrigin{0.5F, 1.0F},
         }
@@ -966,20 +967,21 @@ Semantics DialogOwnerSemantics() {
 
 ViewFactory AnimatedDialogContent(
     ViewFactory content,
-    const DialogStyle& style,
     std::shared_ptr<detail::LayerTransitionState> transition,
     std::function<bool()> request_dismiss
 ) {
   return [content = std::move(content),
-          style,
           transition = std::move(transition),
           request_dismiss = std::move(request_dismiss)]() -> View {
-    View result = content();
-    if (transition && style.motion.has_value()) {
-      result = Stack {std::move(result)}.With(
+    const auto style = ResolveDialogStyle(detail::CurrentEnvironment());
+    ValidateDialogStyle(style);
+    if (transition) UpdatePresentationTransition(transition, style.motion);
+    View result = Stack {content()};
+    if (transition) {
+      result = std::move(result).With(
           PresentationContentMotion{
             .state = transition,
-            .motion = *style.motion,
+            .motion = style.motion.value_or(PresentationMotion{.enter = SnapSpec{}, .exit = SnapSpec{}}),
             .slide_direction = VerticalSlideDirection(style.placement),
             .origin = VerticalMotionOrigin(style.placement),
           }
@@ -989,22 +991,29 @@ ViewFactory AnimatedDialogContent(
     if (request_dismiss) {
       result = std::move(result).With(DismissAction{request_dismiss});
     }
-    return result;
+    return std::move(result).LayoutValue<detail::LayerPresentationValue>(
+        detail::LayerPresentation{style.scrim, DialogLayerPlacement(style)}
+    );
   };
 }
 
 ViewFactory BottomSheetContent(
     ViewFactory content,
-    const BottomSheetStyle& style,
     std::shared_ptr<detail::LayerTransitionState> transition,
     std::shared_ptr<BottomSheetDragState> drag,
-    std::function<bool()> request_dismiss
+    std::function<bool()> request_dismiss,
+    bool dismiss_on_cancel
 ) {
   return [content = std::move(content),
-          style,
           transition = std::move(transition),
           drag = std::move(drag),
-          request_dismiss = std::move(request_dismiss)] {
+          request_dismiss = std::move(request_dismiss),
+          dismiss_on_cancel] {
+    const auto style = ResolveBottomSheetStyle(detail::CurrentEnvironment());
+    ValidateBottomSheetStyle(style);
+    transition->enter = style.enter;
+    transition->exit = style.exit;
+    drag->settle = style.enter;
     std::vector<View> children;
     if (ShowsBottomSheetDragHandle(style)) {
       Frame handle_frame;
@@ -1026,7 +1035,7 @@ ViewFactory BottomSheetContent(
           )
       );
     }
-    children.push_back(content());
+    children.push_back(Scope(content).Key("sheet-content"));
     View result = Column {std::move(children)}.With(
         CrossAlign{CrossAxisAlignment::Stretch},
         Background{style.background},
@@ -1048,10 +1057,17 @@ ViewFactory BottomSheetContent(
         },
         detail::BuiltInSemantics{DialogOwnerSemantics()}
     );
-    if (request_dismiss) {
+    if (dismiss_on_cancel || ShowsBottomSheetDragHandle(style)) {
       result = std::move(result).With(DismissAction{request_dismiss});
     }
-    return result;
+    detail::LayerPlacement placement;
+    placement.kind = detail::LayerPlacementKind::BottomCenter;
+    placement.safe_area_policy = detail::LayerSafeAreaPolicy::ExtendBottom;
+    placement.fill_cross_axis = true;
+    placement.maximum_cross_axis_extent = style.maximum_width;
+    return std::move(result).LayoutValue<detail::LayerPresentationValue>(
+        detail::LayerPresentation{style.scrim, placement}
+    );
   };
 }
 
@@ -2434,7 +2450,10 @@ LayerId detail::ToastService::Show(
           .on_dismiss_request = {},
           .barrier_color = std::nullopt,
       },
-      [service, id, message = std::move(message), options, style, transition]() -> View {
+      [service, id, message = std::move(message), options, transition]() -> View {
+        const auto style = ResolveToastStyle(detail::CurrentEnvironment());
+        ValidateToastStyle(style);
+        if (transition) UpdatePresentationTransition(transition, style.motion);
         std::string resolved_message = UseString(message);
         if (resolved_message.empty()) {
           throw std::invalid_argument("HuxerUI toast message must not be empty");
@@ -2461,13 +2480,18 @@ LayerId detail::ToastService::Show(
                   detail::BuiltInSemantics{std::move(toast_semantics)}
               ),
         }.With(Padding{style.viewport_padding});
-        if (!transition || !style.motion.has_value()) {
+        detail::LayerPlacement placement;
+        placement.kind = VerticalLayerPlacementKind(style.placement);
+        result = std::move(result).LayoutValue<detail::LayerPresentationValue>(
+            detail::LayerPresentation{std::nullopt, placement}
+        );
+        if (!transition) {
           return result;
         }
         return std::move(result).With(
             PresentationContentMotion{
                 .state = transition,
-                .motion = *style.motion,
+                .motion = style.motion.value_or(PresentationMotion{.enter = SnapSpec{}, .exit = SnapSpec{}}),
                 .slide_direction = VerticalSlideDirection(style.placement),
                 .origin = TransformOrigin{0.5F, 0.5F},
             }
@@ -2542,7 +2566,7 @@ LayerId detail::SnackBarService::Show(StringVariant message, std::optional<Snack
           .barrier_color = std::nullopt,
       },
       SnackBarContent(
-          weak_from_this(), id, std::move(message), std::move(action), options.duration, style, transition, pause
+          weak_from_this(), id, std::move(message), std::move(action), options.duration, transition, pause
       ),
       std::move(environment),
       std::move(placement),
@@ -2648,7 +2672,6 @@ std::shared_ptr<detail::LayerTransitionState> detail::DialogService::ReconcileTr
 
 ViewFactory detail::DialogService::PresentedContent(
     ViewFactory content,
-    const DialogStyle& style,
     std::shared_ptr<LayerTransitionState> transition,
     std::shared_ptr<LayerId> id,
     bool dismissible
@@ -2657,7 +2680,7 @@ ViewFactory detail::DialogService::PresentedContent(
   if (dismissible) {
     request_dismiss = [layers = layers_, id = std::move(id)] { return InternalAccess::RequestDismiss(layers, *id).handled; };
   }
-  return AnimatedDialogContent(std::move(content), style, std::move(transition), std::move(request_dismiss));
+  return AnimatedDialogContent(std::move(content), std::move(transition), std::move(request_dismiss));
 }
 
 LayerId detail::DialogService::Show(
@@ -2692,7 +2715,6 @@ LayerId detail::DialogService::Show(
            negative = std::move(negative),
            on_positive_click = std::move(on_positive_click),
            on_negative_click = std::move(on_negative_click),
-           style,
            layers = layers_,
            id] {
             return StandardContent(
@@ -2702,12 +2724,11 @@ LayerId detail::DialogService::Show(
                 negative,
                 on_positive_click,
                 on_negative_click,
-                style,
+                ResolveDialogStyle(detail::CurrentEnvironment()),
                 layers,
                 *id
             );
           },
-          style,
           transition,
           id,
           dismissible
@@ -2735,7 +2756,7 @@ LayerId detail::DialogService::Show(
   const LayerId attached = InternalAccess::AttachCaptured(
       layers_,
       std::move(layer_options),
-      PresentedContent(std::move(content), style, transition, id, dismissible),
+      PresentedContent(std::move(content), transition, id, dismissible),
       std::move(environment),
       DialogLayerPlacement(style),
       transition
@@ -2777,7 +2798,7 @@ bool detail::DialogService::Update(LayerId id, ViewFactory content, std::shared_
       layers_,
       id,
       std::move(*layer_options),
-      PresentedContent(std::move(content), style, transition, std::make_shared<LayerId>(id), dismissible),
+      PresentedContent(std::move(content), transition, std::make_shared<LayerId>(id), dismissible),
       std::move(environment),
       DialogLayerPlacement(style),
       transition
@@ -2796,7 +2817,7 @@ bool detail::DialogService::Update(
       layers_,
       id,
       std::move(layer_options),
-      PresentedContent(std::move(content), style, transition, std::make_shared<LayerId>(id), dismissible),
+      PresentedContent(std::move(content), transition, std::make_shared<LayerId>(id), dismissible),
       std::move(environment),
       DialogLayerPlacement(style),
       transition
@@ -2846,17 +2867,13 @@ LayerId detail::BottomSheetService::Show(
   const BottomSheetStyle style = ResolveBottomSheetStyle(environment);
   ValidateBottomSheetStyle(style);
   const std::shared_ptr<detail::LayerTransitionState> transition = BottomSheetTransition(style);
-  const bool dismissible = options.dismiss_on_cancel || ShowsBottomSheetDragHandle(style);
+  const bool dismiss_on_cancel = options.dismiss_on_cancel;
   auto id_value = std::make_shared<LayerId>(0);
-  std::function<bool()> request_dismiss;
-  if (dismissible) {
-    request_dismiss = [layers = layers_, id_value] { return InternalAccess::RequestDismiss(layers, *id_value).handled; };
-  }
-  std::shared_ptr<BottomSheetDragState> drag;
-  if (ShowsBottomSheetDragHandle(style)) {
-    drag = std::make_shared<BottomSheetDragState>();
-    drag->settle = style.enter;
-  }
+  auto request_dismiss = [layers = layers_, id_value] {
+    return InternalAccess::RequestDismiss(layers, *id_value).handled;
+  };
+  auto drag = std::make_shared<BottomSheetDragState>();
+  drag->settle = style.enter;
   LayerOptions layer_options = BottomSheetLayerOptions(std::move(options), style.scrim);
   detail::LayerPlacement placement;
   placement.kind = detail::LayerPlacementKind::BottomCenter;
@@ -2866,15 +2883,13 @@ LayerId detail::BottomSheetService::Show(
   const LayerId id = InternalAccess::AttachCaptured(
       layers_,
       std::move(layer_options),
-      BottomSheetContent(std::move(content), style, transition, drag, std::move(request_dismiss)),
+      BottomSheetContent(std::move(content), transition, drag, std::move(request_dismiss), dismiss_on_cancel),
       std::move(environment),
       std::move(placement),
       transition
   );
   *id_value = id;
-  if (drag) {
-    drag->dismiss = [layers = layers_, id] { return InternalAccess::RequestDismiss(layers, id).dismissed; };
-  }
+  drag->dismiss = [layers = layers_, id] { return InternalAccess::RequestDismiss(layers, id).dismissed; };
   return id;
 }
 
@@ -3135,7 +3150,6 @@ LayerId detail::MenuService::ShowLevel(
   const LayerId attached = anchor->AttachLayer(
       target,
       [entries = std::move(entries),
-       style,
        width,
        chain,
        depth,
@@ -3143,6 +3157,9 @@ LayerId detail::MenuService::ShowLevel(
        transition,
        dismissible,
        anchor = std::weak_ptr<LayerAnchorState>(anchor)]() -> View {
+        const auto style = ResolveMenuStyle(detail::CurrentEnvironment());
+        ValidateMenuStyle(style);
+        if (transition) UpdatePresentationTransition(transition, style.motion);
         std::function<bool()> request_dismiss;
         if (dismissible) {
           request_dismiss = [anchor] {
@@ -3153,11 +3170,11 @@ LayerId detail::MenuService::ShowLevel(
         View result = Stack {
           Surface(entries, style, width, chain, depth, std::move(request_dismiss)),
         };
-        if (transition && style.motion.has_value()) {
+        if (transition) {
           result = std::move(result).With(
               PresentationContentMotion{
                 .state = transition,
-                .motion = *style.motion,
+                .motion = style.motion.value_or(PresentationMotion{.enter = SnapSpec{}, .exit = SnapSpec{}}),
                 .slide_direction = AnchorMotionDirection(preferred_placement.side),
                 .origin = AnchorMotionOrigin(preferred_placement),
               }

@@ -1679,6 +1679,17 @@ The Theme node stores one ordinary child declaration and does not create a Recom
 Built-in primitives retain raw semantic inputs and resolve final component values when UiWindow reconciles them under the mounted Theme Environment.
 A component whose implementation directly calls `UseTheme()` or `UseEnvironment()` is composable because the read belongs to its own composition lifetime.
 
+Each UiWindow seeds an internal system-brightness Environment value by calling its native `QuerySystemThemeBrightness()` after native facilities are ready and before window hooks and composition.
+The default query returns Light and never blocks; asynchronous backends publish later through `UpdateSystemThemeBrightness()`.
+Updates require a live initialized window, the application thread, and a declared enum value, and invalidate only scopes observing `UseSystemThemeBrightness()` through normal Environment equality and dependency tracking.
+Native subscriptions retain the original window provenance, stop at retirement, and resample on foreground recovery; Runtime has no second brightness cache or theme service.
+`ThemeSpec::brightness` remains independent metadata for the inherited palette and never shadows the host preference.
+
+A layer's composition scope covers both its presentation layout and its content.
+Typed presentation factories resolve the captured Environment during composition and supply private visual LayoutValue metadata for scrim and placement alongside the surface.
+The controller still owns identity, behavioral options, dismissal, and transition lifetime; visual recomposition does not call Attach, Update, or revive an exiting entry.
+Retained animation controllers continue their current timing when the theme recipe changes and use the new timing on the next transition.
+
 ### Theme systems
 
 Core semantic theme values include:
@@ -1692,6 +1703,7 @@ struct ThemeSpec {
   ElevationScheme elevation;
   MotionScheme motion;
   InteractionScheme interactions;
+  ThemeBrightness brightness = ThemeBrightness::Light;
 };
 ```
 

@@ -3,6 +3,10 @@
 #include <objbase.h>
 #include <ole2.h>
 #include <psapi.h>
+#include <roapi.h>
+#include <winstring.h>
+#include <windows.ui.viewmanagement.h>
+#include <wrl.h>
 
 #include <algorithm>
 #include <chrono>
@@ -12,6 +16,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -51,6 +56,81 @@ constexpr UINT kRenderMessage = WM_APP + 1;
 constexpr UINT kWindowCommandMessage = WM_APP + 3;
 constexpr UINT_PTR kFrameTimer = 1;
 constexpr float kDipsPerInch = 96.0F;
+
+// The Win7-compatible binary probes WinRT dynamically instead of importing newer OS entry points.
+class Win32SystemTheme final {
+public:
+  Win32SystemTheme() {
+    module_ = LoadLibraryW(L"combase.dll");
+    if (!module_) return;
+    const auto initialize = reinterpret_cast<decltype(&RoInitialize)>(GetProcAddress(module_, "RoInitialize"));
+    uninitialize_ = reinterpret_cast<decltype(&RoUninitialize)>(GetProcAddress(module_, "RoUninitialize"));
+    const auto activate = reinterpret_cast<decltype(&RoActivateInstance)>(
+        GetProcAddress(module_, "RoActivateInstance"));
+    const auto create_string = reinterpret_cast<decltype(&WindowsCreateString)>(
+        GetProcAddress(module_, "WindowsCreateString"));
+    const auto delete_string = reinterpret_cast<decltype(&WindowsDeleteString)>(
+        GetProcAddress(module_, "WindowsDeleteString"));
+    if (!initialize || !uninitialize_ || !activate || !create_string || !delete_string) return;
+    const HRESULT initialized = initialize(RO_INIT_SINGLETHREADED);
+    apartment_initialized_ = SUCCEEDED(initialized);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return;
+    constexpr wchar_t name[] = L"Windows.UI.ViewManagement.UISettings";
+    HSTRING class_name = nullptr;
+    if (FAILED(create_string(name, static_cast<UINT32>(std::size(name) - 1), &class_name))) return;
+    Microsoft::WRL::ComPtr<IInspectable> instance;
+    const HRESULT result = activate(class_name, &instance);
+    delete_string(class_name);
+    if (SUCCEEDED(result)) static_cast<void>(instance.As(&settings_));
+  }
+
+  ~Win32SystemTheme() {
+    Stop();
+    settings_.Reset();
+    if (apartment_initialized_) uninitialize_();
+    if (module_) FreeLibrary(module_);
+  }
+
+  Win32SystemTheme(const Win32SystemTheme&) = delete;
+  Win32SystemTheme& operator=(const Win32SystemTheme&) = delete;
+
+  ThemeBrightness Query() const {
+    ABI::Windows::UI::Color foreground{};
+    if (!settings_ || FAILED(settings_->GetColorValue(
+        ABI::Windows::UI::ViewManagement::UIColorType_Foreground, &foreground))) {
+      return ThemeBrightness::Light;
+    }
+    return 5 * foreground.G + 2 * foreground.R + foreground.B > 8 * 128
+        ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void Observe(std::function<void()> changed) {
+    if (!settings_) return;
+    using Handler = ABI::Windows::Foundation::ITypedEventHandler<
+        ABI::Windows::UI::ViewManagement::UISettings*, IInspectable*>;
+    auto handler = Microsoft::WRL::Callback<Handler>(
+        [changed = std::move(changed)](ABI::Windows::UI::ViewManagement::IUISettings*, IInspectable*) -> HRESULT {
+          try { changed(); } catch (...) { return E_FAIL; }
+          return S_OK;
+        });
+    observing_ = SUCCEEDED(settings_->add_ColorValuesChanged(handler.Get(), &token_));
+  }
+
+  void Stop() noexcept {
+    if (observing_) {
+      static_cast<void>(settings_->remove_ColorValuesChanged(token_));
+      observing_ = false;
+    }
+  }
+
+private:
+  HMODULE module_ = nullptr;
+  decltype(&RoUninitialize) uninitialize_ = nullptr;
+  Microsoft::WRL::ComPtr<ABI::Windows::UI::ViewManagement::IUISettings3> settings_;
+  EventRegistrationToken token_{};
+  bool apartment_initialized_ = false;
+  bool observing_ = false;
+};
 
 enum class MouseTrackingArea {
   None,
@@ -685,6 +765,18 @@ public:
     renderer_.Initialize();
     instance_ = GetModuleHandleW(nullptr);
     CreateApplicationWindow(application, std::move(content), options);
+    const auto execution = InternalAccess::WindowExecution(*this);
+    system_theme_.Observe([dispatch = ui_dispatcher_.Bind(), ui = execution->ui] {
+      dispatch([ui] {
+        if (const auto state = ui.lock(); state && state->ui_window) {
+          auto* window = static_cast<WindowsUiWindow*>(state->ui_window);
+          if (window->IsInitialized()) {
+            window->UpdateSystemThemeBrightness(window->QuerySystemThemeBrightness());
+          }
+        }
+      });
+    });
+    UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
     UiWindow::UpdateResourceConfiguration(Configuration());
     UpdateRuntimeViewport();
     RequestFrameAt(Now());
@@ -694,6 +786,8 @@ public:
     if (initialization_failure_) std::rethrow_exception(initialization_failure_);
     initializing_ = false;
   }
+
+  ThemeBrightness QuerySystemThemeBrightness() const override { return system_theme_.Query(); }
 
   HWND Window() const noexcept { return window_; }
 
@@ -821,6 +915,9 @@ public:
 private:
   void UpdateApplicationLifecycleState(ApplicationLifecycleState lifecycle_state) {
     if (IsInitialized()) {
+      if (lifecycle_state != ApplicationLifecycleState::Background) {
+        UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
+      }
       switch (lifecycle_state) {
       case ApplicationLifecycleState::Active:
         UiWindow::UpdateWindowLifecycleState(WindowLifecycleState::Active);
@@ -904,6 +1001,7 @@ private:
   }
 
   void Cleanup() noexcept {
+    system_theme_.Stop();
     Retire();
     file_drop_.reset();
     text_input_.Reset();
@@ -1469,6 +1567,7 @@ private:
       return 0;
     }
     case WM_THEMECHANGED:
+      if (IsInitialized()) UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
       if (custom_chrome_) {
         UpdateRuntimeViewport();
         RequestFrameAt(Now());
@@ -1476,6 +1575,7 @@ private:
       }
       break;
     case WM_SETTINGCHANGE:
+      if (IsInitialized()) UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
       UiWindow::UpdateResourceConfiguration(Configuration());
       return 0;
     case WM_DISPLAYCHANGE:
@@ -1663,6 +1763,7 @@ private:
   Win32UiThreadDispatcher& ui_dispatcher_;
   std::wstring window_class_name_;
   Win32Api win32_api_;
+  Win32SystemTheme system_theme_;
   Win32Renderer renderer_;
   std::unique_ptr<Win32PlatformViews> platform_views_;
   std::unique_ptr<Win32FileDrop> file_drop_;

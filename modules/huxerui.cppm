@@ -489,6 +489,7 @@ export namespace huxerui {
     using huxerui::TextVerticalAlign;
     using huxerui::TextWrap;
     using huxerui::Theme;
+    using huxerui::ThemeBrightness;
     using huxerui::ThemeDefinition;
     using huxerui::ThemeSpec;
     using huxerui::TimePicker;
@@ -546,6 +547,7 @@ export namespace huxerui {
     using huxerui::UseState;
     using huxerui::UseStateList;
     using huxerui::UseString;
+    using huxerui::UseSystemThemeBrightness;
     using huxerui::UseTaskScope;
     using huxerui::UseTextMeasurer;
     using huxerui::UseTheme;

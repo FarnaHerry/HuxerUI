@@ -531,6 +531,15 @@ class IosUiWindow final : public UiWindow {
 public:
   ~IosUiWindow() override { Shutdown(); }
 
+  ThemeBrightness QuerySystemThemeBrightness() const override {
+    return view_.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark
+        ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void RefreshSystemTheme() {
+    if (IsInitialized()) UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
+  }
+
   bool Start(Runtime& application) noexcept {
     try {
       window_ = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
@@ -540,6 +549,13 @@ public:
       view_ = [[HuxerUIView alloc] initWithFrame:CGRectZero];
       view_.translatesAutoresizingMaskIntoConstraints = NO;
       view_->huxeruiPlatformWindow = this;
+      if (@available(iOS 17.0, *)) {
+        [view_ registerForTraitChanges:@[UITraitUserInterfaceStyle.class]
+                          withHandler:^(__kindof id<UITraitEnvironment> environment, UITraitCollection*) {
+          HuxerUIView* host = (HuxerUIView*)environment;
+          if (host->huxeruiPlatformWindow != nullptr) host->huxeruiPlatformWindow->RefreshSystemTheme();
+        }];
+      }
       [view_controller_.view addSubview:view_];
       [NSLayoutConstraint activateConstraints:@[
         [view_.leadingAnchor constraintEqualToAnchor:view_controller_.view.leadingAnchor],
@@ -563,6 +579,7 @@ public:
       view_->huxeruiWindow = this;
       [window_ makeKeyAndVisible];
       [view_controller_.view layoutIfNeeded];
+      RefreshSystemTheme();
 
       NSNotificationCenter* notifications = NSNotificationCenter.defaultCenter;
       [notifications addObserver:view_
@@ -702,6 +719,7 @@ public:
   /// @param application_state Current native process state, supplied on the UIKit main thread.
   void UpdateWindowLifecycleState(ApplicationLifecycleState application_state) {
     if (!IsInitialized()) return;
+    if (application_state != ApplicationLifecycleState::Background) RefreshSystemTheme();
     WindowLifecycleState state = WindowLifecycleState::Background;
     if (window_ != nil && !window_.hidden && application_state != ApplicationLifecycleState::Background) {
       state = application_state == ApplicationLifecycleState::Active && window_.keyWindow
@@ -1008,6 +1026,7 @@ UIViewController* GetUIKitViewController(UiWindow& ui_window) {
   [super didMoveToWindow];
   if (huxeruiPlatformWindow != nullptr) {
     huxeruiPlatformWindow->UpdateResourceConfiguration();
+    huxeruiPlatformWindow->RefreshSystemTheme();
     huxeruiPlatformWindow->InvalidateTextInputGeometry();
   }
 }
@@ -1016,6 +1035,8 @@ UIViewController* GetUIKitViewController(UiWindow& ui_window) {
   [super traitCollectionDidChange:previousTraitCollection];
   if (huxeruiPlatformWindow != nullptr) {
     huxeruiPlatformWindow->UpdateResourceConfiguration();
+    if (@available(iOS 17.0, *)) return;
+    huxeruiPlatformWindow->RefreshSystemTheme();
   }
 }
 

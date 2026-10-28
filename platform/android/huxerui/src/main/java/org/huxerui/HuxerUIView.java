@@ -259,6 +259,9 @@ public final class HuxerUIView extends ViewGroup {
         setFocusableInTouchMode(true);
         setClickable(true);
         setWillNotDraw(false);
+        if (Build.VERSION.SDK_INT >= 29) {
+            setForceDarkAllowed(false);
+        }
     }
 
     void setSystemBarsController(SystemBarsController controller) {
@@ -462,6 +465,9 @@ public final class HuxerUIView extends ViewGroup {
     public void setWindowLifecycleState(WindowLifecycleState state) {
         windowLifecycleState = Objects.requireNonNull(state);
         if (nativeHandle != 0L) {
+            if (state != WindowLifecycleState.BACKGROUND) {
+                nativeUpdateSystemTheme(nativeHandle, systemDarkTheme());
+            }
             nativeUpdateWindowLifecycleState(nativeHandle, state.nativeValue);
         }
     }
@@ -583,6 +589,7 @@ public final class HuxerUIView extends ViewGroup {
                 resizeRuntime(getWidth(), getHeight());
             }
             nativeUpdateResourceConfiguration(nativeHandle, resourceLocale(), displayScale);
+            nativeUpdateSystemTheme(nativeHandle, systemDarkTheme());
         }
         requestApplyInsets();
     }
@@ -979,6 +986,11 @@ public final class HuxerUIView extends ViewGroup {
 
     private InputMethodManager inputMethodManager() {
         return (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+    }
+
+    private boolean systemDarkTheme() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
     }
 
     private byte[] resourceLocale() {
@@ -2337,6 +2349,7 @@ public final class HuxerUIView extends ViewGroup {
             long handle, float width, float height, float safeLeft, float safeTop, float safeRight, float safeBottom);
 
     private static native void nativeUpdateResourceConfiguration(long handle, byte[] languageTag, float displayScale);
+    private static native void nativeUpdateSystemTheme(long handle, boolean dark);
 
     private static native byte[] nativeCommitFrame(long handle);
 

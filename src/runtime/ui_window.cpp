@@ -1138,6 +1138,22 @@ ScrollPhysics UiWindow::ScrollDefaults() const noexcept {
   return {};
 }
 
+ThemeBrightness UiWindow::QuerySystemThemeBrightness() const {
+  return ThemeBrightness::Light;
+}
+
+void UiWindow::UpdateSystemThemeBrightness(ThemeBrightness brightness) {
+  if (!IsInitialized()) {
+    throw std::logic_error("HuxerUI system theme update requires an initialized window");
+  }
+  state_->application_->RequireThread();
+  if (brightness != ThemeBrightness::Light && brightness != ThemeBrightness::Dark) {
+    throw std::invalid_argument("HuxerUI system theme brightness is invalid");
+  }
+  detail::ExecutionGuard execution_guard(state_->execution_);
+  static_cast<void>(state_->root_environment_->Update(detail::SystemThemeEnvironment{brightness}));
+}
+
 std::shared_ptr<detail::FilePickerTransport> UiWindow::CreateFilePickerTransport() {
   return {};
 }
@@ -1215,6 +1231,11 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory conten
     state_->root_environment_ = std::make_shared<Environment>();
     state_->execution_->environment = state_->root_environment_;
     state_->root_environment_->Set(detail::ViewportEnvironment{state_->viewport_class_});
+    const ThemeBrightness brightness = QuerySystemThemeBrightness();
+    if (brightness != ThemeBrightness::Light && brightness != ThemeBrightness::Dark) {
+      throw std::invalid_argument("HuxerUI system theme brightness is invalid");
+    }
+    state_->root_environment_->Set(detail::SystemThemeEnvironment{brightness});
     WindowContext root{
         state_->layer_controller_,
         *state_->root_environment_,
@@ -2659,7 +2680,9 @@ void UiWindow::DeactivateLayerInput(LayerId id) {
 void UiWindow::InvalidateLayerPlacement(LayerId id) {
   if (state_->mounted_root_) {
     if (detail::MountedNode* layer = FindLayerEntryNode(*state_->mounted_root_, id)) {
-      MarkLayoutDirtyPath(*state_->mounted_root_, layer->identity);
+      // The entry scope owns a layout child whose placement may change without recomposition.
+      const auto identity = layer->children.empty() ? layer->identity : layer->children.front()->identity;
+      MarkLayoutDirtyPath(*state_->mounted_root_, identity);
       if (!state_->building_frame_) {
         RequestFrame();
       }
@@ -2894,31 +2917,49 @@ void UiWindow::ComposeLayers() {
     layer_children.reserve(ordered.size());
     for (const LayerEntry& entry : ordered) {
       const auto environment = entry.environment ? entry.environment : state_->root_environment_;
-      View content = Scope(entry.content);
       const bool barrier = entry.options.pointer_policy == LayerPointerPolicy::Barrier;
       const bool exiting = entry.transition && !entry.transition->target_visible;
-      if (exiting) {
-        content.spec_->pointer_events_enabled = false;
-        content.spec_->local_enabled = false;
-      }
-      if (barrier) {
-        content = std::move(content).On<ViewEvents::Pointer>([](const PointerEvent&) {});
-      }
-
-      View layer = LayerEntryLayout{std::move(content)}
-                       .LayoutValue<LayerPlacementValue>(entry.placement)
-                       .LayoutValue<LayerEntrySnapshotValue>(LayerEntrySnapshot{
-                           .id = entry.id,
-                           .revision = entry.revision,
-                           .exiting = exiting,
-                           .semantic_modal_group = entry.semantic_modal_group,
-                           .retained_focus_identity = entry.retained_focus_identity,
-                       });
-      if (entry.placement->safe_area_policy == LayerSafeAreaPolicy::Constrain) {
-        layer = std::move(layer).With(SafeAreaPadding{});
-      } else if (entry.placement->safe_area_policy == LayerSafeAreaPolicy::ExtendBottom) {
-        layer = std::move(layer).With(SafeAreaPadding{.bottom = false});
-      }
+      View layer = Scope([entry, barrier, exiting]() -> View {
+        View content = entry.content();
+        LayerPresentation presentation;
+        if (content.spec_) {
+          const auto found = content.spec_->layout_values.find(typeid(LayerPresentationValue));
+          if (found != content.spec_->layout_values.end()) {
+            presentation = std::any_cast<LayerPresentation>(found->second.value);
+          }
+        }
+        content = Scope([content = std::move(content)] { return content; });
+        if (exiting) {
+          content.spec_->pointer_events_enabled = false;
+          content.spec_->local_enabled = false;
+        }
+        if (barrier) {
+          content = std::move(content).On<ViewEvents::Pointer>([](const PointerEvent&) {});
+        }
+        const auto placement = presentation.placement.has_value()
+            ? std::make_shared<LayerPlacement>(*presentation.placement) : entry.placement;
+        View result = LayerEntryLayout{std::move(content)}.LayoutValue<LayerPlacementValue>(placement);
+        if (placement->safe_area_policy == LayerSafeAreaPolicy::Constrain) {
+          result = std::move(result).With(SafeAreaPadding{});
+        } else if (placement->safe_area_policy == LayerSafeAreaPolicy::ExtendBottom) {
+          result = std::move(result).With(SafeAreaPadding{.bottom = false});
+        }
+        const auto color = presentation.barrier_color.has_value() ? presentation.barrier_color
+                                                                 : entry.options.barrier_color;
+        if (barrier && color.has_value()) {
+          result = std::move(result).With(Background{*color});
+        }
+        if (entry.transition) {
+          result = std::move(result).With(LayerTransition{entry.transition});
+        }
+        return result;
+      }).LayoutValue<LayerEntrySnapshotValue>(LayerEntrySnapshot{
+          .id = entry.id,
+          .revision = entry.revision,
+          .exiting = exiting,
+          .semantic_modal_group = entry.semantic_modal_group,
+          .retained_focus_identity = entry.retained_focus_identity,
+      });
       // An exiting modal keeps its focus barrier until removal so input cannot fall through while its content fades.
       layer.spec_->trap_focus = entry.options.trap_focus;
       if (barrier) {
@@ -2926,19 +2967,12 @@ void UiWindow::ComposeLayers() {
                                                           id = entry.id,
                                                           dismiss = entry.options.dismiss_on_outside_press &&
                                                                     !exiting](const PointerEvent& event) {
-          if (!dismiss || event.type != PointerEventType::Down) {
-            return;
+          if (dismiss && event.type == PointerEventType::Down) {
+            static_cast<void>(controller.RequestDismiss(id).handled);
           }
-          static_cast<void>(controller.RequestDismiss(id).handled);
         });
-        if (entry.options.barrier_color.has_value()) {
-          layer = std::move(layer).With(Background{*entry.options.barrier_color});
-        }
       } else if (entry.options.pointer_policy == LayerPointerPolicy::PassThrough) {
         layer.spec_->pointer_events_enabled = false;
-      }
-      if (entry.transition) {
-        layer = std::move(layer).With(LayerTransition{entry.transition});
       }
       layer_children.emplace_back(std::move(layer), environment);
     }
