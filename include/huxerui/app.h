@@ -515,7 +515,7 @@ protected:
   virtual bool SupportsMultipleWindows() const noexcept;
   /// Creates an initialized, hidden window belonging to this Runtime without starting another event loop.
   /// Shared admission and configuration checks precede this call. Failure must release partial native facilities.
-  virtual std::unique_ptr<UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options);
+  virtual std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options);
   /// Captures platform-selected application storage directories during initialization.
   /// @return Directory values without performing application I/O, or std::nullopt if unsupported.
   virtual std::optional<AppDirectories> CreateAppDirectories();

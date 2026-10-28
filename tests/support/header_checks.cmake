@@ -117,6 +117,11 @@ endfunction()
 huxerui_add_header_checks(huxerui_header_checks ${HUXERUI_PUBLIC_HEADERS})
 if (HUXERUI_WINDOWS_PUBLIC_HEADERS)
     huxerui_add_header_checks(huxerui_windows_header_checks ${HUXERUI_WINDOWS_PUBLIC_HEADERS})
+    target_sources(huxerui_windows_header_checks PRIVATE
+            "${HUXERUI_TEST_DIR}/platform/windows/windows_before_huxerui.cpp"
+            "${HUXERUI_TEST_DIR}/platform/windows/huxerui_before_windows.cpp"
+    )
+    target_compile_definitions(huxerui_windows_header_checks PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif ()
 if (HUXERUI_LINUX_PUBLIC_HEADERS)
     huxerui_add_header_checks(huxerui_linux_header_checks ${HUXERUI_LINUX_PUBLIC_HEADERS})

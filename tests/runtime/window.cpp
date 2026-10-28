@@ -646,7 +646,7 @@ public:
   using TestPlatform::TestPlatform;
   ~OwnedWindowPlatform() override { huxerui::Runtime::Retire(); }
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<huxerui::UiWindow> CreateWindow(ViewFactory content, const WindowOptions& options) override {
+  std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
     ++creations;
     if (before_create) before_create();
     auto window = std::make_unique<OwnedTestWindow>(destroyed);

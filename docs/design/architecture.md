@@ -77,7 +77,7 @@ The hosted application has one Runtime and one application thread.
 The platform application runner pumps AppKit, Win32, or GLib once for all windows; UIKit, Android, and browsers supply their own host loop.
 Each UiWindow still owns its input routing, frame requests, composition, layout, and render commits; a shared event queue does not impose a global frame transaction.
 
-`ApplicationHandle::OpenWindow(ViewFactory, WindowOptions)` validates input and timing before invoking the Runtime's native `CreateWindow` override.
+`ApplicationHandle::OpenWindow(ViewFactory, WindowOptions)` validates input and timing before invoking the Runtime's native `CreateUiWindow` override.
 The platform prepares a hidden window and its text, rendering, accessibility, frame, and platform-view facilities before calling `InitializeWindow(runtime, content, options, configuration, lifecycle)`.
 Shared initialization installs a fresh root Environment and window services, runs window hooks, then admits native callbacks.
 Runtime takes unique ownership before presenting the completed window.
