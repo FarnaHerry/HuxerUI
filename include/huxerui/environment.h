@@ -15,6 +15,18 @@ namespace huxerui {
 class Environment;
 class UiWindow;
 
+/// Describes a light or dark theme, independently of system-bar foreground contrast.
+enum class ThemeBrightness {
+  Light,
+  Dark,
+};
+
+/// Reads and observes the current window host's effective light/dark preference during composition.
+/// Hosts without a preference use Light. A local Theme does not override this value.
+/// Does not allocate an ordered State slot and may be read conditionally.
+/// @throws std::logic_error Outside active composition.
+[[nodiscard]] ThemeBrightness UseSystemThemeBrightness();
+
 enum class ViewportClass {
   Compact,
   Medium,

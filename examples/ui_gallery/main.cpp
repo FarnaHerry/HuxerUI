@@ -1109,7 +1109,7 @@ View ToolValue(const char* label, const char* value) {
 View GalleryToolsContent(
     State<std::size_t> selected_page,
     State<std::size_t> theme_family,
-    State<bool> dark_mode
+    State<std::optional<ThemeBrightness>> theme_override
 ) {
   const ThemeSpec& theme = UseTheme();
   auto family_transition = UseSceneTransition();
@@ -1124,14 +1124,18 @@ View GalleryToolsContent(
               [theme_family, index] { theme_family = index; }
           );
         }),
-    Switch(dark_mode ? "Dark mode" : "Light mode", dark_mode)
-        .OnChanged([brightness_transition, dark_mode](bool enabled) {
-          const TransitionSpec reveal{CircularRevealTransition{}, TweenSpec{0.36, Easing::EaseInOut}};
-          brightness_transition.RunFromCurrentInteraction(
-              enabled ? reveal : reveal.Reversed(),
-              [dark_mode, enabled] { dark_mode = enabled; }
-          );
-        }),
+    SegmentedButton(
+        {"System", "Light", "Dark"},
+        theme_override.Get() ? (*theme_override.Get() == ThemeBrightness::Dark ? 2U : 1U) : 0U
+    ).OnChanged([brightness_transition, theme_override](std::size_t index) {
+      brightness_transition.RunFromCurrentInteraction(
+          TransitionSpec{CircularRevealTransition{}, TweenSpec{0.36, Easing::EaseInOut}},
+          [theme_override, index] {
+            theme_override = index == 0 ? std::nullopt
+                : std::optional{index == 2 ? ThemeBrightness::Dark : ThemeBrightness::Light};
+          }
+      );
+    }),
     Divider(),
     Text("Context", TextRole::Label).With(Foreground(theme.colors.on_surface_variant)),
     ToolValue("Page", PageName(selected_page.Get())),
@@ -1193,9 +1197,13 @@ View GalleryNavigation(State<std::size_t> selected_page, State<bool> start_open)
 }
 
 [[huxerui::composable]]
-View GalleryTools(State<std::size_t> selected_page, State<std::size_t> theme_family, State<bool> dark_mode) {
+View GalleryTools(
+    State<std::size_t> selected_page,
+    State<std::size_t> theme_family,
+    State<std::optional<ThemeBrightness>> theme_override
+) {
   const ThemeSpec& theme = UseTheme();
-  return GalleryToolsContent(selected_page, theme_family, dark_mode).With(
+  return GalleryToolsContent(selected_page, theme_family, theme_override).With(
       Padding(theme.spacing.large),
       Background(theme.colors.surface_container_low)
   );
@@ -1314,7 +1322,7 @@ View GalleryMain(
 View GalleryShell(
     State<std::size_t> selected_page,
     State<std::size_t> theme_family,
-    State<bool> dark_mode,
+    State<std::optional<ThemeBrightness>> theme_override,
     State<bool> start_open,
     State<bool> end_open
 ) {
@@ -1333,7 +1341,7 @@ View GalleryShell(
         }.Open(start_open).OnOpenChanged([start_open](bool open) { start_open = open; }),
 
         EndDrawer {
-          GalleryTools(selected_page, theme_family, dark_mode),
+          GalleryTools(selected_page, theme_family, theme_override),
         }.Open(end_open).OnOpenChanged([end_open](bool open) { end_open = open; }),
       }
   );
@@ -1342,21 +1350,23 @@ View GalleryShell(
 View App() {
   auto selected_page = UseState<std::size_t>(0);
   auto theme_family = UseState<std::size_t>(0);
-  auto dark_mode = UseState(false);
+  auto theme_override = UseState(std::optional<ThemeBrightness>{});
+  const auto selected = theme_override.Get();
+  const auto brightness = selected ? *selected : UseSystemThemeBrightness();
   auto start_open = UseState(false);
   auto end_open = UseState(false);
 
   if (theme_family == 1) {
-    if (dark_mode) {
-      return FlatDarkTheme {GalleryShell(selected_page, theme_family, dark_mode, start_open, end_open)};
+    if (brightness == ThemeBrightness::Dark) {
+      return FlatDarkTheme {GalleryShell(selected_page, theme_family, theme_override, start_open, end_open)};
     }
-    return FlatTheme {GalleryShell(selected_page, theme_family, dark_mode, start_open, end_open)};
+    return FlatTheme {GalleryShell(selected_page, theme_family, theme_override, start_open, end_open)};
   }
 
-  if (dark_mode) {
-    return MaterialDarkTheme {GalleryShell(selected_page, theme_family, dark_mode, start_open, end_open)};
+  if (brightness == ThemeBrightness::Dark) {
+    return MaterialDarkTheme {GalleryShell(selected_page, theme_family, theme_override, start_open, end_open)};
   }
-  return MaterialTheme {GalleryShell(selected_page, theme_family, dark_mode, start_open, end_open)};
+  return MaterialTheme {GalleryShell(selected_page, theme_family, theme_override, start_open, end_open)};
 }
 
 const Application application{

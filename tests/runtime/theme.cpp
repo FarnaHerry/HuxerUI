@@ -1,6 +1,7 @@
 #include "runtime_test_support.h"
 
 #include <limits>
+#include <thread>
 
 namespace huxerui::test {
 namespace {
@@ -595,6 +596,243 @@ TEST_CASE("TestMaterialThemeDefinitionsAndIndication") {
   REQUIRE(material_checkbox->measured_size == Size{48.0F, 48.0F});
   REQUIRE(material_radio->measured_size == Size{48.0F, 48.0F});
   REQUIRE(material_switch->measured_size == Size{52.0F, 48.0F});
+}
+
+namespace {
+std::function<View()> system_theme_root;
+View SystemThemeApp() { return system_theme_root(); }
+}
+
+TEST_CASE("System theme reads are window-local composition dependencies without state slots") {
+  REQUIRE_THROWS_AS(UseSystemThemeBrightness(), std::logic_error);
+  REQUIRE(FlatLightThemeSpec().brightness == ThemeBrightness::Light);
+  REQUIRE(FlatDarkThemeSpec().brightness == ThemeBrightness::Dark);
+  REQUIRE(MaterialLightThemeSpec().brightness == ThemeBrightness::Light);
+  REQUIRE(MaterialDarkThemeSpec().brightness == ThemeBrightness::Dark);
+  TestPlatform platform;
+  platform.system_theme_brightness = ThemeBrightness::Dark;
+  State<std::optional<ThemeBrightness>> selection;
+  State<int> retained;
+  ThemeBrightness observed = ThemeBrightness::Light;
+  int dependent = 0;
+  int independent = 0;
+  system_theme_root = [&] {
+    return Column {
+      Scope([&] {
+        ++dependent;
+        selection = UseState(std::optional<ThemeBrightness>{});
+        const auto selected = selection.Get();
+        observed = selected ? *selected : UseSystemThemeBrightness();
+        retained = UseState(42);
+        return Text(std::to_string(retained.Get()));
+      }),
+      Scope([&] { ++independent; return Text("unrelated"); }),
+    };
+  };
+  UiWindow window(SystemThemeApp, platform);
+  window.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  window.BuildFrame();
+  REQUIRE(observed == ThemeBrightness::Dark);
+  REQUIRE(dependent == 1);
+  REQUIRE(independent == 1);
+  const int frames = platform.requested_frames;
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark);
+  REQUIRE(platform.requested_frames == frames);
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Light);
+  window.BuildFrame();
+  REQUIRE(observed == ThemeBrightness::Light);
+  REQUIRE(dependent == 2);
+  REQUIRE(independent == 1);
+  retained = 57;
+  selection = ThemeBrightness::Dark;
+  window.BuildFrame();
+  REQUIRE(retained.Get() == 57);
+  const int fixed = dependent;
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark);
+  window.BuildFrame();
+  REQUIRE(dependent == fixed);
+  selection = std::nullopt;
+  window.BuildFrame();
+  REQUIRE(observed == ThemeBrightness::Dark);
+  REQUIRE(retained.Get() == 57);
+}
+
+TEST_CASE("System brightness stays distinct from nested Theme brightness and other windows") {
+  ThemeBrightness system = ThemeBrightness::Light;
+  ThemeBrightness inherited = ThemeBrightness::Light;
+  int compositions = 0;
+  system_theme_root = [&] {
+    return FlatTheme {Scope([&] {
+      ++compositions;
+      system = UseSystemThemeBrightness();
+      inherited = UseTheme().brightness;
+      return Text("window theme");
+    })};
+  };
+  TestPlatform first;
+  TestPlatform second;
+  first.system_theme_brightness = ThemeBrightness::Dark;
+  Application application(SystemThemeApp, {.show_debug_overlay = false});
+  RuntimeLifetime lifetime(application, first);
+  UiWindow first_window(lifetime, first);
+  UiWindow second_window(lifetime, second);
+  first_window.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  second_window.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  first_window.BuildFrame();
+  REQUIRE(system == ThemeBrightness::Dark);
+  REQUIRE(inherited == ThemeBrightness::Light);
+  second_window.BuildFrame();
+  REQUIRE(system == ThemeBrightness::Light);
+  first.UpdateSystemThemeBrightness(ThemeBrightness::Light);
+  second_window.BuildFrame();
+  REQUIRE(compositions == 2);
+  first_window.BuildFrame();
+  REQUIRE(compositions == 3);
+}
+
+TEST_CASE("System brightness updates validate thread lifetime and enum values") {
+  TestPlatform platform;
+  REQUIRE_THROWS_AS(platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark), std::logic_error);
+  system_theme_root = [] { return Text("theme"); };
+  {
+    UiWindow window(SystemThemeApp, platform);
+    REQUIRE_THROWS_AS(platform.UpdateSystemThemeBrightness(static_cast<ThemeBrightness>(99)), std::invalid_argument);
+    bool rejected = false;
+    std::thread worker([&] {
+      try { platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark); }
+      catch (const std::logic_error&) { rejected = true; }
+    });
+    worker.join();
+    REQUIRE(rejected);
+  }
+  REQUIRE_THROWS_AS(platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark), std::logic_error);
+  TestPlatform invalid;
+  invalid.system_theme_brightness = static_cast<ThemeBrightness>(99);
+  REQUIRE_THROWS_AS(UiWindow(SystemThemeApp, invalid), std::invalid_argument);
+}
+
+TEST_CASE("Open dialog theme refresh is atomic and preserves state focus and exiting lifetime") {
+  TestPlatform platform;
+  std::optional<DialogHandle> dialog;
+  State<int> content_state;
+  const Color light_scrim = Color::Rgb(20, 30, 40, 0.2F);
+  const Color dark_scrim = Color::Rgb(80, 20, 100, 0.45F);
+  system_theme_root = [&] {
+    const bool dark = UseSystemThemeBrightness() == ThemeBrightness::Dark;
+    auto theme = dark ? MaterialDarkThemeSpec() : MaterialLightThemeSpec();
+    ThemeDefinition definition = MaterialThemeDefinition(theme);
+    auto style = ThemeDefinitionValue<DialogStyle>(definition);
+    style.scrim = dark ? dark_scrim : light_scrim;
+    style.viewport_margin = dark ? 32.0F : 8.0F;
+    style.motion = PresentationMotion{.enter = TweenSpec{0.1}, .exit = TweenSpec{0.5}};
+    definition.Set(style);
+    return Theme {std::move(definition), Scope([&] { dialog = UseDialog(); return Text("root"); })};
+  };
+  UiWindow window(SystemThemeApp, platform);
+  window.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  window.BuildFrame();
+  const LayerId id = dialog->Show([&] {
+    content_state = UseState(7);
+    return Button(std::to_string(content_state.Get())).With(Frame{.width = 500.0F});
+  });
+  window.BuildFrame();
+  platform.AdvanceTime(0.2);
+  const auto& initial = window.BuildFrame();
+  REQUIRE(FindRectWithColor(initial, light_scrim) != nullptr);
+  const auto focus = detail::InternalAccess::FocusedNodeIdentity(platform);
+  REQUIRE(focus.has_value());
+  const float initial_width = FindText(initial, "7")->rect.width;
+  content_state = 9;
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark);
+  const auto& changed = window.BuildFrame();
+  REQUIRE(FindRectWithColor(changed, dark_scrim) != nullptr);
+  REQUIRE(FindRectWithColor(changed, light_scrim) == nullptr);
+  REQUIRE(FindText(changed, "9") != nullptr);
+  REQUIRE(FindText(changed, "9")->style.foreground ==
+      ThemeDefinitionValue<ButtonStyle>(MaterialDarkThemeDefinition()).label_style.foreground);
+  REQUIRE(FindText(changed, "9")->rect.width < initial_width);
+  REQUIRE(detail::InternalAccess::FocusedNodeIdentity(platform) == focus);
+  REQUIRE(content_state.Get() == 9);
+  REQUIRE(dialog->Dismiss(id));
+  window.BuildFrame();
+  platform.AdvanceTime(0.1);
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Light);
+  REQUIRE(FindText(window.BuildFrame(), "9") != nullptr);
+  REQUIRE_FALSE(dialog->Dismiss(id));
+  platform.AdvanceTime(0.5);
+  REQUIRE(FindText(window.BuildFrame(), "9") == nullptr);
+}
+
+TEST_CASE("Theme updates preserve toast deadlines and a detached provider keeps its last palette") {
+  TestPlatform platform;
+  State<bool> mounted;
+  std::optional<ToastHandle> toast;
+  system_theme_root = [&] {
+    mounted = UseState(true);
+    if (!mounted.Get()) return View(Text("provider removed"));
+    const bool dark = UseSystemThemeBrightness() == ThemeBrightness::Dark;
+    return View(FlatTheme {
+      dark ? FlatDarkThemeSpec() : FlatLightThemeSpec(),
+      Scope([&] { toast = UseToast(); return Text("provider"); }),
+    });
+  };
+  UiWindow window(SystemThemeApp, platform);
+  window.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  window.BuildFrame();
+  toast->Show("deadline", ToastOptions{0.5});
+  window.BuildFrame();
+  platform.AdvanceTime(0.3);
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark);
+  const auto& changed = window.BuildFrame();
+  const Color expected = ThemeDefinitionValue<ToastStyle>(FlatDarkThemeDefinition()).text_style.foreground;
+  REQUIRE(FindText(changed, "deadline")->style.foreground == expected);
+  mounted = false;
+  window.BuildFrame();
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Light);
+  REQUIRE(FindText(window.BuildFrame(), "deadline")->style.foreground == expected);
+  platform.AdvanceTime(0.3);
+  window.BuildFrame();
+  REQUIRE(FindText(window.BuildFrame(), "deadline") == nullptr);
+}
+
+TEST_CASE("Open bottom sheet keeps content state when theme geometry inserts a drag handle") {
+  TestPlatform platform;
+  std::optional<BottomSheetHandle> sheet;
+  State<int> content_state;
+  const Color surface_color = Color::Rgb(70, 110, 180);
+  system_theme_root = [&] {
+    const bool dark = UseSystemThemeBrightness() == ThemeBrightness::Dark;
+    BottomSheetStyle style = BottomSheetStyle::Default();
+    style.background = surface_color;
+    style.maximum_width = dark ? 280.0F : 180.0F;
+    style.drag_handle_size = dark ? Size{32.0F, 4.0F} : Size{};
+    style.drag_handle = Color::Black();
+    style.enter = SnapSpec{};
+    style.exit = SnapSpec{};
+    ThemeDefinition definition;
+    definition.Set(style);
+    return Theme {std::move(definition), Scope([&] { sheet = UseBottomSheet(); return Text("root"); })};
+  };
+  UiWindow window(SystemThemeApp, platform);
+  window.SetWindowMetrics({.viewport = {400.0F, 240.0F}});
+  window.BuildFrame();
+  const auto id = sheet->Show([&] {
+    content_state = UseState(7);
+    return Text(std::to_string(content_state.Get()));
+  }, {.dismiss_on_cancel = false});
+  window.BuildFrame();
+  const auto initial_surface = FindPresentedRectWithColor(window.BuildFrame(), surface_color);
+  REQUIRE(initial_surface.has_value());
+  REQUIRE(initial_surface->width == Catch::Approx(180.0F));
+  content_state = 9;
+  platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark);
+  const auto& changed = window.BuildFrame();
+  REQUIRE(FindText(changed, "9") != nullptr);
+  REQUIRE(content_state.Get() == 9);
+  const auto changed_surface = FindPresentedRectWithColor(changed, surface_color);
+  REQUIRE(changed_surface.has_value());
+  REQUIRE(changed_surface->width == Catch::Approx(280.0F));
+  REQUIRE(sheet->Dismiss(id));
 }
 
 } // namespace huxerui::test

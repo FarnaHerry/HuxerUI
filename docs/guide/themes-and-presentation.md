@@ -24,6 +24,45 @@ Nested themes affect only their subtree.
 `tertiary_container` and `on_tertiary_container` provide a contrasting tonal accent, used by the Material TimePicker's AM/PM selection.
 Customize each container and its foreground together to preserve readable contrast in light and dark themes.
 
+## System light and dark appearance
+
+`ThemeBrightness` has `Light` and `Dark` values.
+`UseSystemThemeBrightness()` reads the current window host's effective preference and observes changes during composition; hosts without an available preference return `Light`.
+A host's explicit appearance override is respected, so two windows may report different values.
+The hook does not allocate an ordered state slot and can be called conditionally, but calling it outside composition throws `std::logic_error`.
+
+`UseTheme().brightness` describes the inherited HuxerUI theme, independently of the host preference.
+The light and dark ThemeSpec factories set this metadata; assigning `brightness` alone does not recolor a palette.
+Existing `Theme`, `FlatTheme`, and `MaterialTheme` defaults remain light.
+Choose an explicit palette to follow the host, optionally keeping a user override in application state:
+
+```cpp
+View App() {
+  auto theme_override = UseState(std::optional<ThemeBrightness>{});
+  const auto selected = theme_override.Get();
+  const auto brightness = selected ? *selected : UseSystemThemeBrightness();
+  auto theme = brightness == ThemeBrightness::Dark
+      ? MaterialDarkThemeSpec() : MaterialLightThemeSpec();
+  return MaterialTheme {
+    std::move(theme),
+    SettingsPage(theme_override),
+  };
+}
+```
+
+Here `SettingsPage` is application-owned UI: assign `std::nullopt` for System or an explicit `ThemeBrightness` for Light/Dark.
+With an explicit selection this scope no longer subscribes to system changes; returning to System immediately reads the latest preference.
+HuxerUI does not define a theme selection policy enum or persist that policy for the application.
+
+Apple hosts use the attached view's effective appearance or trait collection, Android uses the View Context's `uiMode`, Windows uses `UISettings` foreground colors, Linux uses the desktop portal color-scheme setting, and Web uses `prefers-color-scheme`.
+Linux reads the portal asynchronously and uses Light until a preference is available.
+Native title bars and embedded platform controls remain host-owned; a HuxerUI Theme does not override their native appearance.
+Android disables Force Dark on `HuxerUIView` so the system does not recolor the rendered palette again.
+
+Open presentation layers retain their captured live Environment and update themed surfaces, scrims, and geometry in the same frame.
+Theme changes preserve layer identifiers, content state, focus, timeout progress, and an in-progress dismissal.
+After a provider unmounts, retained layers keep its last values rather than rebinding to another provider.
+
 ## Component styles
 
 Each built-in component resolves its typed style from the closest Theme.

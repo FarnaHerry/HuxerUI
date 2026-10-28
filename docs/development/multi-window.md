@@ -13,7 +13,7 @@ It complements the ownership contract in [Multi-Window Design](../design/multi-w
 | Web | Throws `std::runtime_error` | Sessions remain host-driven; no runtime creation entry exists yet. |
 | Android, iOS | Throws `std::runtime_error` | Platform-driven attachments by design; no runtime creation is planned. |
 
-Unsupported hosts report false from `SupportsMultipleWindows()` and throw `std::runtime_error` from `OpenWindow`; desktop hosts implement the Runtime `CreateWindow` factory.
+Unsupported hosts report false from `SupportsMultipleWindows()` and throw `std::runtime_error` from `OpenWindow`; desktop hosts implement the Runtime `CreateUiWindow` factory.
 
 ## Windows validation
 
@@ -73,7 +73,7 @@ The Linux development host cannot build or execute AppKit, and no local macOS re
 - Windows receives forwarded URL, file, and notification activation through the Runtime-owned hidden facilities HWND. Application activation handlers choose whether to activate an existing window or create content; delivery does not require a visible UI window.
 - Tray hibernation is an application policy, not a framework switch: applications intercept minimize through `WindowHandle::OnMinimizeRequest`, then either `Hide()` (window stays alive) or `Retire()` (releases the mounted tree, window services, and native resources while the Runtime keeps running), and reopen it from `SystemTrayHandle::OnActivate` with application services surviving on the Runtime; a tray menu Quit calls `ApplicationHandle::Quit()`. Retiring the initial window keeps the application running, so the reopen path uses the same `OpenWindow` entry as any other window; on hosts that do not support runtime window creation, `Retire()` reports the same capability gap.
 - Each window receives explicit content through `OpenWindow(content, options)` or `UiWindow::InitializeWindow(runtime, content, options, configuration)`. Applications retain handles and pass their own business metadata; no framework window ID is injected into Environment.
-- Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the last semantic frame, the committed damage snapshot, and the native resources of hosts that implement `CreateWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`. Before any of that runs, `RetireWindow` verifies through `UiWindow::CanDiscardHost()` that the window and every initialized window in its owned chain support native discard, and rejects the whole retirement with the capability error when any of them does not; the rejection leaves every window fully intact.
+- Window retirement releases the mounted tree, window services, text/pointer/file-drop/semantics subsystems, the last semantic frame, the committed damage snapshot, and the native resources of hosts that implement `CreateUiWindow`. On Windows, Direct3D/D2D/DWrite/DirectComposition resources are released through the renderer's `Discard`. Before any of that runs, `RetireWindow` verifies through `UiWindow::CanDiscardHost()` that the window and every initialized window in its owned chain support native discard, and rejects the whole retirement with the capability error when any of them does not; the rejection leaves every window fully intact.
 - Working-set readings in Task Manager do not establish whether window objects have been destroyed; compare repeated create/retire cycles with object-lifetime checks and committed-memory measurements.
 - Applying modal blocking on Windows calls `EnableWindow` on the covered windows. When a modal window opens from a click, the press still holds mouse capture, and disabling the capturing window synchronously delivers `WM_CANCELMODE` or `WM_CAPTURECHANGED`; the adapter defers the nested pointer cancellation until the in-flight pointer dispatch returns (see `WindowsUiWindow::SendPointer`). Delivering that cancellation immediately re-enters the shared pointer interaction and ends the active session while the outer dispatch still holds it, which corrupts the session map. Host ports whose grab-loss notifications arrive synchronously during input dispatch need an equivalent guard. The Linux port applies modality through `gtk_window_set_modal` and `gtk_window_set_transient_for`, which is window-manager mediated and produced no synchronous grab-loss during validation, so no deferred-cancellation guard was needed; revisit if a compositor is found to deliver one.
 - GTK4 defers native disposal. Accepted Close and explicit Retire use Runtime maintenance after active callbacks return; native facility release detaches IM, PlatformView, drag, canvas, and controller callbacks while the widget tree remains usable. Release runs at most once per attachment. Run `G_DEBUG=fatal-criticals huxerui_linux_tests '[linux-native-retire]'` on X11 and Wayland to verify release, surviving application services, and reopening.
@@ -86,10 +86,10 @@ The Linux development host cannot build or execute AppKit, and no local macOS re
 
 ## Porting checklist for additional hosts
 
-Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateApplicationWindow` construct an initialized hidden attachment, and let Runtime own presentation and safe retirement.
+Each port follows the Windows shape: keep one application event loop at the Runtime entry, let `CreateUiWindow` construct an initialized hidden attachment, and let Runtime own presentation and safe retirement.
 
 1. Hoist the per-window main loop to the Runtime owner and iterate until application shutdown, including when every window is hidden or explicitly retired.
-2. Implement `SupportsMultipleWindows()` and `CreateApplicationWindow(ViewFactory, const WindowOptions&)` on the platform Runtime subclass: prepare native facilities, call `InitializeWindow(runtime, content, options, configuration)`, and return a hidden attachment without entering a nested loop.
+2. Implement `SupportsMultipleWindows()` and `CreateUiWindow(ViewFactory, const WindowOptions&)` on the platform Runtime subclass: prepare native facilities, call `InitializeWindow(runtime, content, options, configuration)`, and return a hidden attachment without entering a nested loop.
 3. Open the initial window and `AppOptions::extra_windows` through `ApplicationHandle::OpenWindow(content, options)` in the platform entry so every window shares one path.
 4. Route native callbacks from the handle or object that originated them instead of a single stored window pointer.
 5. Route accepted native closure to `UiWindow::CloseWindow`, honor the shared last-window policy, and preserve explicit retirement without application shutdown.
@@ -97,7 +97,7 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 
 Host implementation anchors:
 
-- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateApplicationWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. `CanDiscardHost` and `DiscardHost` support explicit retirement. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
+- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateUiWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. `CanDiscardHost` and `DiscardHost` support explicit retirement. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest

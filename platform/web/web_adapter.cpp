@@ -736,10 +736,14 @@ EM_JS(
           }
         });
         listen(window, "resize", resize);
+        const themeQuery = matchMedia("(prefers-color-scheme: dark)");
+        const updateTheme = () => Module._huxerui_web_system_theme(session_id, themeQuery.matches);
+        listen(themeQuery, "change", updateTheme);
         const updateLifecycle = () => {
           const state = document.hidden ? 2 : document.hasFocus() ? 0 : 1;
           Module._huxerui_web_application_lifecycle(session_id, state);
           if (!document.hidden) {
+            updateTheme();
             resize();
           }
         };
@@ -993,6 +997,17 @@ void InitializeWebApplication() {
 /// Owns one DOM surface and its text/rendering state; deferred frames wait until the JavaScript session is ready.
 class WebUiWindow final : public UiWindow {
 public:
+  ThemeBrightness QuerySystemThemeBrightness() const override {
+    const val window = val::global("window");
+    if (window["matchMedia"].isUndefined()) return ThemeBrightness::Light;
+    return window.call<val>("matchMedia", std::string("(prefers-color-scheme: dark)"))["matches"].as<bool>()
+        ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void UpdateSystemTheme(bool dark) {
+    if (IsInitialized()) UpdateSystemThemeBrightness(dark ? ThemeBrightness::Dark : ThemeBrightness::Light);
+  }
+
   WebUiWindow(std::uintptr_t session_id, val host, val root, val canvas, ResourceConfiguration configuration)
       : session_id_(session_id), renderer_(session_id, canvas), configuration_(configuration),
         text_input_(session_id), host_(std::move(host)), root_(std::move(root)), base_canvas_(std::move(canvas)) {
@@ -1391,6 +1406,12 @@ huxerui_web_platform_view_move_focus(std::uintptr_t session_id, std::uint32_t to
 EMSCRIPTEN_KEEPALIVE void huxerui_web_application_lifecycle(std::uintptr_t session_id, int state) {
   huxerui::detail::DispatchWebSession(session_id, "application lifecycle update", [=](auto& platform) {
     platform.UpdateApplicationLifecycleState(state);
+  });
+}
+
+EMSCRIPTEN_KEEPALIVE void huxerui_web_system_theme(std::uintptr_t session_id, bool dark) {
+  huxerui::detail::DispatchWebSession(session_id, "system theme update", [=](auto& platform) {
+    platform.UpdateSystemTheme(dark);
   });
 }
 

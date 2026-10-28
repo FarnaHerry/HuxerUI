@@ -307,7 +307,7 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override;
+  std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
 
   void UpdateWindows();
 
@@ -583,6 +583,16 @@ public:
 
   using UiWindow::IsInitialized;
 
+  ThemeBrightness QuerySystemThemeBrightness() const override {
+    NSAppearance* appearance = view_ != nil ? view_.effectiveAppearance : NSApp.effectiveAppearance;
+    NSString* match = [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+    return [match isEqualToString:NSAppearanceNameDarkAqua] ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void RefreshSystemTheme() {
+    if (IsInitialized()) UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
+  }
+
   void Initialize(MacRuntime& application_runtime, ViewFactory content, const WindowOptions& options) {
     @autoreleasepool {
       runtime_ = &application_runtime;
@@ -678,6 +688,7 @@ public:
       else [window_ center];
       if (!passive_display_) [window_ makeFirstResponder:view_];
       UiWindow::UpdateResourceConfiguration(Configuration());
+      RefreshSystemTheme();
       UpdateWindowLifecycleState();
       UpdateWindowMetrics({
           static_cast<float>(view_.bounds.size.width),
@@ -1179,6 +1190,7 @@ public:
         ? WindowLifecycleState::Background
         : window_.keyWindow && NSApplication.sharedApplication.active
             ? WindowLifecycleState::Active : WindowLifecycleState::Inactive;
+    if (state != WindowLifecycleState::Background) RefreshSystemTheme();
     UiWindow::UpdateWindowLifecycleState(state);
     if (text_input_) {
       text_input_->ApplicationActiveChanged(state == WindowLifecycleState::Active && !input_blocked_);
@@ -1388,7 +1400,7 @@ private:
   MacRuntime* runtime_ = nullptr;
 };
 
-std::unique_ptr<UiWindow> MacRuntime::CreateApplicationWindow(ViewFactory content, const WindowOptions& options) {
+std::unique_ptr<UiWindow> MacRuntime::CreateUiWindow(ViewFactory content, const WindowOptions& options) {
   auto window = std::make_unique<MacUiWindow>();
   window->Initialize(*this, std::move(content), options);
   return window;
@@ -1677,6 +1689,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
   [super viewDidMoveToWindow];
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
+    huxeruiWindow->RefreshSystemTheme();
     huxeruiWindow->WindowGeometryChanged();
   }
 }
@@ -1699,6 +1712,11 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     huxeruiWindow->InvalidateAppKitSurface();
     huxeruiWindow->WindowGeometryChanged();
   }
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+  [super viewDidChangeEffectiveAppearance];
+  if (huxeruiWindow != nullptr) huxeruiWindow->RefreshSystemTheme();
 }
 
 - (void)resourceConfigurationDidChange:(NSNotification*)notification {

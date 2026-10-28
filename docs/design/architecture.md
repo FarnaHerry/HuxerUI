@@ -77,7 +77,7 @@ The hosted application has one Runtime and one application thread.
 The platform application runner pumps AppKit, Win32, or GLib once for all windows; UIKit, Android, and browsers supply their own host loop.
 Each UiWindow still owns its input routing, frame requests, composition, layout, and render commits; a shared event queue does not impose a global frame transaction.
 
-`ApplicationHandle::OpenWindow(ViewFactory, WindowOptions)` validates input and timing before invoking the Runtime's native `CreateWindow` override.
+`ApplicationHandle::OpenWindow(ViewFactory, WindowOptions)` validates input and timing before invoking the Runtime's native `CreateUiWindow` override.
 The platform prepares a hidden window and its text, rendering, accessibility, frame, and platform-view facilities before calling `InitializeWindow(runtime, content, options, configuration, lifecycle)`.
 Shared initialization installs a fresh root Environment and window services, runs window hooks, then admits native callbacks.
 Runtime takes unique ownership before presenting the completed window.
@@ -1692,6 +1692,17 @@ The Theme node stores one ordinary child declaration and does not create a Recom
 Built-in primitives retain raw semantic inputs and resolve final component values when UiWindow reconciles them under the mounted Theme Environment.
 A component whose implementation directly calls `UseTheme()` or `UseEnvironment()` is composable because the read belongs to its own composition lifetime.
 
+Each UiWindow seeds an internal system-brightness Environment value by calling its native `QuerySystemThemeBrightness()` after native facilities are ready and before window hooks and composition.
+The default query returns Light and never blocks; asynchronous backends publish later through `UpdateSystemThemeBrightness()`.
+Updates require a live initialized window, the application thread, and a declared enum value, and invalidate only scopes observing `UseSystemThemeBrightness()` through normal Environment equality and dependency tracking.
+Native subscriptions retain the original window provenance, stop at retirement, and resample on foreground recovery; Runtime has no second brightness cache or theme service.
+`ThemeSpec::brightness` remains independent metadata for the inherited palette and never shadows the host preference.
+
+A layer's composition scope covers both its presentation layout and its content.
+Typed presentation factories resolve the captured Environment during composition and supply private visual LayoutValue metadata for scrim and placement alongside the surface.
+The controller still owns identity, behavioral options, dismissal, and transition lifetime; visual recomposition does not call Attach, Update, or revive an exiting entry.
+Retained animation controllers continue their current timing when the theme recipe changes and use the new timing on the next transition.
+
 ### Theme systems
 
 Core semantic theme values include:
@@ -1705,6 +1716,7 @@ struct ThemeSpec {
   ElevationScheme elevation;
   MotionScheme motion;
   InteractionScheme interactions;
+  ThemeBrightness brightness = ThemeBrightness::Light;
 };
 ```
 

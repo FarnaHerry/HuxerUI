@@ -30,6 +30,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -63,6 +64,7 @@
 #include "text/text_internal.h"
 #include "runtime/window_drag_internal.h"
 #include "application/window_internal.h"
+#include "application/application_internal.h"
 
 namespace huxerui::detail {
 namespace {
@@ -151,6 +153,118 @@ void EnsureTransparentBackgroundProvider(GdkDisplay* display) {
   g_object_unref(provider);
   transparent_background_displays.push_back(display);
 }
+
+// D-Bus completions retain only this cancellable subscription, never a native window.
+class LinuxSystemTheme final : public std::enable_shared_from_this<LinuxSystemTheme> {
+public:
+  ~LinuxSystemTheme() { Stop(); }
+
+  void Start(std::function<void(ThemeBrightness)> changed) {
+    changed_ = std::move(changed);
+    g_dbus_proxy_new_for_bus(G_BUS_TYPE_SESSION, G_DBUS_PROXY_FLAGS_NONE, nullptr,
+        "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings", cancellation_, [](GObject*, GAsyncResult* result, gpointer data) {
+          std::unique_ptr<std::shared_ptr<LinuxSystemTheme>> retained(
+              static_cast<std::shared_ptr<LinuxSystemTheme>*>(data));
+          const auto& self = *retained;
+          GError* error = nullptr;
+          GDBusProxy* proxy = g_dbus_proxy_new_for_bus_finish(result, &error);
+          g_clear_error(&error);
+          if (self->stopped_ || !proxy) {
+            if (proxy) g_object_unref(proxy);
+            return;
+          }
+          self->proxy_ = proxy;
+          g_signal_connect(proxy, "g-signal", G_CALLBACK(Signal), self.get());
+          g_signal_connect(proxy, "notify::g-name-owner", G_CALLBACK(OwnerChanged), self.get());
+          self->Refresh();
+        }, new std::shared_ptr<LinuxSystemTheme>(shared_from_this()));
+  }
+
+  void Refresh() {
+    if (!stopped_ && proxy_) Read(false, ++revision_);
+  }
+
+  void Stop() noexcept {
+    if (stopped_) return;
+    stopped_ = true;
+    changed_ = {};
+    g_cancellable_cancel(cancellation_);
+    if (proxy_) {
+      g_signal_handlers_disconnect_by_data(proxy_, this);
+      g_clear_object(&proxy_);
+    }
+    g_clear_object(&cancellation_);
+  }
+
+private:
+  struct ReadRequest {
+    std::shared_ptr<LinuxSystemTheme> owner;
+    std::uint64_t revision;
+    bool legacy;
+  };
+
+  static ThemeBrightness Decode(GVariant* value) {
+    GVariant* current = g_variant_ref(value);
+    while (g_variant_is_of_type(current, G_VARIANT_TYPE_VARIANT)) {
+      GVariant* nested = g_variant_get_variant(current);
+      g_variant_unref(current);
+      current = nested;
+    }
+    const bool dark = g_variant_is_of_type(current, G_VARIANT_TYPE_UINT32) && g_variant_get_uint32(current) == 1;
+    g_variant_unref(current);
+    return dark ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void Read(bool legacy, std::uint64_t revision) {
+    g_dbus_proxy_call(proxy_, legacy ? "Read" : "ReadOne",
+        g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"),
+        G_DBUS_CALL_FLAGS_NONE, 5000, cancellation_, [](GObject* source, GAsyncResult* result, gpointer data) {
+          std::unique_ptr<ReadRequest> request(static_cast<ReadRequest*>(data));
+          const auto& self = request->owner;
+          GError* error = nullptr;
+          GVariant* reply = g_dbus_proxy_call_finish(G_DBUS_PROXY(source), result, &error);
+          if (!self->stopped_ && request->revision == self->revision_) {
+            if (reply && g_variant_is_of_type(reply, G_VARIANT_TYPE("(v)"))) {
+              GVariant* value = g_variant_get_child_value(reply, 0);
+              self->changed_(Decode(value));
+              g_variant_unref(value);
+            } else if (!request->legacy && g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD)) {
+              self->Read(true, request->revision);
+            } else {
+              self->changed_(ThemeBrightness::Light);
+            }
+          }
+          if (reply) g_variant_unref(reply);
+          g_clear_error(&error);
+        }, new ReadRequest{shared_from_this(), revision, legacy});
+  }
+
+  static void Signal(GDBusProxy*, gchar*, gchar* signal, GVariant* parameters, gpointer data) {
+    auto& self = *static_cast<LinuxSystemTheme*>(data);
+    if (self.stopped_ || std::string_view(signal) != "SettingChanged" ||
+        !g_variant_is_of_type(parameters, G_VARIANT_TYPE("(ssv)"))) return;
+    const gchar* name_space = nullptr;
+    const gchar* key = nullptr;
+    GVariant* value = nullptr;
+    g_variant_get(parameters, "(&s&sv)", &name_space, &key, &value);
+    if (std::string_view(name_space) == "org.freedesktop.appearance" && std::string_view(key) == "color-scheme") {
+      ++self.revision_;
+      self.changed_(Decode(value));
+    }
+    g_variant_unref(value);
+  }
+
+  static void OwnerChanged(GObject*, GParamSpec*, gpointer data) {
+    static_cast<LinuxSystemTheme*>(data)->Refresh();
+  }
+
+  GCancellable* cancellation_ = g_cancellable_new();
+  GDBusProxy* proxy_ = nullptr;
+  std::function<void(ThemeBrightness)> changed_;
+  std::uint64_t revision_ = 0;
+  bool stopped_ = false;
+};
 
 const char* LinuxPointerCursorName(PointerCursorKind kind) noexcept {
   switch (kind) {
@@ -496,7 +610,7 @@ public:
     dispatcher_->Shutdown();
   }
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  std::unique_ptr<UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override;
+  std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
 
   void ReportFailure(std::exception_ptr failure) {
     if (!failure_) failure_ = std::move(failure);
@@ -806,6 +920,19 @@ public:
     file_drop_ = std::make_unique<LinuxFileDrop>(drawing_area_, *this, ui_dispatcher_->Bind());
     running_ = true;
     InitializeWindow(runtime, std::move(content), options, configuration);
+    system_theme_ = std::make_shared<LinuxSystemTheme>();
+    system_theme_->Start([ui = InternalAccess::WindowExecution(*this)->ui](ThemeBrightness brightness) {
+      if (const auto state = ui.lock(); state && state->ui_window) {
+        auto* window = static_cast<LinuxUiWindow*>(state->ui_window);
+        if (window->IsInitialized()) {
+          try {
+            window->UpdateSystemThemeBrightness(brightness);
+          } catch (...) {
+            static_cast<LinuxRuntime&>(window->ApplicationRuntime()).ReportFailure(std::current_exception());
+          }
+        }
+      }
+    });
     UpdateRuntimeViewport(initial_size);
     gtk_widget_grab_focus(drawing_area_);
     RequestFrameAt(Now());
@@ -1590,6 +1717,7 @@ private:
     const bool active = gtk_window_is_active(window_) != FALSE;
     const bool minimized = toplevel_ != nullptr &&
                            (gdk_toplevel_get_state(toplevel_) & GDK_TOPLEVEL_STATE_MINIMIZED) != 0;
+    if (mapped && !minimized && system_theme_) system_theme_->Refresh();
     UiWindow::UpdateWindowLifecycleState(!mapped || minimized ? WindowLifecycleState::Background
         : active ? WindowLifecycleState::Active : WindowLifecycleState::Inactive);
     static_cast<LinuxRuntime&>(ApplicationRuntime()).UpdateLifecycleState();
@@ -1714,6 +1842,7 @@ private:
 
 
   void Cleanup() noexcept {
+    if (system_theme_) system_theme_->Stop();
     Retire();
     // Native facilities must release while the widget tree is still alive: the IM client and platform
     // views detach through live widgets, so a post-destroy release would touch finalized objects.
@@ -1735,6 +1864,7 @@ private:
       return;
     }
     native_facilities_released_ = true;
+    if (system_theme_) system_theme_->Stop();
     running_ = false;
     EndNativeDrag(true, false);
     g_clear_object(&pointer_device_);
@@ -2152,6 +2282,7 @@ private:
 
   std::shared_ptr<LinuxUiThreadDispatcher> ui_dispatcher_;
 
+  std::shared_ptr<LinuxSystemTheme> system_theme_;
   GtkWindow* window_ = nullptr;
   GtkWidget* drawing_area_ = nullptr;
   bool touchpad_scroll_active_ = false;
@@ -2192,7 +2323,7 @@ private:
   LinuxKeyTracker key_tracker_;
 };
 
-std::unique_ptr<UiWindow> LinuxRuntime::CreateApplicationWindow(ViewFactory content, const WindowOptions& options) {
+std::unique_ptr<UiWindow> LinuxRuntime::CreateUiWindow(ViewFactory content, const WindowOptions& options) {
   auto window = std::make_unique<LinuxUiWindow>(dispatcher_);
   window->Initialize(*this, std::move(content), options);
   return window;

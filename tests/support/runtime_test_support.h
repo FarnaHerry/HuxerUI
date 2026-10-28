@@ -605,7 +605,7 @@ public:
 
   bool SupportsMultipleWindows() const noexcept override { return multiple_windows_supported; }
 
-  std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
+  std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
     auto window = std::make_unique<TestPlatform>();
     window->owned_native_window = true;
     window->on_destroy = [this] { ++destroyed_windows; };
@@ -614,6 +614,10 @@ public:
     created_windows.push_back(window.get());
     return window;
   }
+
+  using huxerui::UiWindow::UpdateSystemThemeBrightness;
+  ThemeBrightness QuerySystemThemeBrightness() const override { return system_theme_brightness; }
+  ThemeBrightness system_theme_brightness = ThemeBrightness::Light;
 
   std::chrono::steady_clock::time_point TimerNow() const noexcept override {
     return std::chrono::steady_clock::time_point{} +
@@ -975,7 +979,7 @@ public:
   bool host_discarded = false;
   /// Drives CanDiscardHost so tests can model hosts that do not support explicit native retirement.
   bool discard_host_supported = true;
-  /// Windows produced by CreateWindow for multi-window tests, valid until the Runtime retires them.
+  /// Windows produced by CreateUiWindow for multi-window tests, valid until the Runtime retires them.
   std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;
   std::shared_ptr<TestPermissionTransport> permission_transport;

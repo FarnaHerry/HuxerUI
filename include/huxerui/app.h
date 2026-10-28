@@ -547,7 +547,7 @@ protected:
   virtual bool SupportsMultipleWindows() const noexcept;
   /// Creates an initialized, hidden window belonging to this Runtime without starting another event loop.
   /// Shared admission and configuration checks precede this call. Failure must release partial native facilities.
-  virtual std::unique_ptr<UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options);
+  virtual std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options);
   /// Captures platform-selected application storage directories during initialization.
   /// @return Directory values without performing application I/O, or std::nullopt if unsupported.
   virtual std::optional<AppDirectories> CreateAppDirectories();
@@ -1007,6 +1007,14 @@ public:
 
 protected:
   UiWindow();
+  /// Queries the native host after derived facilities are ready; unavailable preferences use Light.
+  /// Must not block on asynchronous platform queries. Called on the application thread.
+  virtual ThemeBrightness QuerySystemThemeBrightness() const;
+  /// Publishes a host preference to this initialized window's composition dependencies.
+  /// Call on the application thread; native callbacks must stop entering when retirement begins.
+  /// @throws std::logic_error If this window is not initialized or the calling thread differs.
+  /// @throws std::invalid_argument If brightness is not a declared ThemeBrightness value.
+  void UpdateSystemThemeBrightness(ThemeBrightness brightness);
   /// Tests whether this window completed shared initialization and has not begun retirement.
   /// @return False during WindowHook installation, after initialization failure, or after retirement begins.
   /// Native callbacks may enter shared UI operations only while this is true.

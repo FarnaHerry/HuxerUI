@@ -1821,6 +1821,7 @@ ThemeSpec FlatLightThemeSpec() {
 
 ThemeSpec FlatDarkThemeSpec() {
   ThemeSpec theme;
+  theme.brightness = ThemeBrightness::Dark;
   theme.shapes.large = 14.0F;
   theme.colors = {
       .primary = Color::Rgb(88, 166, 255),
@@ -1930,6 +1931,7 @@ ThemeSpec MaterialLightThemeSpec() {
 
 ThemeSpec MaterialDarkThemeSpec() {
   ThemeSpec theme;
+  theme.brightness = ThemeBrightness::Dark;
   theme.colors = {
       .primary = Color::Rgb(208, 188, 255),
       .on_primary = Color::Rgb(56, 30, 114),

@@ -315,16 +315,16 @@ Android still owns the surrounding notification chrome and may constrain the cus
 `can_use_templates` is false on API 23 and when no provider is installed; an unsupported identifier returns `Unavailable` without system-layout fallback.
 See [Local Notifications](../design/local-notifications.md#android) for the complete configuration and capability rules.
 
-Generated applications keep the same Activity, `HuxerUIView`, and Runtime across orientation and window-size changes.
+Generated applications keep the same Activity, `HuxerUIView`, and Runtime across orientation, window-size, and UI-mode changes.
 An application that hosts `HuxerUIView` in a custom Activity must declare the same handled changes on that Activity:
 
 ```xml
 <activity
     android:name=".MainActivity"
-    android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout" />
+    android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode" />
 ```
 
-This declaration does not preserve the Runtime across process death or configuration changes that are not listed, such as locale, UI mode, font scale, layout direction, or display density.
+This declaration does not preserve the Runtime across process death or configuration changes that are not listed, such as locale, font scale, layout direction, or display density.
 A custom host remains responsible for updating any other Android Views, Fragments, or alternative Android resources that depend on the handled configuration values.
 
 Android libraries include `<huxerui/android/external_texture.h>` and choose the producer that matches their source.

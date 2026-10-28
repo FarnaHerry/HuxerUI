@@ -116,6 +116,8 @@ struct ThemeSpec {
   ElevationScheme elevation;
   MotionScheme motion;
   InteractionScheme interactions;
+  /// Semantic theme appearance; changing this value does not transform the palette.
+  ThemeBrightness brightness = ThemeBrightness::Light;
 
   static ThemeSpec Default();
 

@@ -88,7 +88,7 @@ private:
 class ReclaimingRuntime final : public TestPlatform {
 public:
   explicit ReclaimingRuntime(RetirementCounts& counts) : counts_(counts) {}
-  std::unique_ptr<huxerui::UiWindow> CreateApplicationWindow(ViewFactory content, const WindowOptions& options) override {
+  std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
     auto window = std::make_unique<ReclaimingWindow>(counts_);
     detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
     return window;

@@ -42,6 +42,13 @@ class WindowService;
 class PointerInteraction;
 class TextInteraction;
 
+struct SystemThemeEnvironment {
+  ThemeBrightness brightness = ThemeBrightness::Light;
+
+  static SystemThemeEnvironment Default() { return {}; }
+  bool operator==(const SystemThemeEnvironment&) const = default;
+};
+
 class FileDropReceiver final {
 public:
   explicit FileDropReceiver(UiWindow::State& runtime_state) : runtime_state_(runtime_state) {}
@@ -187,6 +194,18 @@ struct LayerPlacement {
   float maximum_cross_axis_extent = std::numeric_limits<float>::infinity();
 
   bool operator==(const LayerPlacement&) const = default;
+};
+
+// Presentation content supplies visual metadata in the same composition as its themed surface.
+// Behavioral options and lifetime remain on the controller entry.
+struct LayerPresentation {
+  std::optional<Color> barrier_color;
+  std::optional<LayerPlacement> placement;
+  bool operator==(const LayerPresentation&) const = default;
+};
+
+struct LayerPresentationValue {
+  using Value = LayerPresentation;
 };
 
 struct LayerPlacementValue {

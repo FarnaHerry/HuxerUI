@@ -778,6 +778,7 @@ public:
     request_show_text_input_ = environment->GetMethodID(view_class, "requestShowTextInput", "(J)V");
     resource_locale_ = environment->GetMethodID(view_class, "resourceLocale", "()[B");
     resource_scale_ = environment->GetMethodID(view_class, "resourceScale", "()F");
+    system_dark_theme_ = environment->GetMethodID(view_class, "systemDarkTheme", "()Z");
     set_system_bars_content_brightness_ =
         environment->GetMethodID(view_class, "setSystemBarsContentBrightness", "(II)V");
     set_pointer_cursor_ = environment->GetMethodID(view_class, "setHuxerUIPointerCursor", "(I)V");
@@ -786,7 +787,7 @@ public:
         font_metrics_ == nullptr || measure_text_ == nullptr || measure_text_run_ == nullptr ||
         create_text_layout_ == nullptr || start_text_input_ == nullptr || update_text_input_ == nullptr ||
         restart_text_input_ == nullptr || stop_text_input_ == nullptr || request_show_text_input_ == nullptr ||
-        resource_locale_ == nullptr || resource_scale_ == nullptr ||
+        resource_locale_ == nullptr || resource_scale_ == nullptr || system_dark_theme_ == nullptr ||
         set_system_bars_content_brightness_ == nullptr || set_pointer_cursor_ == nullptr) {
       if (environment->ExceptionCheck()) {
         environment->ExceptionClear();
@@ -870,6 +871,20 @@ public:
 
   void UpdateResourceConfiguration(std::string language_tag, float display_scale) {
     UiWindow::UpdateResourceConfiguration({Locale::FromLanguageTag(language_tag), display_scale});
+  }
+
+  ThemeBrightness QuerySystemThemeBrightness() const override {
+    JNIEnv* environment = Environment();
+    if (environment == nullptr || view_ == nullptr) return ThemeBrightness::Light;
+    const bool dark = environment->CallBooleanMethod(view_, system_dark_theme_) == JNI_TRUE;
+    if (environment->ExceptionCheck()) {
+      throw std::runtime_error("HuxerUI Android system theme could not be read");
+    }
+    return dark ? ThemeBrightness::Dark : ThemeBrightness::Light;
+  }
+
+  void UpdateSystemTheme(bool dark) {
+    if (IsInitialized()) UpdateSystemThemeBrightness(dark ? ThemeBrightness::Dark : ThemeBrightness::Light);
   }
 
   std::optional<std::vector<std::uint8_t>> CommitFrame() {
@@ -1595,6 +1610,7 @@ private:
   jmethodID request_show_text_input_ = nullptr;
   jmethodID resource_locale_ = nullptr;
   jmethodID resource_scale_ = nullptr;
+  jmethodID system_dark_theme_ = nullptr;
   jmethodID set_system_bars_content_brightness_ = nullptr;
   jmethodID set_pointer_cursor_ = nullptr;
   PlatformFrameState frame_state_;
@@ -1785,6 +1801,16 @@ extern "C" JNIEXPORT void JNICALL Java_org_huxerui_HuxerUIView_nativeUpdateResou
     if (auto* session = huxerui::detail::Session(handle)) {
       session->UpdateResourceConfiguration(huxerui::detail::FromByteArray(environment, language_tag), display_scale);
     }
+  } catch (const std::exception& exception) {
+    huxerui::detail::ThrowJavaException(environment, exception.what());
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_org_huxerui_HuxerUIView_nativeUpdateSystemTheme(
+    JNIEnv* environment, jclass, jlong handle, jboolean dark
+) {
+  try {
+    if (auto* session = huxerui::detail::Session(handle)) session->UpdateSystemTheme(dark == JNI_TRUE);
   } catch (const std::exception& exception) {
     huxerui::detail::ThrowJavaException(environment, exception.what());
   }
