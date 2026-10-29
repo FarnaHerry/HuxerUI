@@ -107,7 +107,7 @@ it is a straight port of the patch llm-switch CI already applies and validates o
 The multi-window API follows upstream's explicit content factories: `ApplicationHandle::OpenWindow(content, options)` creates a Runtime-owned window through the platform `CreateUiWindow` factory.
 Applications retain `WindowHandle` values and attach business metadata to their own models or factory captures.
 [Multi-Window Design](../design/multi-window.md) defines the ownership, per-window state, windowless startup, and last-window close policy.
-The downstream extensions retain startup extras, explicit retirement without application shutdown, floating utility presentation, and cross-window drag support.
+The downstream extensions retain startup extras, windowless operation after closing windows, floating utility presentation, and cross-window drag support.
 
 [Window Relationship Design](../design/window-relationship.md) defines ownership, modality, and child-first cascade through the same Runtime maintenance path.
 Windows and Linux implement native window creation; macOS remains a preview requiring its own CI and interactive validation.

@@ -46,7 +46,7 @@ Validation runs before any native change: a window cannot own itself, no owner c
 The registry updates only from `OpenWindow` and `SetRelationship` on the application thread.
 
 Retiring a window retires its owned windows first, deepest chain first, before the window itself finishes retirement.
-Runtime marks the accepted close or explicit retirement of an owner and its owned descendants, then maintenance performs shared retirement and native release deepest-first after active callbacks return.
+Runtime marks the accepted close of an owner and its owned descendants, then maintenance performs shared retirement and native release deepest-first after active callbacks return.
 The relation registry is separate from the single collection that owns native windows; application shutdown uses the same descendant-before-owner ordering.
 Reparenting an alive window moves its registry edges and restores or applies modality bookkeeping as needed; retiring a window drops it from every registry edge that names it.
 
@@ -68,7 +68,7 @@ Nested modality follows the edge set: closing an inner modal restores its own sc
 
 ## Interaction with the rest of the framework
 
-- Close follows the last-window shutdown policy after the owned cascade completes; explicit Retire keeps the application running. The initial window has no separate shutdown rule.
+- Close follows the last-window shutdown policy after the owned cascade completes; `quit_on_last_window_closed = false` keeps the application running. The initial window has no separate shutdown rule.
 - `WindowHandle` commands keep working on blocked windows; modality blocks user input, not programmatic control.
 - Layers and dialogs inside one window are unchanged; a window-level modal and an in-window dialog may coexist, and the window-level rule wins for input crossing windows.
 - Accessibility sees disabled windows through the platform state; no semantic role is added.

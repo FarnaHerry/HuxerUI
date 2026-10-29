@@ -35,7 +35,7 @@ TEST_CASE("OwnedWindowAppliesOwnershipAndRetiresWithOwner") {
   REQUIRE(owner.created_windows[1]->applied_owners.size() == 1);
   REQUIRE(owner.created_windows[1]->applied_owners.back() == owner.created_windows[0]);
 
-  primary.Retire();
+  primary.Close();
   owner.RunPlatformModuleTasks();
   REQUIRE_FALSE(primary.IsOpen());
   REQUIRE_FALSE(child.IsOpen());
@@ -55,7 +55,7 @@ TEST_CASE("ModalWindowBlocksItsOwner") {
   REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, true});
   REQUIRE(owner.created_windows[1]->applied_modal_states.back() == ModalState{true, false});
 
-  settings.Retire();
+  settings.Close();
   owner.RunPlatformModuleTasks();
   REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, false});
   REQUIRE(ReceivedCommand(*owner.created_windows[0], WindowCommand::Activate));
@@ -128,9 +128,9 @@ TEST_CASE("OwnedModalExclusionsKeepOwnerInteractiveForOwnChain") {
   REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{false, false});
 }
 
-TEST_CASE("WindowHandleRetireRetiresOwnedChainAndKeepsApplicationRunning") {
+TEST_CASE("WindowHandleCloseRetiresOwnedChainAndKeepsApplicationRunningWhenConfigured") {
   TestPlatform owner;
-  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  Application application{RelationshipApp, {.show_debug_overlay = false, .quit_on_last_window_closed = false}};
   RuntimeLifetime lifetime(application, owner);
   const WindowHandle primary = UseApplication().OpenWindow([] { return Spacer(); }, application.options.window);
   const WindowHandle settings = UseApplication().OpenWindow(
@@ -146,7 +146,7 @@ TEST_CASE("WindowHandleRetireRetiresOwnedChainAndKeepsApplicationRunning") {
   static_cast<void>(helper);
   REQUIRE(owner.created_windows.size() == 3);
 
-  primary.Retire();
+  primary.Close();
   owner.RunPlatformModuleTasks();
 
   REQUIRE_FALSE(primary.IsOpen());
@@ -154,7 +154,7 @@ TEST_CASE("WindowHandleRetireRetiresOwnedChainAndKeepsApplicationRunning") {
   REQUIRE_FALSE(helper.IsOpen());
   REQUIRE(owner.destroyed_windows == 3);
   REQUIRE(owner.discarded_windows == 3);
-  // Explicit retirement never requests application shutdown; the Runtime keeps running and can reopen windows.
+  // The configured close policy keeps the Runtime running so it can reopen windows.
   REQUIRE(owner.application_quit_requests == 0);
   const WindowHandle again = UseApplication().OpenWindow([] { return Spacer(); }, {.title = "again"});
   static_cast<void>(again);
@@ -162,7 +162,7 @@ TEST_CASE("WindowHandleRetireRetiresOwnedChainAndKeepsApplicationRunning") {
   REQUIRE(owner.created_windows[3]->Initialized());
 }
 
-TEST_CASE("WindowHandleRetireUnblocksOwnerAndReactivatesIt") {
+TEST_CASE("WindowHandleCloseUnblocksOwnerAndReactivatesIt") {
   TestPlatform owner;
   Application application{RelationshipApp, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
@@ -174,7 +174,7 @@ TEST_CASE("WindowHandleRetireUnblocksOwnerAndReactivatesIt") {
   );
   REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, true});
 
-  settings.Retire();
+  settings.Close();
   owner.RunPlatformModuleTasks();
 
   REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, false});
@@ -183,7 +183,7 @@ TEST_CASE("WindowHandleRetireUnblocksOwnerAndReactivatesIt") {
   REQUIRE(owner.destroyed_windows == 1);
 }
 
-TEST_CASE("WindowHandleRetireIsHarmlessAfterRetirement") {
+TEST_CASE("WindowHandleCloseIsHarmlessAfterRetirement") {
   TestPlatform owner;
   Application application{RelationshipApp, {.show_debug_overlay = false}};
   RuntimeLifetime lifetime(application, owner);
@@ -191,11 +191,11 @@ TEST_CASE("WindowHandleRetireIsHarmlessAfterRetirement") {
   static_cast<void>(primary);
   const WindowHandle child = UseApplication().OpenWindow([] { return Spacer(); }, {.title = "child"});
 
-  child.Retire();
+  child.Close();
   owner.RunPlatformModuleTasks();
   REQUIRE_FALSE(child.IsOpen());
   REQUIRE(owner.destroyed_windows == 1);
-  REQUIRE_NOTHROW(child.Retire());
+  REQUIRE_NOTHROW(child.Close());
   owner.RunPlatformModuleTasks();
 
   const WindowHandle another = UseApplication().OpenWindow([] { return Spacer(); }, {.title = "another"});
@@ -225,7 +225,7 @@ TEST_CASE("SiblingModalWindowsStackSoNewestStaysInteractive") {
   REQUIRE(owner.created_windows[1]->applied_modal_states.back() == ModalState{true, true});
   REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{true, false});
 
-  second.Retire();
+  second.Close();
   owner.RunPlatformModuleTasks();
   REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, true});
   REQUIRE(owner.created_windows[1]->applied_modal_states.back() == ModalState{true, false});
@@ -271,50 +271,6 @@ TEST_CASE("PlainOpenWindowJoinsExistingModalBlocking") {
   // Windows opened after a modal already exists join the blocking set on the common creation path.
   REQUIRE(!owner.created_windows[2]->applied_modal_states.empty());
   REQUIRE(owner.created_windows[2]->applied_modal_states.back() == ModalState{false, true});
-}
-
-TEST_CASE("WindowHandleRetireRejectsUnsupportedHostBeforeTeardown") {
-  TestPlatform owner;
-  Application application{RelationshipApp, {.show_debug_overlay = false}};
-  RuntimeLifetime lifetime(application, owner);
-  const WindowHandle primary = UseApplication().OpenWindow([] { return Spacer(); }, application.options.window);
-  static_cast<void>(primary);
-  owner.created_windows[0]->discard_host_supported = false;
-
-  primary.Retire();
-  REQUIRE_THROWS_AS(owner.RunPlatformModuleTasks(), std::logic_error);
-  // Rejection keeps the unsupported window fully intact instead of half dismantled.
-  REQUIRE(owner.created_windows[0]->Initialized());
-  REQUIRE(!owner.created_windows[0]->host_discarded);
-  REQUIRE(owner.application_quit_requests == 0);
-}
-
-TEST_CASE("WindowHandleRetireRejectsUnsupportedOwnedChainBeforeTeardown") {
-  TestPlatform owner;
-  Application application{RelationshipApp, {.show_debug_overlay = false}};
-  RuntimeLifetime lifetime(application, owner);
-  const WindowHandle primary = UseApplication().OpenWindow([] { return Spacer(); }, application.options.window);
-  const WindowHandle child = UseApplication().OpenWindow(
-      [] { return Spacer(); },
-      {.title = "child"},
-      {.owner = primary, .modal = false}
-  );
-  const WindowHandle grandchild = UseApplication().OpenWindow(
-      [] { return Spacer(); },
-      {.title = "grandchild"},
-      {.owner = child, .modal = false}
-  );
-  static_cast<void>(child);
-  static_cast<void>(grandchild);
-  owner.created_windows[2]->discard_host_supported = false;
-
-  primary.Retire();
-  REQUIRE_THROWS_AS(owner.RunPlatformModuleTasks(), std::logic_error);
-  // One unsupported descendant rejects the whole retirement; nothing in the chain is torn down.
-  for (const TestPlatform* window : owner.created_windows) {
-    REQUIRE(window->Initialized());
-    REQUIRE(!window->host_discarded);
-  }
 }
 
 } // namespace huxerui::test

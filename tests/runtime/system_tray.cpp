@@ -322,6 +322,7 @@ TEST_CASE("System tray starts without a UI and opens windows on activation") {
   Application application(SystemTrayApp, {
       .create_initial_window = false,
       .show_debug_overlay = false,
+      .quit_on_last_window_closed = false,
       .application_hooks = {[&](ApplicationContext&) {
         const auto application = UseApplication();
         const auto tray = application.SystemTray();
@@ -353,7 +354,7 @@ TEST_CASE("System tray starts without a UI and opens windows on activation") {
     REQUIRE(tray_compositions == static_cast<int>(cycle));
     platform.created_windows.back()->BuildFrame();
     REQUIRE(tray_compositions == static_cast<int>(cycle + 1));
-    window->Retire();
+    window->Close();
     platform.RunPlatformModuleTasks();
     REQUIRE(platform.application_quit_requests == 0);
     REQUIRE(transport->hide_count == 0);

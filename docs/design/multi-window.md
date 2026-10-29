@@ -45,7 +45,7 @@ For distinct startup content, enqueue explicit `OpenWindow(content, options)` ca
 With initial-window creation disabled and no extra windows, application hooks, services, tasks, timers, activation dispatch, and the native event loop still run without a UiWindow.
 Later application work may open a window through the existing `ApplicationHandle::OpenWindow` API; work launched in application hooks remains queued until installation has finished.
 Skipping the initial window does not create an attachment; every framework-created window follows the same close policy.
-Explicit retirement remains independent of whole-application shutdown, including after windowless startup.
+Set `AppOptions::quit_on_last_window_closed = false` to keep the Runtime running after every window closes, including after windowless startup.
 Mobile, Web, and embedded attachments are platform-owned and do not consult this desktop startup flag.
 
 ## Per-window content and options
@@ -95,8 +95,8 @@ Closing the last framework-owned window requests application shutdown when `AppO
 Hidden and minimized windows still count; initially windowless startup, rejected creation, and external attachment retirement do not trigger this policy.
 Set the option to false to keep application services, timers, and activation available after the last Close and open windows later.
 
-`WindowHandle::Retire()` is explicit retirement without close interception and keeps the application running even when every window retires.
-It posts through the original application's synchronized queue, validates native discard support for the complete owned chain before making changes, and queues the same safe maintenance boundary used by Close.
+`WindowHandle::Close()` consults the target window's close handler before accepting closure and queuing cleanup at the safe maintenance boundary.
+The application's last-window policy determines whether closing every window also requests shutdown.
 Owned descendants retire before their owners; relationship removal restores the surviving modal stack and owner activation.
 Framework-created windows use the single Runtime ownership collection; external attachments retain native host ownership.
 

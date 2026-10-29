@@ -1391,7 +1391,7 @@ void UiWindow::Retire() noexcept {
 }
 
 void UiWindow::DiscardHost() {
-  throw std::logic_error("HuxerUI host does not support explicit window retirement");
+  throw std::logic_error("HuxerUI host does not support native window disposal");
 }
 
 bool UiWindow::CanDiscardHost() const {

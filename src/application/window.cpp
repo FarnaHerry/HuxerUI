@@ -321,25 +321,6 @@ void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owne
   state->owner->SetRelationship(*this, owner, modal);
 }
 
-void WindowService::Retire() {
-  const auto state = application_.lock();
-  if (!state) {
-    return;
-  }
-  const std::weak_ptr<ApplicationRuntimeState> application = state;
-  const std::weak_ptr<WindowService> weak = weak_from_this();
-  // Queue the retirement so it runs after the current callback returns: retiring synchronously from inside
-  // pointer, semantic, or lifecycle dispatch would tear down the structures that dispatch still references.
-  state->Post([application, weak] {
-    const auto state = application.lock();
-    if (const auto service = weak.lock(); state && state->owner && service) {
-      state->owner->RetireWindow(*service);
-    }
-  });
-}
-
-
-
 bool WindowService::HandleRequest(WindowCommand command) {
   if (!IsOpen()) return true;
   RequestHandler& request = Handler(command);
@@ -597,10 +578,6 @@ void WindowHandle::Close() const {
 
 std::optional<Point> WindowHandle::Position() const {
   return service_->Position();
-}
-
-void WindowHandle::Retire() const {
-  service_->Retire();
 }
 
 std::function<void()>

@@ -723,7 +723,9 @@ class PetModelWindow final : public TestPlatform {
 public:
   PetModelWindow(const WindowOptions& options, int& destroyed, bool passive_display_available)
       : position_(options.initial_position.value_or(Point{})), destroyed_(destroyed),
-        passive_display_available_(passive_display_available) {}
+        passive_display_available_(passive_display_available) {
+    owned_native_window = true;
+  }
   ~PetModelWindow() override { ++destroyed_; }
 
   WindowCapabilities NativeWindowCapabilities() const override {
@@ -814,20 +816,31 @@ TEST_CASE("DesktopPetLightweightHideReleasesWindowsAndRestoresApplicationPrefere
   std::shared_ptr<desktop_pet::PetModel> model;
   std::optional<ApplicationHandle> application_handle;
   PetModelRuntime owner;
-  Application application{PetModelApp, {.show_debug_overlay = false, .application_hooks = {
-      [&model, &application_handle](ApplicationContext& context) {
-        model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
-        context.Provide(model);
-        application_handle = UseApplication();
+  auto tray = std::make_shared<TestSystemTrayTransport>();
+  tray->available = true;
+  owner.system_tray_transport = tray;
+  Application application{
+      PetModelApp,
+      {
+          .show_debug_overlay = false,
+          .quit_on_last_window_closed = false,
+          .application_hooks = {
+              [&model, &application_handle](ApplicationContext& context) {
+                model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
+                context.Provide(model);
+                application_handle = UseApplication();
+              },
+          },
       },
-  }}};
+  };
   RuntimeLifetime lifetime(application, owner);
   model->Show(*application_handle);
   model->OpenSettings(*application_handle);
   const auto old_pet = *model->pet;
   const auto old_settings = *model->settings;
   REQUIRE_FALSE(model->lightweight.Get());
-  model->Hide(true);
+  old_pet.Close();
+  REQUIRE(old_pet.IsOpen());
   owner.RunPlatformModuleTasks();
   REQUIRE(owner.destroyed == 0);
   REQUIRE(model->pet.has_value());
@@ -839,7 +852,8 @@ TEST_CASE("DesktopPetLightweightHideReleasesWindowsAndRestoresApplicationPrefere
   model->SetTopmost(false);
   model->SetLightweight(true, true);
   REQUIRE(model->pet.has_value());
-  model->Hide(true);
+  SECTION("Lightweight hide requests closure") { model->Hide(true); }
+  SECTION("Lightweight close allows the native close path") { old_pet.Close(); }
   owner.RunPlatformModuleTasks();
   REQUIRE(owner.destroyed == 2);
   REQUIRE_FALSE(model->pet);
@@ -871,13 +885,20 @@ TEST_CASE("DesktopPetLightweightModeProtectsReplacementsAndRequiresTrayRecovery"
   std::shared_ptr<desktop_pet::PetModel> model;
   std::optional<ApplicationHandle> application_handle;
   PetModelRuntime owner;
-  Application application{PetModelApp, {.show_debug_overlay = false, .application_hooks = {
-      [&model, &application_handle](ApplicationContext& context) {
-        model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
-        context.Provide(model);
-        application_handle = UseApplication();
+  Application application{
+      PetModelApp,
+      {
+          .show_debug_overlay = false,
+          .quit_on_last_window_closed = false,
+          .application_hooks = {
+              [&model, &application_handle](ApplicationContext& context) {
+                model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
+                context.Provide(model);
+                application_handle = UseApplication();
+              },
+          },
       },
-  }}};
+  };
   RuntimeLifetime lifetime(application, owner);
   model->Show(*application_handle);
   model->SetLightweight(true, false);
@@ -1492,30 +1513,6 @@ TEST_CASE("Hosts without top-level creation keep externally owned attachments in
   { UiWindow window(runtime, attachment); }
   platform.RunPlatformModuleTasks();
   REQUIRE(platform.application_quit_requests == 0);
-}
-
-TEST_CASE("Explicit retirement waits for an active close callback and keeps the application running") {
-  OwnedWindowPlatform platform;
-  Application application(EmptyOwnedWindow, {.show_debug_overlay = false});
-  RuntimeLifetime runtime(application, platform);
-  auto window = UseApplication().OpenWindow([&] {
-    const auto current = UseWindow();
-    current.OnCloseRequest([&, current] {
-      current.Retire();
-      platform.RunPlatformModuleTasks();
-      REQUIRE_FALSE(current.IsOpen());
-      REQUIRE(platform.destroyed == 0);
-      return true;
-    });
-    return View{};
-  });
-  platform.windows.front()->Frame();
-  window.Close();
-  REQUIRE(platform.destroyed == 0);
-  platform.RunPlatformModuleTasks();
-  REQUIRE(platform.destroyed == 1);
-  REQUIRE(platform.application_quit_requests == 0);
-  REQUIRE(UseApplication().SupportsMultipleWindows());
 }
 
 TEST_CASE("Closing an owner retires descendants before native destruction and exits only after the last window") {

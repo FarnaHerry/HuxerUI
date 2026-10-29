@@ -246,6 +246,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
           .initial_position = Point{100.0F, 100.0F}, .presentation = WindowPresentation::Utility,
           .transparent_surface = true, .show_without_activation = true, .topmost = true},
       .show_debug_overlay = false,
+      .quit_on_last_window_closed = false,
       .application_hooks = {[state](ApplicationContext& context) { context.Provide(state); }},
   }};
   NativePetRunner runner(state);
@@ -336,7 +337,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
     static_cast<void>(runner.state->window->SetInputPassthrough(false));
   });
   REQUIRE_FALSE(IsWindowEnabled(native));
-  runner.Invoke([&] { modal->Retire(); });
+  runner.Invoke([&] { modal->Close(); });
   Await([&] { return IsWindowEnabled(native) != FALSE; });
   REQUIRE_THROWS_AS(runner.Invoke([&] {
     static_cast<void>(runner.state->window->SetClientSize({5000.0F, 200.0F}));
@@ -370,7 +371,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
   REQUIRE(result == WindowRequestResult::Submitted);
   REQUIRE((GetWindowLongPtrW(native, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0);
   const DWORD gdi_baseline = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
-  runner.Invoke([&] { runner.state->window->Retire(); });
+  runner.Invoke([&] { runner.state->window->Close(); });
   Await([&] { return !IsWindow(native); });
   runner.Invoke([&] { result = runner.state->window->SetInputPassthrough(true); });
   REQUIRE(result == WindowRequestResult::Disconnected);
@@ -387,7 +388,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
     const HWND reopened = FindWindowW(nullptr, L"HuxerUI Native Pet Reopened");
     REQUIRE(reopened != nullptr);
     Await([&] { return DesktopPixel(body) == RGB(240, 60, 30); });
-    runner.Invoke([&] { runner.state->window->Retire(); });
+    runner.Invoke([&] { runner.state->window->Close(); });
     Await([&] { return !IsWindow(reopened); });
   }
   REQUIRE(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= gdi_baseline + 4);

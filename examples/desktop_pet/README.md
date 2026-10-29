@@ -27,14 +27,14 @@ The same target builds on macOS through the macOS Multi-Window Preview CI workfl
 
 The tray menu provides show, hide, position recovery, settings, and quit.
 The ordinary settings window can receive keyboard focus and change wave-animation, topmost, and lightweight-mode preferences.
-Retiring the pet also retires its owned settings window; the Runtime and tray remain alive, and Show pet creates a new attachment.
-If a tray host is unavailable, hiding and explicit retirement are disabled in the example, a mounted hidden pet is shown again, and right-click Quit remains available.
+Closing the pet also closes its owned settings window; `quit_on_last_window_closed = false` keeps the Runtime and tray alive, and Show pet creates a new attachment.
+If a tray host is unavailable, hiding and the Close pet action are disabled in the example, a mounted hidden pet is shown again, and right-click Quit remains available.
 
 ### Lightweight tray mode
 
 Lightweight mode is off by default and can be enabled in Settings when a tray host is available.
 Ordinary hiding keeps the native window and rendering resources for fast restoration.
-With lightweight mode enabled, Hide pet and intercepted close requests retire both the pet and settings windows through WindowHandle::Retire, releasing the UI trees and native rendering resources while the Runtime and tray continue running.
+With lightweight mode enabled, Hide pet closes both the pet and settings windows through `WindowHandle::Close()`, and the pet's close handler allows native closure and its owned-window cascade. Both paths release the UI trees and native rendering resources while the Runtime and tray continue running.
 Enabling the mode for an already hidden pet also retires its windows.
 Tray activation recreates the orb with its last in-process position, energized state, animation preference, and topmost preference; wave phase restarts.
 The settings window can be opened from the tray while the pet is retired, including changing the next window's topmost preference.

@@ -113,6 +113,7 @@ View StartupWindowApp() {
 
 TEST_CASE("Win32StartupCanDeferTheInitialWindowWithoutStoppingApplicationDispatch", "[.][win32-native-startup]") {
   AppOptions options;
+  options.quit_on_last_window_closed = false;
   int expected_startup_windows = 0;
   bool open_later = true;
   SECTION("Default startup still opens the initial window") { expected_startup_windows = 1; }
@@ -194,7 +195,7 @@ TEST_CASE("Win32StartupCanDeferTheInitialWindowWithoutStoppingApplicationDispatc
       PumpUntil([&] { return FindWindowByTitle(delayed_title_wide) != nullptr; }, "the delayed window");
       const HWND native = FindWindowByTitle(delayed_title_wide);
       PumpUntil([&] { return state->windows.load() == expected_startup_windows + cycle + 1; }, "window initialization");
-      post([state] { state->delayed->Retire(); });
+      post([state] { state->delayed->Close(); });
       PumpUntil([native] { return !IsWindow(native); }, "delayed window retirement");
       REQUIRE_FALSE(runner_finished.load());
     }

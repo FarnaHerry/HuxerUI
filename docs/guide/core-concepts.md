@@ -304,7 +304,6 @@ macOS, Windows, and Linux support this API; Android, iOS, and Web currently repo
 Closing the last framework-owned desktop window requests application shutdown by default.
 Set `AppOptions::quit_on_last_window_closed = false` to keep application services, tasks, and activation handlers available without windows; an application or tray callback can then open a new window.
 Hidden windows count, while initial windowless startup, failed creation, and retirement of external UI attachments do not trigger this policy.
-`WindowHandle::Retire()` explicitly releases one window and its owned descendants without close interception and keeps the application running, including when every window retires.
 `ApplicationHandle::Quit()` shuts down the entire application without invoking per-window close interception, retiring windows before application services.
 
 [Multiple-window example](../../examples/multi_window/main.cpp) demonstrates shared and local counters, observable closure, and reopening.

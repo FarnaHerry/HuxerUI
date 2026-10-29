@@ -378,7 +378,7 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
     case 4: {
       NSWindow* pet = checks.watches[0]->Window();
       checks.Check(pet.isKeyWindow, "explicit Activate did not grant the utility window key status");
-      checks.pet->Retire();
+      checks.pet->Close();
       ++phase;
       return false;
     }
@@ -401,7 +401,7 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
       const auto corner = pixels.At(5.0F, 5.0F);
       if (corner[3] > 2 || body[0] < 236 || body[3] < 253) return false;
       checks.Check(pet != nil, "reopened utility window disappeared");
-      checks.pet->Retire();
+      checks.pet->Close();
       ++phase;
       return false;
     }
@@ -507,7 +507,7 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Submitted,
                    "SetInputPassthrough(true) under a modal was refused");
       checks.Check(pet.ignoresMouseEvents, "modal blocking and passthrough did not combine");
-      checks.modal->Retire();
+      checks.modal->Close();
       ++phase;
       return false;
     }
@@ -518,7 +518,7 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       checks.Check(checks.pet->SetInputPassthrough(false) == WindowRequestResult::Submitted,
                    "SetInputPassthrough(false) after a modal was refused");
       checks.Check(!pet.ignoresMouseEvents, "restoring input did not clear native pointer exclusion");
-      checks.pet->Retire();
+      checks.pet->Close();
       ++phase;
       return false;
     }

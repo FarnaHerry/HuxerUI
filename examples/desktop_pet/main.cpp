@@ -49,14 +49,6 @@ View PetContent() {
     if (!tray_available) window.Show();
   }, tray_available);
   desktop_pet::UsePetAttachment(model);
-  window.OnCloseRequest([model, application, tray_available] {
-    if (!tray_available) {
-      application.Quit();
-      return true;
-    }
-    model->Hide(tray_available);
-    return true;
-  }, tray_available);
   return Stack {}.With(
       Indication{},
       desktop_pet::Orb{.energized = model->energized.Get(), .animate = visible && model->animate.Get()},
@@ -96,7 +88,7 @@ View SettingsContent() {
       Button("Recover pet position").OnClick([model] { model->RecoverPosition(); }),
       Button("Hide pet").OnClick([model, tray_available] { model->Hide(tray_available); })
           .With(Enabled(tray_available)),
-      Button("Retire pet").OnClick([model] { model->Retire(); })
+      Button("Close pet").OnClick([model] { model->Close(); })
           .With(Enabled(tray_available)),
       Button("Show or recreate pet").OnClick([model, application] { model->Show(application); }),
       Button("Quit").OnClick([application] { application.Quit(); }),
@@ -112,4 +104,8 @@ View App() {
   };
 }
 
-const Application application{App, {.create_initial_window = false, .application_hooks = {InstallPet}}};
+const Application application{App, {
+    .create_initial_window = false,
+    .quit_on_last_window_closed = false,
+    .application_hooks = {InstallPet},
+}};

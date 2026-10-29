@@ -1963,7 +1963,7 @@ private:
   }
 
   /// Runs when GTK finally disposes the native window. Every shutdown decision already happened in
-  /// CloseRequested or RetireWindow, so this only releases window resources idempotently.
+  /// CloseRequested, so this only releases window resources idempotently.
   static void Destroyed(GtkWidget*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     ExecutionGuard guard(InternalAccess::WindowExecution(self));

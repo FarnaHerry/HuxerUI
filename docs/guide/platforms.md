@@ -193,7 +193,7 @@ If the producer device is removed, publish a replacement texture from a valid de
 The macOS backend is a preview whose acceptance gate is CI on the supported runners; interactive behavior has not been qualified on a physical macOS device.
 The macOS backend requires macOS 12 or later.
 The macOS backend uses AppKit, Core Graphics, Core Text, and `NSTextInputClient`.
-Runtime-created windows, startup `extra_windows`, ownership, modality, and explicit retirement are available as a preview; see [Developing Multi-Window](../development/multi-window.md#macos-preview-validation) for CI coverage and the remaining interactive validation.
+Runtime-created windows, startup `extra_windows`, ownership, modality, and windowless operation are available as a preview; see [Developing Multi-Window](../development/multi-window.md#macos-preview-validation) for CI coverage and the remaining interactive validation.
 macOS applies `WindowOptions::initial_position` through AppKit, and `WindowHandle::Position()` reports the client-area origin in logical screen coordinates with the contract's top-left origin.
 Transparent utility windows, passive display, topmost stacking, geometry requests, whole-window input passthrough, and drag-initiated native moves are available as described under [Floating utility windows](#floating-utility-windows).
 Build with Xcode 26 or later and the macOS SDK; release CI uses Xcode 26.2. This toolchain requirement does not raise the macOS 12 deployment target.

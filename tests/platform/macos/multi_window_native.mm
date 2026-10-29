@@ -89,6 +89,7 @@ struct NativeScenario {
   bool native_primary_close = false;
   bool destroy_primary = false;
   bool key_close_returned = false;
+  bool quit_on_last_window_closed = true;
 
   void Check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(std::string("HuxerUI ") + message);
@@ -184,6 +185,7 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
         {
             .window = {.title = "HuxerUI native primary", .initial_size = {320.0F, 240.0F}},
             .show_debug_overlay = false,
+            .quit_on_last_window_closed = scenario.quit_on_last_window_closed,
             .application_hooks = {[&scenario](ApplicationContext& context) {
               scenario.shared = std::make_shared<SharedCounter>();
               context.Provide(scenario.shared);
@@ -485,7 +487,7 @@ TEST_CASE("MacNativeOwnedModalsPreserveIndependentWindowsAndCascade", "[macos-na
                      "Older modal's helper remained interactive");
       scenario.Check(IsInteractive(scenario.watches[4]->Window()),
                      "Newest modal was blocked");
-      records.at(4).handle->Retire();
+      records.at(4).handle->Close();
       ++phase;
       return false;
     case 4:
@@ -575,7 +577,7 @@ TEST_CASE("MacNativeApplicationModalsStackAndCoverNewWindows", "[macos-native]")
                      "Previous application modal remained interactive");
       scenario.Check(IsInteractive(scenario.watches[4]->Window()),
                      "Top application modal was blocked");
-      records.at(4).handle->Retire();
+      records.at(4).handle->Close();
       ++phase;
       return false;
     case 4:
@@ -601,6 +603,7 @@ TEST_CASE("MacNativeApplicationModalsStackAndCoverNewWindows", "[macos-native]")
 
 TEST_CASE("MacNativeRetirementKeepsWindowlessRuntimeAliveAndCanReopen", "[macos-native]") {
   NativeScenario scenario;
+  scenario.quit_on_last_window_closed = false;
   int phase = 0;
   scenario.advance = [&] {
     auto& records = scenario.records;
@@ -610,7 +613,7 @@ TEST_CASE("MacNativeRetirementKeepsWindowlessRuntimeAliveAndCanReopen", "[macos-
       scenario.Watch("HuxerUI native primary");
       scenario.Watch("HuxerUI native extra");
       SetWindowRelationship(*records.at(1).handle, {.owner = *records.at(0).handle, .modal = true});
-      records.at(0).handle->Retire();
+      records.at(0).handle->Close();
       scenario.Check(records.at(0).unmounts == 0 && records.at(1).unmounts == 0,
                      "Retirement did not wait for the current callback");
       ++phase;
@@ -619,10 +622,10 @@ TEST_CASE("MacNativeRetirementKeepsWindowlessRuntimeAliveAndCanReopen", "[macos-
       if (!scenario.watches[0]->Released() || !scenario.watches[1]->Released()) return false;
       scenario.Check(records.at(0).unmounts == 1 && records.at(1).unmounts == 1,
                      "Retirement did not unmount the owned chain exactly once");
-      scenario.Check(scenario.close_requests == 0, "Retirement invoked close handlers");
+      scenario.Check(scenario.close_requests == 0, "Owner closure invoked descendant close handlers");
       scenario.shared->value = 42;
-      records.at(0).handle->Retire();
-      records.at(1).handle->Retire();
+      records.at(0).handle->Close();
+      records.at(1).handle->Close();
       static_cast<void>(scenario.application->OpenWindow(
           [slot = scenario.next_slot++, label = std::string{"window"}] {
             return NativeWindowContent(slot, label);

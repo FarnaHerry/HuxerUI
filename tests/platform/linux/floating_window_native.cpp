@@ -641,7 +641,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
           self.Check(false, "interactive native move did not relocate the window");
         }
       }
-      floating->Retire();
+      floating->Close();
       ++stage;
     } else if (stage == 9) {
       if (floating->Capabilities() != WindowCapabilities{}) {
@@ -675,7 +675,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       }
       self.Check(!gtk_window_get_decorated(pet), "reopened utility window was decorated");
       if (++reopen_cycle < 2) {
-        reopened->Retire();
+        reopened->Close();
         reopened.reset();
       } else {
         self.Check(reopened->Capabilities().transparent_surface,
@@ -701,7 +701,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       }
       self.Check(gtk_window_get_decorated(pet_plain), "ordinary window lost its decoration");
       self.Check(!HasTransparentCssClass(pet_plain), "transparent background leaked across windows");
-      plain->Retire();
+      plain->Close();
       return true;
     }
     return false;

@@ -3,11 +3,6 @@
 #include <optional>
 #include <limits>
 #include <string>
-#include <thread>
-#include <atomic>
-#include <mutex>
-
-#include "application/window_internal.h"
 
 namespace huxerui::test {
 
@@ -71,7 +66,9 @@ struct RetirementCounts {
 
 class ReclaimingWindow final : public TestPlatform {
 public:
-  explicit ReclaimingWindow(RetirementCounts& counts) : counts_(counts) {}
+  explicit ReclaimingWindow(RetirementCounts& counts) : counts_(counts) {
+    owned_native_window = true;
+  }
   ~ReclaimingWindow() override {
     ++counts_.destroyed;
     counts_.destroyed_inside_discard |= counts_.inside_discard;
@@ -244,12 +241,15 @@ TEST_CASE("ApplicationHandleOpenWindowReportsDisconnectedService") {
 TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
   RetirementCounts counts;
   ReclaimingRuntime owner(counts);
-  Application application{[]() -> View { return Spacer(); }, {.show_debug_overlay = false}};
+  Application application{
+      []() -> View { return Spacer(); },
+      {.show_debug_overlay = false, .quit_on_last_window_closed = false},
+  };
   RuntimeLifetime lifetime(application, owner);
   std::vector<WindowHandle> retired;
   for (int index = 0; index < 1000; ++index) {
     auto window = UseApplication().OpenWindow([] { return Spacer(); }, {});
-    window.Retire();
+    window.Close();
     REQUIRE(counts.destroyed == index);
     owner.RunPlatformModuleTasks();
     REQUIRE(counts.destroyed == index + 1);
@@ -259,51 +259,22 @@ TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
   for (const auto& window : retired) {
     window.Show();
     window.Close();
-    window.Retire();
     REQUIRE_FALSE(window.Position().has_value());
   }
   owner.RunPlatformModuleTasks();
   REQUIRE(counts.destroyed == 1000);
-  replacement.Retire();
+  replacement.Close();
   owner.RunPlatformModuleTasks();
   REQUIRE(counts.destroyed == 1001);
   auto parent = UseApplication().OpenWindow([] { return Spacer(); }, {});
   auto child = UseApplication().OpenWindow([] { return Spacer(); }, {}, {.owner = parent});
   auto grandchild = UseApplication().OpenWindow([] { return Spacer(); }, {}, {.owner = child});
-  parent.Retire();
+  parent.Close();
   owner.RunPlatformModuleTasks();
   REQUIRE(counts.destroyed == 1004);
   REQUIRE_FALSE(child.Position().has_value());
   REQUIRE_FALSE(grandchild.Position().has_value());
   REQUIRE_FALSE(counts.destroyed_inside_discard);
-}
-
-TEST_CASE("RuntimeOpenWindowRetirementMayRaceApplicationShutdown") {
-  std::mutex mutex;
-  std::vector<std::function<void()>> tasks;
-  TestPlatform owner([&](std::function<void()> callback) {
-    std::lock_guard lock(mutex);
-    tasks.push_back(std::move(callback));
-  });
-  Application application{[]() -> View { return Spacer(); }, {.show_debug_overlay = false}};
-  RuntimeLifetime lifetime(application, owner);
-  auto window = UseApplication().OpenWindow([] { return Spacer(); }, {});
-  std::atomic<int> submissions{0};
-  std::atomic<bool> stopped{false};
-  std::thread worker([&] {
-    while (!stopped.load()) {
-      window.Retire();
-      ++submissions;
-    }
-    window.Retire();
-  });
-  while (submissions.load() < 100) std::this_thread::yield();
-  detail::InternalAccess::RetireRuntime(owner);
-  stopped = true;
-  worker.join();
-  REQUIRE(submissions.load() >= 100);
-  for (auto& task : tasks) REQUIRE_NOTHROW(task());
-  REQUIRE_NOTHROW(window.Retire());
 }
 
 } // namespace huxerui::test

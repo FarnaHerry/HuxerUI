@@ -934,7 +934,7 @@ public:
   }
 
   bool CanDiscardHost() const override {
-    return discard_host_supported;
+    return true;
   }
 
   void DiscardHost() override {
@@ -977,8 +977,6 @@ public:
   std::function<void()> on_discard;
   bool multiple_windows_supported = true;
   bool host_discarded = false;
-  /// Drives CanDiscardHost so tests can model hosts that do not support explicit native retirement.
-  bool discard_host_supported = true;
   /// Windows produced by CreateUiWindow for multi-window tests, valid until the Runtime retires them.
   std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;

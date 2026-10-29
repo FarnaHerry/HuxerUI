@@ -14,14 +14,9 @@ View SettingsContent() {
     Text("Settings").With(FontSize(24.0F)),
     Text("This window is owned by the primary window and blocks its input while open."),
     Text("Close this window to return focus to the primary window."),
-    Row {
-      Button("Close").OnClick([window] {
-        window.Close();
-      }),
-      Button("Retire").OnClick([window] {
-        window.Retire();
-      }),
-    }.With(Spacing(8.0F)),
+    Button("Close").OnClick([window] {
+      window.Close();
+    }),
   }.With(
       Padding(24.0F),
       Spacing(12.0F)

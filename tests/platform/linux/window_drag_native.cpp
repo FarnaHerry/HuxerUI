@@ -99,7 +99,7 @@ struct NativeScenario {
   std::function<View(std::uint32_t)> content;
   std::exception_ptr failure;
   std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-  bool block_extra_close = true;
+  bool block_extra_close = false;
   int close_requests = 0;
   bool completed = false;
   bool native_primary_close = false;
@@ -187,6 +187,7 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
         {
             .window = {.title = "HuxerUI native primary", .initial_size = {320.0F, 240.0F}},
             .show_debug_overlay = false,
+            .quit_on_last_window_closed = false,
             .application_hooks = {[&scenario](ApplicationContext& context) {
               scenario.shared = std::make_shared<SharedCounter>();
               context.Provide(scenario.shared);
@@ -226,7 +227,7 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
 
 } // namespace
 
-TEST_CASE("LinuxNativeRetirementReleasesRenderedFramesAndReopens", "[.][linux-native-retire]") {
+TEST_CASE("LinuxNativeCloseReleasesRenderedFramesAndReopens", "[.][linux-native-retire]") {
   NativeScenario scenario;
   bool retire_all = false;
   SECTION("Another window stays alive") {}
@@ -251,8 +252,8 @@ TEST_CASE("LinuxNativeRetirementReleasesRenderedFramesAndReopens", "[.][linux-na
       if (!scenario.records.contains(ordinal) || !scenario.records.contains(1) || frame.use_count() < 2) return false;
       scenario.Watch(ordinal == 0 ? "HuxerUI native primary" : "HuxerUI native reopened");
       texture.reset();
-      if (retire_all && ordinal == 0) scenario.records.at(1).handle->Retire();
-      scenario.records.at(ordinal).handle->Retire();
+      if (retire_all && ordinal == 0) scenario.records.at(1).handle->Close();
+      scenario.records.at(ordinal).handle->Close();
       stage = 1;
     } else if (stage == 1) {
       if (scenario.records.at(ordinal).unmounts == 0) return false;
@@ -317,7 +318,7 @@ TEST_CASE("LinuxNativeRenderFailureDefersHostCleanup", "[.][linux-native-retire]
   RunScenario(scenario, "HuxerUI native retirement render failure");
 }
 
-TEST_CASE("LinuxNativeRetirementDetachesRetainedGtkCallbacks", "[.][linux-native-retire]") {
+TEST_CASE("LinuxNativeCloseDetachesRetainedGtkCallbacks", "[.][linux-native-retire]") {
   NativeScenario scenario;
   std::unique_ptr<GtkWindow, decltype(&g_object_unref)> native{nullptr, g_object_unref};
   std::unique_ptr<GtkWidget, decltype(&g_object_unref)> canvas{nullptr, g_object_unref};
@@ -334,7 +335,7 @@ TEST_CASE("LinuxNativeRetirementDetachesRetainedGtkCallbacks", "[.][linux-native
         controllers.emplace_back(G_OBJECT(g_list_model_get_item(model, index)), g_object_unref);
       }
       g_object_unref(model);
-      scenario.records.at(1).handle->Retire();
+      scenario.records.at(1).handle->Close();
       stage = 1;
       return false;
     }
@@ -357,7 +358,7 @@ TEST_CASE("LinuxNativeRetirementDetachesRetainedGtkCallbacks", "[.][linux-native
     g_object_notify(G_OBJECT(canvas.get()), "scale-factor");
     g_object_notify(G_OBJECT(native.get()), "is-active");
     scenario.records.at(1).handle->Show();
-    scenario.records.at(1).handle->Retire();
+    scenario.records.at(1).handle->Close();
     controllers.clear();
     canvas.reset();
     native.reset();
@@ -467,7 +468,7 @@ TEST_CASE("LinuxNativeApplicationDragUsesOnePhysicalSequence", "[.][linux-native
         .On<DropEvents<int>::Exited>([&](int, const DropEvent&) { events.emplace_back("exited"); })
         .On<DropEvents<int>::Dropped>([&](int, const DropEvent&) {
           events.emplace_back("dropped");
-          if (retire_on_drop) scenario.records.at(0).handle->Retire();
+          if (retire_on_drop) scenario.records.at(0).handle->Close();
         })
         .On<ViewEvents::Pointer>([&](const PointerEvent& event) {
           if (event.type == PointerEventType::Down) ++raw_downs;
@@ -506,7 +507,7 @@ TEST_CASE("LinuxNativeApplicationDragUsesOnePhysicalSequence", "[.][linux-native
       ++stage;
     } else if (stage == 5) {
       if (std::ranges::find(events, "entered") == events.end()) return false;
-      if (cancel_source) scenario.records.at(0).handle->Retire();
+      if (cancel_source) scenario.records.at(0).handle->Close();
       else input.Button(false);
       ++stage;
     } else if (stage == 6) {

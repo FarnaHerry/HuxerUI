@@ -672,42 +672,23 @@ WindowHandle Runtime::OpenWindow(
 }
 
 void Runtime::CloseWindow(UiWindow& window) {
-  QueueWindowRetirement(window, true);
-}
-
-void Runtime::RetireWindow(detail::WindowService& target) {
-  if (!state_) throw std::logic_error("HuxerUI cannot retire a window before application initialization");
-  state_->RequireThread();
-  if (state_->phase == ApplicationRuntimeState::Phase::Stopping ||
-      state_->phase == ApplicationRuntimeState::Phase::Stopped) return;
-  if (UiWindow* window = WindowForService(target)) QueueWindowRetirement(*window, false);
-}
-
-void Runtime::QueueWindowRetirement(UiWindow& window, bool close_request) {
   state_->RequireThread();
   if (!window.state_ || window.state_->closing_ || window.state_->retired_) return;
   if (state_->phase != ApplicationRuntimeState::Phase::Running || state_->window_installations) {
-    throw std::logic_error("HuxerUI cannot retire a window during installation or shutdown");
+    throw std::logic_error("HuxerUI cannot close a window during installation or shutdown");
   }
   const auto owned = std::find_if(owned_windows_.begin(), owned_windows_.end(),
                                 [&window](const auto& entry) { return entry.get() == &window; });
-  if (close_request && owned == owned_windows_.end()) {
+  if (owned == owned_windows_.end()) {
     throw std::logic_error("HuxerUI cannot close an externally owned UI attachment");
   }
   const auto retiring = OwnedSubtree(window, true);
-  if (!close_request) {
-    for (UiWindow* entry : retiring) {
-      if (entry->IsInitialized() && !entry->CanDiscardHost()) {
-        throw std::logic_error("HuxerUI host does not support explicit window retirement");
-      }
-    }
-  }
   for (UiWindow* entry : retiring) {
     if (!entry->state_ || entry->state_->retired_) continue;
     entry->state_->closing_ = true;
     entry->state_->window_service_->BeginClose();
   }
-  window.state_->close_requested_ = close_request;
+  window.state_->close_requested_ = true;
   window_maintenance_needed_ = true;
   ScheduleWindowMaintenance();
 }

@@ -56,20 +56,20 @@ struct PetModel {
     pet->Show();
   }
 
-  void Retire() {
+  void Close() {
     if (pet) saved_position = pet->Position();
-    // Retirement is queued; an old attachment's cleanup must not clear a newly opened replacement.
+    // Old attachment cleanup must not clear a newly opened replacement.
     ++pet_generation;
     ++settings_generation;
-    if (settings) settings->Retire();
-    if (pet) pet->Retire();
-    settings.reset();
-    pet.reset();
+    auto closing_settings = std::exchange(settings, std::nullopt);
+    auto closing_pet = std::exchange(pet, std::nullopt);
+    if (closing_settings) closing_settings->Close();
+    if (closing_pet) closing_pet->Close();
   }
 
   void Hide(bool tray_available) {
     if (!tray_available) return;
-    if (lightweight.Get()) Retire();
+    if (lightweight.Get()) Close();
     else if (pet) pet->Hide();
   }
 
@@ -107,6 +107,21 @@ struct PetModel {
 
 inline void UsePetAttachment(const std::shared_ptr<PetModel>& model) {
   const auto window = huxerui::UseWindow();
+  const auto application = huxerui::UseApplication();
+  const bool tray_available = application.SystemTray().IsAvailable();
+  window.OnCloseRequest([model, window, application, tray_available] {
+    if (!model->pet) return false;
+    if (!tray_available) {
+      application.Quit();
+      return true;
+    }
+    if (model->lightweight.Get()) {
+      model->saved_position = window.Position();
+      return false;
+    }
+    model->Hide(true);
+    return true;
+  }, tray_available);
   huxerui::Lifecycle([model, window] {
     const auto generation = ++model->pet_generation;
     model->pet = window;

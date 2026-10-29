@@ -482,15 +482,6 @@ public:
   void SetRelationship(
       detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner, bool modal
   );
-  /// Retires one live window, bypassing the platform close path and its request handlers. Owned windows retire
-  /// first, deepest chain first. Shared teardown runs before the native attachment is discarded, so retiring the
-  /// last window keeps the application running. Already-retired
-  /// windows and retirements requested after shutdown begins are ignored.
-  /// @param target Service of the live window to retire.
-  /// Call on the application thread; WindowHandle::Retire() queues this from any thread.
-  /// @throws std::logic_error If called before the application runs, from another thread, or when the host does not
-  /// support explicit window retirement.
-  void RetireWindow(detail::WindowService& target);
   /// Returns the monotonic clock used for this Runtime's ordinary timer deadlines.
   /// @return A steady-clock time point in the same clock domain accepted by ScheduleTimerAt.
   /// Native subclasses and deterministic test hosts must keep their clock and scheduling implementation consistent.
@@ -600,7 +591,6 @@ private:
   void RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate);
   WindowHandle OpenWindow(ViewFactory content, WindowOptions options);
   void CloseWindow(UiWindow& window);
-  void QueueWindowRetirement(UiWindow& window, bool close_request);
   void OrderWindowRetirement(std::vector<UiWindow*>& windows) const;
   void ScheduleWindowMaintenance();
   void ResumeWindowMaintenance() noexcept;
@@ -1040,12 +1030,12 @@ protected:
   void Retire() noexcept;
   /// Synchronously destroys the native window or host surface backing this attachment. Shared teardown (Retire())
   /// must already have run; the resulting native teardown path is idempotent. Platform adapters override this on
-  /// hosts that support explicit window retirement; the default reports the capability gap.
-  /// @throws std::logic_error By default, when the host does not support explicit window retirement.
+  /// hosts that support Runtime-owned top-level windows; the default reports the capability gap.
+  /// @throws std::logic_error By default, when the host does not support native window disposal.
   virtual void DiscardHost();
   /// Reports whether DiscardHost() can discard this attachment's native window on the current host.
-  /// The default matches the throwing DiscardHost; adapters that override DiscardHost override this to true,
-  /// so Runtime::RetireWindow can reject unsupported hosts before any shared teardown runs.
+  /// The default matches the throwing DiscardHost; adapters that override DiscardHost override this to true
+  /// so Runtime maintenance can release their native facilities after shared teardown.
   [[nodiscard]] virtual bool CanDiscardHost() const;
   /// Creates the file-picker transport anchored to this native attachment during window installation.
   /// @return A transport retaining its native operations safely, or null when this host does not support picking.
