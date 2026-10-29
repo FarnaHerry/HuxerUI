@@ -294,6 +294,19 @@ void MarkContentPaintDirtyTree(MountedNode& node) {
   }
 }
 
+#if defined(__EMSCRIPTEN__)
+void MarkTextMetricsDirtyTree(MountedNode& node) {
+  node.measure_dirty = true;
+  node.layout_dirty = true;
+  node.content_paint_dirty = true;
+  node.foreground_paint_dirty = true;
+  node.paragraph_layout.reset();
+  for (auto& child : node.children) {
+    if (child) MarkTextMetricsDirtyTree(*child);
+  }
+}
+#endif
+
 const SystemBarsAppearance* FindSystemBarsAppearance(const MountedNode& node) {
   const std::any* value = FindEnvironmentValue(node.environment, typeid(SystemBarsAppearance));
   if (!value) {
@@ -1067,6 +1080,28 @@ const MountedNode* InternalAccess::MountedRoot(const UiWindow& ui_window) noexce
   return ui_window.state_->mounted_root_.get();
 }
 
+#if defined(__EMSCRIPTEN__)
+std::uint64_t InternalAccess::TextMetricsRevision(const UiWindow& ui_window) noexcept {
+  return ui_window.state_ ? ui_window.state_->text_metrics_revision_ : 0;
+}
+
+void InternalAccess::InvalidateTextMetrics(UiWindow& ui_window) {
+  const auto& state = ui_window.state_;
+  if (!state || !state->initialized_ || state->retired_) {
+    throw std::logic_error("HuxerUI text metrics invalidation requires an initialized window");
+  }
+  ExecutionGuard execution_guard(state->execution_);
+  // Browser font readiness changes geometry without changing Font values, including composition-time measurements.
+  BeginDependencyChange(state->text_metrics_dependency_);
+  ++state->text_metrics_revision_;
+  CommitDependencyChange(state->text_metrics_dependency_);
+  if (state->mounted_root_) MarkTextMetricsDirtyTree(*state->mounted_root_);
+  state->extension_tree_dirty_ = true;
+  state->text_->InvalidateOverlay();
+  ui_window.RequestFrame();
+}
+#endif
+
 const ScrollPhysics& InternalAccess::DefaultScrollPhysics(const UiWindow& ui_window) noexcept {
   return ui_window.state_->default_scroll_physics_;
 }
@@ -1278,7 +1313,12 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory conten
       root.Provide(std::move(profiler));
     }
 #endif
-    root.Provide(std::make_shared<TextMeasurerService>(TextMeasurerService{this}));
+    auto text_measurer = std::make_shared<TextMeasurerService>();
+    text_measurer->measurer = this;
+#if defined(__EMSCRIPTEN__)
+    text_measurer->dependency = state_->text_metrics_dependency_;
+#endif
+    root.Provide(std::move(text_measurer));
     state_->window_service_ = std::make_shared<WindowService>(*this);
     state_->window_service_->UpdateLifecycleState(initial_lifecycle);
     root.Provide(state_->window_service_);

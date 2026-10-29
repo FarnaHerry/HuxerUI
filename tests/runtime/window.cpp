@@ -1314,12 +1314,14 @@ TEST_CASE("Owned window creation rejects invalid timing and rolls back failed ho
     return View{};
   });
   platform.windows.back()->Frame();
+#if !defined(__EMSCRIPTEN__)
   bool rejected = false;
   std::thread worker([&] {
     try { app.OpenWindow(EmptyOwnedWindow); } catch (const std::logic_error&) { rejected = true; }
   });
   worker.join();
   REQUIRE(rejected);
+#endif
   REQUIRE(window.IsOpen());
 }
 

@@ -18,6 +18,8 @@
 
 namespace huxerui::detail {
 
+std::string AndroidFontName(const Font& font);
+
 android::LocalRef<jbyteArray>
 AndroidTextAttributes(JNIEnv* environment, const AttributedText& text, const TextStyle& base);
 

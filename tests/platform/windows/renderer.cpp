@@ -14,6 +14,7 @@
 
 #include "win32_renderer.h"
 #include "text/text_internal.h"
+#include "font_test_support.h"
 
 namespace huxerui::detail {
 
@@ -456,6 +457,28 @@ TEST_CASE("Win32TransparentSurfacePreservesPremultipliedAlphaAndErasesOldSilhoue
   REQUIRE(SetWindowPos(fixture.window.handle, nullptr, 0, 0, 160, 128, SWP_NOMOVE | SWP_NOZORDER));
   fixture.renderer.Resize(fixture.window.handle, 96.0F);
   REQUIRE(fixture.Draw(root).size() == 160 * 128);
+}
+
+TEST_CASE("Win32CustomFontsKeepExactFaceAndLoaderLifetimeAcrossRendererDiscard") {
+  REQUIRE(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
+  struct ComLifetime { ~ComLifetime() { CoUninitialize(); } } com;
+  detail::Win32Renderer renderer;
+  renderer.Initialize();
+  const auto font = Font::FromFamily(TestFontFamily(), 20.0F);
+  const TextStyle regular{font, Color::Black()};
+  REQUIRE(renderer.MeasureRun("AA", regular, {}).advance == Catch::Approx(20.0F));
+  REQUIRE(renderer.MeasureRun("AA", {font.WithWeight(FontWeight::Bold), Color::Black()}, {}).advance == Catch::Approx(32.0F));
+  const auto rich = AttributedText::FromRanges("AA", {{{1, 2}, {.font_weight = FontWeight::Bold}}});
+  auto layout = renderer.CreateTextLayout(rich, regular, 200.0F, {.wrap = TextWrap::NoWrap});
+  REQUIRE(layout->CaretRect(2, TextAffinity::Upstream).x == Catch::Approx(26.0F));
+  const auto system = Font::System(20.0F);
+  const auto mixed = AttributedText::FromRanges("AA", {{{1, 2}, {.font = system}}});
+  const auto mixed_layout = renderer.CreateTextLayout(mixed, regular, 200.0F, {.wrap = TextWrap::NoWrap});
+  const float system_advance = renderer.MeasureRun("A", {system, Color::Black()}, {}).advance;
+  REQUIRE(mixed_layout->CaretRect(2, TextAffinity::Upstream).x == Catch::Approx(10.0F + system_advance));
+  renderer.Discard();
+  REQUIRE(layout->Measure().width == Catch::Approx(26.0F));
+  REQUIRE(layout->HitTest({20.0F, 10.0F}).offset == 2);
 }
 
 } // namespace huxerui::test

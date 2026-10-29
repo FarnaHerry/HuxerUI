@@ -9,6 +9,8 @@
 #include <utility>
 
 #include <huxerui/app.h>
+#include <huxerui/file.h>
+#include <huxerui/resource.h>
 
 #include "runtime/mounted_node_internal.h"
 #include "internal_access.h"
@@ -156,24 +158,47 @@ std::vector<TextStyleRange> NormalizeStyles(const TextBody& body, std::vector<Te
 
 } // namespace
 
-Font::Font(FontFamilyKind family_kind, std::string family_name, float size)
-    : family_kind_(family_kind), family_name_(std::move(family_name)), size_(size) {
+Font::Font(FontFamily family, float size) : family_(std::move(family)), size_(size) {
   RequireFontSize(size);
-  if (family_kind_ == FontFamilyKind::Named && family_name_.empty()) {
-    throw std::invalid_argument("HuxerUI named font family must not be empty");
-  }
 }
 
 Font Font::System(float size) {
-  return Font{FontFamilyKind::System, {}, size};
+  return Font{FontFamily::System(), size};
 }
 
 Font Font::Monospace(float size) {
-  return Font{FontFamilyKind::Monospace, {}, size};
+  return Font{FontFamily::Monospace(), size};
 }
 
 Font Font::Named(std::string family, float size) {
-  return Font{FontFamilyKind::Named, std::move(family), size};
+  return Font{FontFamily::Named(std::move(family)), size};
+}
+
+Font Font::FromFamily(FontFamily family, float size) {
+  return Font{std::move(family), size};
+}
+
+Font Font::FromResource(RawResource resource, float size) {
+  RequireFontSize(size);
+  return FromFamily(FontFamily::FromResources({std::move(resource)}), size);
+}
+
+Font Font::FromFile(const File& file, float size) {
+  RequireFontSize(size);
+  return FromFamily(FontFamily::FromFiles({file}), size);
+}
+
+Font Font::FromBytes(Bytes bytes, float size) {
+  RequireFontSize(size);
+  std::vector<Bytes> files;
+  files.push_back(std::move(bytes));
+  return FromFamily(FontFamily::FromBytes(std::move(files)), size);
+}
+
+Font Font::WithFamily(FontFamily family) const {
+  Font result = *this;
+  result.family_ = std::move(family);
+  return result;
 }
 
 Font Font::WithSize(float size) const {
@@ -200,6 +225,9 @@ TextMeasurer& UseTextMeasurer() {
   if (service->measurer == nullptr) {
     throw std::logic_error("HuxerUI text measurer service is disconnected");
   }
+#if defined(__EMSCRIPTEN__)
+  if (service->dependency) detail::ObserveDependency(service->dependency);
+#endif
   return *service->measurer;
 }
 
@@ -470,15 +498,24 @@ bool TextPaintInputsEqual(const AttributedText& left, const TextStyle& left_base
 }
 
 std::shared_ptr<TextLayout> GetParagraphLayout(MountedNode& node, UiWindow& ui_window) {
+#if defined(__EMSCRIPTEN__)
+  const auto revision = InternalAccess::TextMetricsRevision(ui_window);
+#endif
   const float width = node.ContentBounds().width;
   const auto& style = node.properties.text_style;
   const auto& options = node.properties.text_layout_options;
   const auto& previous = node.paragraph_layout;
   if (previous && previous->width == width && previous->options == options &&
+#if defined(__EMSCRIPTEN__)
+      previous->revision == revision &&
+#endif
       TextLayoutInputsEqual(previous->text, previous->font, node.text, style.font)) {
     return previous->layout;
   }
   auto next = std::make_shared<ParagraphLayout>();
+#if defined(__EMSCRIPTEN__)
+  next->revision = revision;
+#endif
   next->text = node.text;
   next->font = style.font;
   next->options = options;

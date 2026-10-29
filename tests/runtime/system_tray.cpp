@@ -93,6 +93,9 @@ TEST_CASE("System tray transport remains disconnected until the application uses
 }
 
 TEST_CASE("System tray rejects worker-thread operations before native side effects") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   TestPlatform platform;
   platform.system_tray_transport = std::make_shared<TestSystemTrayTransport>();
   const auto transport = platform.system_tray_transport;

@@ -1225,6 +1225,12 @@ public:
     RequestFrameAt(Now());
   }
 
+  void FontsChanged() {
+    if (!IsInitialized()) return;
+    renderer_.InvalidateTextMetrics();
+    InternalAccess::InvalidateTextMetrics(*this);
+  }
+
 private:
   void Schedule(double deadline) {
     ScheduleWebFrame(session_id_, deadline);
@@ -1336,6 +1342,7 @@ void StopWebApplicationHost() {
   });
   Sessions().clear();
   WebApplication().reset();
+  ResetWebFonts();
 }
 
 /// Requests application shutdown; StopWebApplicationHost releases the owner when shared retirement completes.
@@ -1417,6 +1424,14 @@ EMSCRIPTEN_KEEPALIVE void huxerui_web_system_theme(std::uintptr_t session_id, bo
 
 EMSCRIPTEN_KEEPALIVE void huxerui_web_image_ready(std::uintptr_t session_id) {
   huxerui::detail::DispatchWebSession(session_id, "image update", [](auto& platform) { platform.ImageReady(); });
+}
+
+EMSCRIPTEN_KEEPALIVE void huxerui_web_fonts_changed() {
+  std::vector<std::uintptr_t> ids;
+  for (const auto& entry : huxerui::detail::Sessions()) ids.push_back(entry.first);
+  for (const auto id : ids) {
+    huxerui::detail::DispatchWebSession(id, "font update", [](auto& platform) { platform.FontsChanged(); });
+  }
 }
 
 EMSCRIPTEN_KEEPALIVE void huxerui_web_pointer(std::uintptr_t session_id, int type, std::int32_t pointer_id, float x,

@@ -21,6 +21,8 @@ TEST_CASE("HuxerUICliLinuxEnvironmentDiagnosisOwnsToolChecks") {
   REQUIRE(has_linux_diagnostic("pkg:epoxy"));
   REQUIRE(has_linux_diagnostic("pkg:gio-2.0"));
   REQUIRE(has_linux_diagnostic("pkg:libsoup-3.0"));
+  REQUIRE(has_linux_diagnostic("pkg:pangoft2"));
+  REQUIRE(has_linux_diagnostic("pkg:fontconfig"));
   const auto gtk_diagnostic = std::find_if(
       linux_diagnostics.begin(),
       linux_diagnostics.end(),

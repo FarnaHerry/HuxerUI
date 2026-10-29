@@ -41,6 +41,9 @@ struct ViewSpec;
 
 struct TextMeasurerService {
   TextMeasurer* measurer = nullptr;
+#if defined(__EMSCRIPTEN__)
+  std::shared_ptr<CompositionDependency> dependency;
+#endif
 };
 
 struct ScrollBarBinding {

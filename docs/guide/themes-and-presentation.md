@@ -20,6 +20,28 @@ return FlatDarkTheme {
 Pass a customized `ThemeSpec` when an application needs different tokens while preserving the selected theme system.
 Nested themes affect only their subtree.
 
+Set `TypographyScheme::family` to reuse one custom family across theme-derived text and component styles.
+The existing typography sizes remain independently configurable:
+
+```cpp
+auto family = FontFamily::FromResources({
+  app::raw::brand_regular_ttf,
+  app::raw::brand_bold_ttf,
+});
+auto theme = MaterialLightThemeSpec();
+theme.typography.family = family;
+theme.typography.body_medium = 16.0F;
+return MaterialTheme {
+  std::move(theme),
+  Content(),
+};
+```
+
+These generated resource names assume `raw/brand_regular.ttf` and `raw/brand_bold.ttf` in the application's resource directory.
+Create file/byte families once and reuse the value; resource families are cached by the application resources owner.
+Explicit `TextStyle::font` and complete attributed-span Font overrides keep their own family; size, weight, or slant overrides alone preserve the inherited family.
+See [custom fonts](components.md#custom-fonts) for sources, matching, and Web readiness behavior.
+
 `ColorScheme::primary_container` and `on_primary_container` describe a tonal primary surface and its foreground; they are distinct from the stronger `primary` and `on_primary` pair.
 `tertiary_container` and `on_tertiary_container` provide a contrasting tonal accent, used by the Material TimePicker's AM/PM selection.
 Customize each container and its foreground together to preserve readable contrast in light and dark themes.

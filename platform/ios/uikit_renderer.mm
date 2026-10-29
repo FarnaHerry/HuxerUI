@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <concepts>
 #include <functional>
 #include <limits>
@@ -29,6 +30,7 @@
 #include "resources/resource_internal.h"
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
+#include "text/font_internal.h"
 
 namespace huxerui::detail {
 
@@ -179,8 +181,7 @@ void CombineHash(std::size_t& seed, std::size_t value) noexcept {
 }
 
 std::size_t HashFont(const Font& font) noexcept {
-  std::size_t result = std::hash<FontFamilyKind>{}(font.FamilyKind());
-  CombineHash(result, std::hash<std::string_view>{}(font.FamilyName()));
+  std::size_t result = HashFontFamily(font.Family());
   CombineHash(result, std::hash<float>{}(font.Size()));
   CombineHash(result, std::hash<FontWeight>{}(font.Weight()));
   CombineHash(result, std::hash<FontSlant>{}(font.Slant()));
@@ -204,8 +205,24 @@ CFStringRef CreateString(std::string_view text) {
 }
 
 CTFontRef CreateFont(const Font& font) {
+  if (auto face = ResolveFontFace(font)) {
+    // The provider keeps bytes alive for native fonts and layouts that outlive their renderer cache.
+    auto* owner = new std::shared_ptr<const FontFaceData>(face);
+    CGDataProviderRef provider = CGDataProviderCreateWithData(owner, face->bytes.data(), face->bytes.size(),
+        [](void* info, const void*, size_t) { delete static_cast<std::shared_ptr<const FontFaceData>*>(info); });
+    if (!provider) delete owner;
+    CGFontRef graphics_font = provider ? CGFontCreateWithDataProvider(provider) : nullptr;
+    if (provider) CGDataProviderRelease(provider);
+    CTFontRef result = graphics_font
+        ? CTFontCreateWithGraphicsFont(graphics_font, static_cast<CGFloat>(font.Size()), nullptr, nullptr) : nullptr;
+    if (graphics_font) CGFontRelease(graphics_font);
+    if (result) return result;
+    std::fputs("HuxerUI could not decode a custom font; using the system font\n", stderr);
+    return CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, static_cast<CGFloat>(font.Size()), nullptr);
+  }
   CTFontRef base = nullptr;
   switch (font.FamilyKind()) {
+  case FontFamilyKind::Custom:
   case FontFamilyKind::System:
     base = CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, static_cast<CGFloat>(font.Size()), nullptr);
     break;

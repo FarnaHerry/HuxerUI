@@ -12,20 +12,20 @@ Application developers using a released SDK should follow [Getting Started](../g
 
 Apple builds require Xcode 26 or later for the standard library's `std::stop_token` and `std::stop_source` support without experimental-library flags. Release CI selects Xcode 26.2 explicitly through `DEVELOPER_DIR` for iOS artifacts and both macOS architectures, including their host-tool builds. For a local build, select a supported Xcode before configuring a fresh build directory. The build-machine requirement is separate from the deployment targets, which remain iOS 15.0 and macOS 12.0.
 
-Linux additionally requires GTK 4.14 or later, libepoxy, Pango, Cairo, GIO, and libsoup 3 development packages discoverable through pkg-config.
+Linux additionally requires GTK 4.14 or later, libepoxy, Pango (including pangoft2), Fontconfig, Cairo, GIO, and libsoup 3 development packages discoverable through pkg-config.
 Linux release CI uses GCC 14. Select it explicitly with `CC=gcc-14 CXX=g++-14` when configuring a fresh build directory; GCC 13 can encounter an internal compiler error in the coroutine-based local-notification example.
 
 Debian or Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install build-essential cmake ninja-build pkg-config libgtk-4-dev libepoxy-dev libsoup-3.0-dev
+sudo apt install build-essential cmake ninja-build pkg-config libgtk-4-dev libepoxy-dev libsoup-3.0-dev libpango1.0-dev libfontconfig1-dev
 ```
 
 Fedora:
 
 ```bash
-sudo dnf install gcc-c++ cmake ninja-build pkgconf-pkg-config gtk4-devel libepoxy-devel libsoup3-devel
+sudo dnf install gcc-c++ cmake ninja-build pkgconf-pkg-config gtk4-devel libepoxy-devel libsoup3-devel pango-devel fontconfig-devel
 ```
 
 ## Configure and build
@@ -70,7 +70,9 @@ ctest --test-dir build -L native --output-on-failure
 
 The first command runs common contracts, tools, and general build integration. `portable` selects platform-specific conversion and CLI contract tests that can run on the development host; it does not claim native device coverage. The Web JavaScript bridge and file-picker contracts also run in this group when Node.js is available, using test doubles for browser services. `native` selects integration with the configured platform's services, renderer, and filesystem. Platform names are additional labels for focused selection. Android Instrumentation and Apple bridge checks remain owned by their device or platform build workflows. Common, portable, and native results are reported separately in SDK CI. Public header compile checks also have separate common and platform targets.
 
-Emscripten C++ test artifacts currently inherit the browser application's modularized ES-module settings. Loading those modules with Node.js does not invoke the Catch2 entry point, so a successful default CTest process is not evidence that their assertions ran. Until an executable Web test harness is provided, distinguish Web C++ compile validation from the JavaScript contract tests above.
+Emscripten C++ test suites build as Node.js `.cjs` executables that run Catch2's `main` and return its exit status to CTest through `CMAKE_CROSSCOMPILING_EMULATOR`. They use the host filesystem for test fixtures and omit browser IDBFS startup. `HuxerUIWebTestFailureExitTests` runs a hidden, deliberately failing assertion and requires a nonzero exit status, guarding against modules that load without executing tests. Use `ctest -V` to inspect the actual Catch2 case and assertion counts. These Node.js suites do not establish browser or IndexedDB integration coverage; Web applications still build as modularized ES modules with browser storage initialization.
+
+Only the Web test executables enable Asyncify so bounded asynchronous waits can yield to the event loop without holding queue locks. Their Node.js emulator command appends `--stack-size=4096` to allow deep scene regression tests to run with a 4 MiB V8 call stack; this is separate from the Wasm and Asyncify saved-stack sizes. Resource and filesystem tests exercise their real Web operation queues. Tests whose contract requires a second thread report a Catch2 skip on Web; mixed tests retain their single-threaded assertions, and transport callbacks use the application thread. Native builds retain cross-thread and case-folded filesystem alias coverage; Node's host filesystem does not model Web virtual filesystem casing. The Web runner checks both callback delivery and timeout behavior, and its deliberate assertion failure occurs after yielding so CTest also verifies the resumed exit status.
 
 Group cases around one observable contract, using sections or parameterized inputs for its variations. Keep independent lifecycle and error boundaries distinguishable, share only fixtures with matching ownership, and do not add cases merely to increase the count. Run focused test executables directly when changing a narrow subsystem.
 Host CMake integration and script tests are registered in native builds; cross-compilation builds retain their target executable suites and profiling artifact checks. The desktop runtime-deployment tests build and run relocated dependency fixtures; Linux requires `patchelf` 0.19.0 or newer and binutils, and Windows requires the toolchain's Release VC++ redistributables.

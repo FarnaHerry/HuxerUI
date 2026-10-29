@@ -3,8 +3,11 @@
 
 #include "linux_renderer.h"
 
+#include <fontconfig/fontconfig.h>
+#include <glib/gstdio.h>
 #include <gtk/gtk.h>
 #include <pango/pangocairo.h>
+#include <pango/pangofc-fontmap.h>
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -35,9 +39,124 @@
 #include "resources/resource_internal.h"
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
+#include "text/font_internal.h"
 
 namespace huxerui::detail {
 namespace {
+
+// The font map retains snapshots until its last paragraph and native font release it.
+class LinuxFontStore {
+public:
+  struct Entry {
+    std::weak_ptr<const FontFaceData> face;
+    std::string path;
+    bool loaded = false;
+  };
+
+  LinuxFontStore() : configuration_(FcInitLoadConfigAndFonts()) {
+    if (!configuration_)
+      throw std::runtime_error("HuxerUI could not create a private font configuration");
+  }
+  ~LinuxFontStore() {
+    FcConfigDestroy(configuration_);
+    for (const auto& entry : entries_)
+      if (!entry.second.path.empty())
+        g_unlink(entry.second.path.c_str());
+  }
+
+  FcConfig* Configuration() const noexcept {
+    return configuration_;
+  }
+
+  std::string Prepare(PangoFontMap* map, const std::shared_ptr<const FontFaceData>& face) {
+    if (const auto found = entries_.find(face->identity); found != entries_.end()) {
+      return found->second.loaded ? Alias(face->identity) : std::string{};
+    }
+    bool pruned = false;
+    for (auto entry = entries_.begin(); entry != entries_.end();) {
+      if (entry->second.face.expired()) {
+        if (!entry->second.path.empty())
+          g_unlink(entry->second.path.c_str());
+        entry = entries_.erase(entry);
+        pruned = true;
+      } else {
+        ++entry;
+      }
+    }
+    if (pruned) {
+      FcConfigAppFontClear(configuration_);
+      for (const auto& entry : entries_)
+        if (entry.second.loaded)
+          Add(entry.first, entry.second.path);
+    }
+    Entry entry{face, {}, false};
+    gchar* path = nullptr;
+    GError* error = nullptr;
+    const int descriptor = g_file_open_tmp("huxerui-font-XXXXXX", &path, &error);
+    if (descriptor >= 0) {
+      g_close(descriptor, nullptr);
+      entry.path = path;
+      g_free(path);
+      if (face->bytes.size() <= static_cast<std::size_t>(G_MAXSSIZE) &&
+          g_file_set_contents(entry.path.c_str(), reinterpret_cast<const char*>(face->bytes.data()),
+                              static_cast<gssize>(face->bytes.size()), &error)) {
+        entry.loaded = Add(face->identity, entry.path);
+      }
+    }
+    if (!entry.loaded) {
+      g_warning("HuxerUI could not decode a custom font; using the system font: %s",
+                error ? error->message : "font rejected");
+      if (!entry.path.empty())
+        g_unlink(entry.path.c_str());
+      entry.path.clear();
+    }
+    if (error)
+      g_error_free(error);
+    const bool loaded = entry.loaded;
+    entries_.emplace(face->identity, std::move(entry));
+    pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(map));
+    return loaded ? Alias(face->identity) : std::string{};
+  }
+
+private:
+  static std::string Alias(std::uint64_t identity) {
+    return "huxerui_font_" + std::to_string(identity);
+  }
+
+  bool Add(std::uint64_t identity, const std::string& path) {
+    if (!FcConfigAppFontAddFile(configuration_, reinterpret_cast<const FcChar8*>(path.c_str())))
+      return false;
+    const auto alias = Alias(identity);
+    FcFontSet* fonts = FcConfigGetFonts(configuration_, FcSetApplication);
+    bool matched = false;
+    for (int index = 0; fonts && index < fonts->nfont; ++index) {
+      FcChar8* file = nullptr;
+      FcPattern* pattern = fonts->fonts[index];
+      if (FcPatternGetString(pattern, FC_FILE, 0, &file) == FcResultMatch &&
+          path == reinterpret_cast<const char*>(file)) {
+        // A private alias prevents installed fonts with the same family name from replacing this exact face.
+        FcPatternDel(pattern, FC_FAMILY);
+        FcPatternDel(pattern, FC_FAMILYLANG);
+        if (!FcPatternAddString(pattern, FC_FAMILY, reinterpret_cast<const FcChar8*>(alias.c_str())))
+          return false;
+        matched = true;
+      }
+    }
+    return matched;
+  }
+
+  FcConfig* configuration_;
+  std::unordered_map<std::uint64_t, Entry> entries_;
+};
+
+PangoFontMap* CreateLinuxFontMap() {
+  auto store = std::make_unique<LinuxFontStore>();
+  PangoFontMap* map = pango_cairo_font_map_new();
+  pango_fc_font_map_set_config(PANGO_FC_FONT_MAP(map), store->Configuration());
+  g_object_set_data_full(G_OBJECT(map), "huxerui-fonts", store.release(),
+                         [](gpointer data) { delete static_cast<LinuxFontStore*>(data); });
+  return map;
+}
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTau = 2.0 * kPi;
@@ -58,9 +177,17 @@ PangoDirection PangoTextDirection(TextDirection direction) noexcept {
   return PANGO_DIRECTION_NEUTRAL;
 }
 
-PangoFontDescription* CreateFontDescription(const Font& font) {
+PangoFontDescription* CreateFontDescription(const Font& font, PangoContext* context) {
   PangoFontDescription* description = pango_font_description_new();
+  const auto face = ResolveFontFace(font);
   switch (font.FamilyKind()) {
+  case FontFamilyKind::Custom: {
+    PangoFontMap* map = pango_context_get_font_map(context);
+    auto* store = static_cast<LinuxFontStore*>(g_object_get_data(G_OBJECT(map), "huxerui-fonts"));
+    const auto name = store && face ? store->Prepare(map, face) : std::string{};
+    pango_font_description_set_family(description, name.empty() ? "sans-serif" : name.c_str());
+    break;
+  }
   case FontFamilyKind::System:
     pango_font_description_set_family(description, "sans-serif");
     break;
@@ -75,11 +202,12 @@ PangoFontDescription* CreateFontDescription(const Font& font) {
       description,
       std::max(0.0F, font.Size()) * static_cast<float>(PANGO_SCALE)
   );
-  pango_font_description_set_weight(description, static_cast<PangoWeight>(font.Weight()));
+  pango_font_description_set_weight(description, static_cast<PangoWeight>(face ? face->weight : static_cast<unsigned>(font.Weight())));
   pango_font_description_set_style(
       description,
-      font.Slant() == FontSlant::Italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL
+      (face ? face->slant : font.Slant()) == FontSlant::Italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL
   );
+  if (face) pango_font_description_set_stretch(description, static_cast<PangoStretch>(face->width - 1));
   return description;
 }
 
@@ -108,7 +236,7 @@ void ConfigureLayout(
     throw std::invalid_argument("HuxerUI Linux text is too large");
   }
   pango_layout_set_text(layout, text.data(), static_cast<int>(text.size()));
-  PangoFontDescription* description = CreateFontDescription(style.font);
+  PangoFontDescription* description = CreateFontDescription(style.font, pango_layout_get_context(layout));
   pango_layout_set_font_description(layout, description);
   pango_font_description_free(description);
   PangoAttrList* attributes = CreateTextAttributes(style, options.shaping);
@@ -154,7 +282,7 @@ void ConfigureLayout(PangoLayout* layout, const AttributedText& text, const Text
       attribute->end_index = static_cast<guint>(run.byte_end);
       pango_attr_list_change(attributes, attribute);
     };
-    PangoFontDescription* font = CreateFontDescription(run.style.font);
+    PangoFontDescription* font = CreateFontDescription(run.style.font, pango_layout_get_context(layout));
     insert(pango_attr_font_desc_new(font));
     pango_font_description_free(font);
     insert(pango_attr_underline_new(
@@ -240,7 +368,7 @@ class PangoTextLayout final : public TextLayout {
 public:
   PangoTextLayout(PangoContext* context, const AttributedText& text, const TextStyle& style, float max_width,
       const TextLayoutOptions& options)
-      : text_(text.PlainText()) {
+      : text_(text.PlainText()), retained_text_(text), retained_font_(style.font) {
     PangoFontMap* font_map = pango_context_get_font_map(context);
     // Retained interaction geometry must not inherit later direction or locale changes on the renderer's context.
     PangoContext* layout_context = pango_font_map_create_context(font_map);
@@ -434,6 +562,8 @@ private:
   }
 
   std::string text_;
+  AttributedText retained_text_;
+  Font retained_font_;
   PangoLayout* layout_ = nullptr;
   TextLayoutMetrics metrics_;
   std::vector<TextOffset> caret_offsets_;
@@ -634,8 +764,9 @@ struct LinuxRenderer::State {
   };
 
   State() {
-    PangoFontMap* font_map = pango_cairo_font_map_get_default();
+    PangoFontMap* font_map = CreateLinuxFontMap();
     context = pango_font_map_create_context(font_map);
+    g_object_unref(font_map);
     pango_cairo_context_set_resolution(context, 96.0);
   }
 
@@ -2523,7 +2654,7 @@ void LinuxRenderer::Discard() noexcept {
 }
 
 FontMetrics LinuxRenderer::Metrics(const Font& font) {
-  PangoFontDescription* description = CreateFontDescription(font);
+  PangoFontDescription* description = CreateFontDescription(font, state_->context);
   PangoFontMetrics* metrics = pango_context_get_metrics(state_->context, description, nullptr);
   pango_font_description_free(description);
   const float ascent = PangoUnits(pango_font_metrics_get_ascent(metrics));

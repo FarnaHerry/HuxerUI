@@ -29,7 +29,12 @@ if (HUXERUI_WEB_TEST_COMMAND)
                     "${CMAKE_CURRENT_SOURCE_DIR}/backdrop_capture.js"
                     "${HUXERUI_PROJECT_DIR}/platform/web/web_renderer.cpp"
     )
-    set_tests_properties(HuxerUIWebPlatformRegistryTests HuxerUIWebFilePickerTests HuxerUIWebBackdropCaptureTests
+    add_test(NAME HuxerUIWebFontTests
+            COMMAND ${HUXERUI_WEB_TEST_COMMAND}
+                    "${CMAKE_CURRENT_SOURCE_DIR}/font.js"
+                    "${HUXERUI_PROJECT_DIR}/platform/web/web_renderer.cpp"
+    )
+    set_tests_properties(HuxerUIWebPlatformRegistryTests HuxerUIWebFilePickerTests HuxerUIWebBackdropCaptureTests HuxerUIWebFontTests
             PROPERTIES LABELS "platform;web;portable"
     )
 else ()

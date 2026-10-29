@@ -1,4 +1,5 @@
 #include "runtime_test_support.h"
+#include "font_test_support.h"
 
 #include <limits>
 #include <thread>
@@ -697,6 +698,7 @@ TEST_CASE("System brightness updates validate thread lifetime and enum values") 
   {
     UiWindow window(SystemThemeApp, platform);
     REQUIRE_THROWS_AS(platform.UpdateSystemThemeBrightness(static_cast<ThemeBrightness>(99)), std::invalid_argument);
+#if !defined(__EMSCRIPTEN__)
     bool rejected = false;
     std::thread worker([&] {
       try { platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark); }
@@ -704,6 +706,7 @@ TEST_CASE("System brightness updates validate thread lifetime and enum values") 
     });
     worker.join();
     REQUIRE(rejected);
+#endif
   }
   REQUIRE_THROWS_AS(platform.UpdateSystemThemeBrightness(ThemeBrightness::Dark), std::logic_error);
   TestPlatform invalid;
@@ -833,6 +836,40 @@ TEST_CASE("Open bottom sheet keeps content state when theme geometry inserts a d
   REQUIRE(changed_surface.has_value());
   REQUIRE(changed_surface->width == Catch::Approx(280.0F));
   REQUIRE(sheet->Dismiss(id));
+}
+
+TEST_CASE("ThemeTypographyFamilyReachesComponentStylesWithoutReplacingExplicitFonts") {
+  auto spec = FlatLightThemeSpec();
+  const auto family = TestFontFamily();
+  spec.typography.family = family;
+  for (const auto role : {TextRole::Body, TextRole::Title, TextRole::Label}) {
+    REQUIRE(detail::DefaultTextStyle(spec, role).font.Family() == family);
+  }
+  REQUIRE(detail::DefaultButtonStyle(spec).label_style.font.Family() == family);
+  REQUIRE(detail::DefaultTextFieldStyle(spec).text_style.font.Family() == family);
+  REQUIRE(detail::DefaultTextFieldStyle(spec).placeholder_style.font.Family() == family);
+  REQUIRE(ThemeDefinitionValue<DialogStyle>(FlatThemeDefinition(spec)).title_style.font.Family() == family);
+  {
+    const auto definition = MaterialThemeDefinition(spec);
+    REQUIRE(ThemeDefinitionValue<ButtonStyle>(definition).label_style.font.Family() == family);
+    REQUIRE(ThemeDefinitionValue<TextFieldStyle>(definition).text_style.font.Family() == family);
+    REQUIRE(ThemeDefinitionValue<TextFieldStyle>(definition).placeholder_style.font.Family() == family);
+    REQUIRE(ThemeDefinitionValue<DialogStyle>(definition).title_style.font.Family() == family);
+    REQUIRE(ThemeDefinitionValue<ChipStyle>(definition).label_style.font.Family() == family);
+  }
+  TestPlatform platform;
+  UiWindow runtime{[]() -> View {
+    auto spec = FlatLightThemeSpec();
+    spec.typography.family = TestFontFamily();
+    return Theme {ThemeDefinition{spec}, Column {
+      Text("inherited"),
+      Text("explicit").Style(TextStyle{Font::Monospace(13.0F), Color::Black()}),
+    }};
+  }, platform};
+  runtime.SetWindowMetrics({.viewport = {200.0F, 100.0F}});
+  const auto& frame = runtime.BuildFrame();
+  REQUIRE(FindText(frame, "inherited")->style.font.Family() == family);
+  REQUIRE(FindText(frame, "explicit")->style.font == Font::Monospace(13.0F));
 }
 
 } // namespace huxerui::test

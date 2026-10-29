@@ -1,4 +1,5 @@
 #include "runtime_test_support.h"
+#include "async_test_support.h"
 
 #include <algorithm>
 #include <array>
@@ -24,6 +25,7 @@
 #include <vector>
 
 #include "image_test_support.h"
+#include "font_test_support.h"
 #include "resources/resource_internal.h"
 #include "components/text_field_internal.h"
 #include "io/stream_internal.h"
@@ -1737,7 +1739,7 @@ struct ResourceTaskQueue {
       std::function<void()> task;
       {
         std::unique_lock lock(mutex);
-        REQUIRE(condition.wait_until(lock, deadline, [&] { return !tasks.empty(); }));
+        REQUIRE(WaitForTestCondition(condition, lock, deadline, [&] { return !tasks.empty(); }));
         task = std::move(tasks.front());
         tasks.pop_front();
       }
@@ -1977,6 +1979,9 @@ TEST_CASE("RawResourceAsyncFailuresAndRetainedMemoryUseTheSameContract") {
 }
 
 TEST_CASE("RawResourceConcurrentCachePublicationPreservesImmutableContents") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   TestResources resources;
   InstallLazyResource(resources);
   auto service = std::make_shared<detail::AppResources>(&resources);
@@ -1994,8 +1999,12 @@ TEST_CASE("RawResourceConcurrentCachePublicationPreservesImmutableContents") {
   REQUIRE(resources.read_counts[std::string(lazy_path)] == reads);
 }
 
-TEST_CASE("RawResourceCancellationReleasesAnInFlightOpenOrReadWithoutDelivery") {
+TEST_CASE("RawResourceCancellationReleasesPendingOpenOrReadWithoutDelivery") {
   const bool opening = GENERATE(true, false);
+#if defined(__EMSCRIPTEN__)
+  // Web cancellation runs before the queued operation; native workers can be canceled while blocked inside it.
+  const auto block = [] {};
+#else
   struct Gate {
     void Block() {
       std::unique_lock lock(mutex);
@@ -2009,16 +2018,18 @@ TEST_CASE("RawResourceCancellationReleasesAnInFlightOpenOrReadWithoutDelivery") 
     bool released = false;
   };
   auto gate = std::make_shared<Gate>();
+  const auto block = [gate] { gate->Block(); };
+#endif
   auto probe = std::make_shared<ResourceProbe>();
   if (!opening) {
-    probe->before_read = [gate] { gate->Block(); };
+    probe->before_read = block;
   }
   ResourceTaskQueue queue;
   TestResources resources;
   InstallLazyResource(resources);
-  resources.open_payload = [gate, probe, opening] {
+  resources.open_payload = [block, probe, opening] {
     if (opening) {
-      gate->Block();
+      block();
     }
     return detail::StreamAccess::MakeInputStream(std::make_shared<ProbedResourceInput>(probe));
   };
@@ -2045,11 +2056,20 @@ TEST_CASE("RawResourceCancellationReleasesAnInFlightOpenOrReadWithoutDelivery") 
     delivered = true;
   });
   queue.RunUntil([&] { return opening ? started : opened; });
+#if !defined(__EMSCRIPTEN__)
   {
     std::unique_lock lock(gate->mutex);
     REQUIRE(gate->condition.wait_for(lock, std::chrono::seconds(5), [&] { return gate->entered; }));
   }
+#endif
   task.Cancel();
+#if defined(__EMSCRIPTEN__)
+  {
+    std::unique_lock lock(queue.mutex);
+    REQUIRE(WaitForTestCondition(queue.condition, lock, std::chrono::steady_clock::now() + std::chrono::seconds(5),
+                                 [&] { return probe->released == 1; }));
+  }
+#else
   {
     std::scoped_lock lock(gate->mutex);
     gate->released = true;
@@ -2059,6 +2079,7 @@ TEST_CASE("RawResourceCancellationReleasesAnInFlightOpenOrReadWithoutDelivery") 
   while (probe->released == 0 && std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+#endif
   REQUIRE(probe->released == 1);
   REQUIRE_FALSE(delivered);
   if (opening) {
@@ -2088,6 +2109,41 @@ TEST_CASE("RawResourceRuntimeDestructionDisconnectsEvenRetainedServices") {
   REQUIRE(retained_service != nullptr);
   REQUIRE_THROWS_AS(asset.OpenRead(), std::logic_error);
   REQUIRE(detail::ReadStreamBytes(std::move(*opened)).size() == 3);
+}
+
+TEST_CASE("CustomFontResourcesLoadWithoutAWindowAndRetainSnapshotsAfterShutdown") {
+  TestResources resources;
+  const RawResource regular("test", "raw/regular");
+  const RawResource bold("test", "raw/bold");
+  resources.assets[std::string(detail::resource_index_path)] = EncodeIndex({
+      {detail::ResourceEntryKind::Raw, "raw/regular", "huxerui/test/raw/regular.ttf", "font/ttf", {}, {}},
+      {detail::ResourceEntryKind::Raw, "raw/bold", "huxerui/test/raw/bold.ttf", "font/ttf", {}, {}},
+  });
+  resources.assets["huxerui/test/raw/regular.ttf"] = RawAsset::FromBytes(TestFontBytes());
+  resources.assets["huxerui/test/raw/bold.ttf"] = RawAsset::FromBytes(TestFontBytes(FontWeight::Bold));
+  FontFamily retained;
+  {
+    TestPlatform platform(&resources);
+    Application application([]() -> View { return Text("unused"); });
+    RuntimeLifetime lifetime(application, platform, std::nullopt);
+    retained = FontFamily::FromResources({regular, bold});
+    REQUIRE(retained == FontFamily::FromResources({bold, regular}));
+    REQUIRE(Font::FromResource(regular) == Font::FromBytes(TestFontBytes()));
+    REQUIRE(resources.read_counts["huxerui/test/raw/regular.ttf"] == 1);
+    REQUIRE(resources.read_counts["huxerui/test/raw/bold.ttf"] == 1);
+#if !defined(__EMSCRIPTEN__)
+    bool rejected = false;
+    std::thread worker([&] {
+      try { static_cast<void>(FontFamily::FromResources({regular})); }
+      catch (const std::logic_error&) { rejected = true; }
+    });
+    worker.join();
+    REQUIRE(rejected);
+#endif
+    REQUIRE_THROWS_AS(Font::FromResource(RawResource("test", "raw/missing")), std::logic_error);
+  }
+  REQUIRE(retained == FontFamily::FromBytes({TestFontBytes(), TestFontBytes(FontWeight::Bold)}));
+  REQUIRE_THROWS_AS(Font::FromResource(regular), std::logic_error);
 }
 
 } // namespace huxerui::test

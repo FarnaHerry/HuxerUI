@@ -13,7 +13,7 @@ The implementation uses typed keys, exact generated namespaces, ordered package 
 - Resolve localized strings through the existing Environment and root-service model.
 - Support translatable positional formatting whose arguments may be reordered or repeated by each locale.
 - Preserve retained PaintSequence reuse, local invalidation, and platform-neutral RenderScene data.
-- Leave room for library resources, custom fonts, plural messages, and additional image formats without exposing a generic resource hierarchy.
+- Reuse raw resource storage for custom fonts and leave room for plural messages and additional image formats without exposing a generic resource hierarchy.
 
 ## Non-goals
 
@@ -509,7 +509,9 @@ Opening a missing default asset throws `std::logic_error`; its complete-buffer r
 A valid zero-length resource remains distinct from a missing payload, which fails when opened.
 Equality compares memory contents or package source/path/MIME identity without I/O; cache publication does not change equality, and memory and package sources compare unequal.
 
-Custom fonts may later use FontResource and the same bundle storage without turning every resource into a public template specialization.
+Custom fonts use existing RawResource identities and package storage through `FontFamily::FromResources()` and the single-source `Font::FromResource()` convenience.
+AppResources caches the parsed immutable families on the application thread; these factories work without a window and return snapshots independent of later Runtime shutdown.
+There is no FontResource type, font-specific resource directory, or resource-index format change; matching and native loading belong to the [text subsystem](text.md#font-and-style).
 
 ## Image component
 

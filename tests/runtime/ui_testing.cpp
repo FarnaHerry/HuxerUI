@@ -396,6 +396,9 @@ TEST_CASE("Windowless resources use generated packages and explicit configuratio
 }
 
 TEST_CASE("Windowless queries enforce creating-thread access", "[ui-testing]") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   Application application(Counter, {.show_debug_overlay = false});
   UiTest ui(application);
   auto query = ui.Find(UiSelector::Text("0"));
@@ -460,8 +463,12 @@ TEST_CASE("Windowless shutdown delivers channel cancellation and disposal on its
     .dispose = [payload, &called] { called = true; },
   });
   payload.reset();
+#if defined(__EMSCRIPTEN__)
+  probe.late_endpoint.Close();
+#else
   std::thread worker([&] { probe.late_endpoint.Close(); });
   worker.join();
+#endif
   probe.late_endpoint = {};
   REQUIRE_FALSE(called);
   REQUIRE(retained.expired());

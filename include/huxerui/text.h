@@ -18,8 +18,12 @@
 
 namespace huxerui {
 
+class File;
+class RawResource;
+
 namespace detail {
 struct InternalAccess;
+struct FontFamilyData;
 }
 
 /// An offset measured in UTF-16 code units, not UTF-8 bytes or grapheme clusters.
@@ -79,6 +83,63 @@ enum class FontFamilyKind {
   Monospace,
   /// An explicitly named family, with platform fallback when unavailable.
   Named,
+  /// Immutable application-supplied font data, independent of installed family names.
+  Custom,
+};
+
+/// An immutable font family without a requested size, weight, or slant.
+/// Custom families contain one or more static, single-face OpenType/TrueType files of the same family and width.
+/// Copies of custom families share their data; source-file changes do not alter an existing family.
+/// Custom font construction validates metadata; native decoding can still fail later and use platform fallback.
+class FontFamily {
+public:
+  /// Constructs a system-family request.
+  FontFamily() = default;
+  /// Requests the platform's default proportional UI family.
+  static FontFamily System();
+  /// Requests the platform's default fixed-width family.
+  static FontFamily Monospace();
+  /// Requests an installed family, with platform fallback when unavailable.
+  /// @throws std::invalid_argument If name is empty.
+  static FontFamily Named(std::string name);
+
+  /// Reads and caches a custom family through the current Runtime's Resources service; reads can block.
+  /// Requires the application thread, but no window or composition. Returned snapshots survive Runtime shutdown.
+  /// @param resources Nonempty list of font resources.
+  /// @throws std::invalid_argument If input is empty or violates FromBytes() validation rules.
+  /// @throws std::logic_error If resources or the application context are unavailable, or called off-thread.
+  /// @throws std::runtime_error If an opened resource stream reports a read failure.
+  /// @see FromBytes() for shared font-format and family-validation rules.
+  static FontFamily FromResources(std::vector<RawResource> resources);
+  /// Synchronously reads files into an immutable custom-family snapshot.
+  /// No Runtime is required; this may run on a worker thread.
+  /// Use File::ReadBytesAsync() followed by FromBytes() when blocking is inappropriate.
+  /// @param files Nonempty list of font files.
+  /// @throws std::invalid_argument If input is empty or violates FromBytes() validation rules.
+  /// @throws std::runtime_error If a file cannot be read.
+  /// @see FromBytes() for shared font-format and family-validation rules.
+  static FontFamily FromFiles(std::vector<File> files);
+  /// Retains owned font bytes and validates metadata, without needing a Runtime or loading native fonts.
+  /// This may run on a worker thread. File order does not affect value equality.
+  /// @param files Nonempty list of complete static, single-face OpenType/TrueType file contents.
+  /// @throws std::invalid_argument If input is empty, data is unsupported/malformed, families or widths differ,
+  /// or two faces have the same weight and slant.
+  static FontFamily FromBytes(std::vector<Bytes> files);
+
+  /// Returns the requested family category, independent of native fallback.
+  [[nodiscard]] FontFamilyKind Kind() const noexcept { return kind_; }
+  /// Returns the requested name for Named, or an empty view for all other kinds.
+  /// The view remains valid only while this family's name storage is alive and unchanged.
+  [[nodiscard]] std::string_view Name() const noexcept { return name_; }
+  /// Compares kind and, for Named, the requested name.
+  /// Custom families compare complete face bytes, independent of source paths, input order, or native registration.
+  bool operator==(const FontFamily& other) const noexcept;
+
+private:
+  FontFamilyKind kind_ = FontFamilyKind::System;
+  std::string name_;
+  std::shared_ptr<const detail::FontFamilyData> data_;
+  friend struct detail::InternalAccess;
 };
 
 /// Standard font-weight requests; the platform resolves the closest available face.
@@ -140,6 +201,32 @@ public:
   /// @throws std::invalid_argument If family is empty or size is not finite and positive.
   static Font Named(std::string family, float size = 14.0F);
 
+  /// Constructs a regular, upright request sharing an existing family value, without loading native fonts.
+  /// @param size Finite, positive font size in logical units, not physical pixels.
+  /// @throws std::invalid_argument If size is not finite and positive.
+  static Font FromFamily(FontFamily family, float size = 14.0F);
+  /// Constructs a regular, upright request from one raw resource.
+  /// @param size Finite, positive font size in logical units, not physical pixels.
+  /// @throws std::invalid_argument If size is not finite and positive.
+  /// @see FontFamily::FromResources() for loading, caching, thread requirements, and source errors.
+  static Font FromResource(RawResource resource, float size = 14.0F);
+  /// Constructs a regular, upright request from a snapshot of one file.
+  /// @param size Finite, positive font size in logical units, not physical pixels.
+  /// @throws std::invalid_argument If size is not finite and positive.
+  /// @see FontFamily::FromFiles() for synchronous loading, thread requirements, and source errors.
+  static Font FromFile(const File& file, float size = 14.0F);
+  /// Constructs a regular, upright request from one owned font byte buffer.
+  /// @param size Finite, positive font size in logical units, not physical pixels.
+  /// @throws std::invalid_argument If size is not finite and positive.
+  /// @see FontFamily::FromBytes() for byte ownership, thread requirements, and source validation.
+  static Font FromBytes(Bytes bytes, float size = 14.0F);
+
+  /// Returns a copy with the supplied family, preserving size, weight, and slant.
+  [[nodiscard]] Font WithFamily(FontFamily family) const;
+  /// Returns this request's family by reference.
+  /// The reference is valid only while this Font is alive; copy the family to retain it independently.
+  [[nodiscard]] const FontFamily& Family() const noexcept { return family_; }
+
   /// Returns a resized request, preserving family, weight, and slant.
   /// @param size Finite, positive font size in logical units.
   /// @return The modified font value.
@@ -156,13 +243,13 @@ public:
 
   /// @return The requested family category, not the platform's resolved fallback.
   [[nodiscard]] FontFamilyKind FamilyKind() const noexcept {
-    return family_kind_;
+    return family_.Kind();
   }
 
-  /// @return The requested name for Named fonts, or an empty view for System and Monospace.
+  /// @return The requested name for Named fonts, or an empty view for all other kinds.
   /// The view remains valid only while this Font's family-name storage remains alive and unchanged.
   [[nodiscard]] std::string_view FamilyName() const noexcept {
-    return family_name_;
+    return family_.Name();
   }
 
   /// @return The requested font size in logical units.
@@ -183,10 +270,9 @@ public:
   bool operator==(const Font&) const = default;
 
 private:
-  Font(FontFamilyKind family_kind, std::string family_name, float size);
+  Font(FontFamily family, float size);
 
-  FontFamilyKind family_kind_ = FontFamilyKind::System;
-  std::string family_name_;
+  FontFamily family_;
   float size_ = 14.0F;
   FontWeight weight_ = FontWeight::Regular;
   FontSlant slant_ = FontSlant::Normal;

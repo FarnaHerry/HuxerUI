@@ -10,6 +10,7 @@
 
 #include <huxerui/resource.h>
 #include <huxerui/state.h>
+#include <huxerui/text.h>
 #include <huxerui/vector.h>
 
 namespace huxerui {
@@ -70,6 +71,7 @@ public:
   /// @return An owned effective configuration; ordinary Resources Get methods pass false.
   [[nodiscard]] ResourceConfiguration EffectiveConfiguration(bool observe) const;
   [[nodiscard]] RawAsset Resolve(RawResource resource);
+  [[nodiscard]] FontFamily ResolveFontFamily(std::vector<RawResource> resources);
   [[nodiscard]] ResolvedImageAsset ResolveImage(ImageResource resource, const Locale& locale,
                                                 std::optional<float> display_scale = {});
   [[nodiscard]] ImageAsset Resolve(ImageResource resource, const Locale& locale, std::optional<float> display_scale = {});
@@ -90,6 +92,7 @@ private:
   std::vector<ResourceIndexEntry> entries_;
   std::unordered_map<std::string, RawAsset> raw_cache_;
   std::unordered_map<std::string, ResolvedImageAsset> image_cache_;
+  std::unordered_map<std::string, FontFamily> font_cache_;
 };
 
 std::string ResolveString(const StringVariant& value, AppResources& resources, const Locale& locale);

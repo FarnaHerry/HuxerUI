@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "graphics/shadow_internal.h"
 #include "text/text_input_internal.h"
 #include "text/text_internal.h"
+#include "text/font_internal.h"
 #include "web_external_texture_internal.h"
 #include "web_text_internal.h"
 
@@ -35,6 +37,49 @@ namespace {
 using emscripten::val;
 
 // clang-format off
+EM_JS(bool, PrepareWebFont, (const char* name, const void* data, std::size_t size), {
+  const family = UTF8ToString(name);
+  const fonts = Module.huxerUIFontFaces ||= new Map();
+  let entry = fonts.get(family);
+  if (entry) return entry.ready;
+  entry = { ready: false, font: null };
+  fonts.set(family, entry);
+  try {
+    // Decoding is asynchronous, so the browser must own a copy independent of the Wasm source bytes.
+    const font = new FontFace(family, HEAPU8.slice(data, data + size));
+    entry.font = font;
+    font.load().then(() => {
+      // Map identity rejects retired applications; entry identity rejects fonts released during decoding.
+      if (Module.huxerUIFontFaces !== fonts || fonts.get(family) !== entry) return;
+      document.fonts.add(font);
+      entry.ready = true;
+      if (!fonts.notificationPending) {
+        fonts.notificationPending = true;
+        queueMicrotask(() => {
+          fonts.notificationPending = false;
+          if (Module.huxerUIFontFaces === fonts) Module._huxerui_web_fonts_changed();
+        });
+      }
+    }).catch(error => {
+      if (Module.huxerUIFontFaces === fonts && fonts.get(family) === entry) {
+        console.error("HuxerUI could not decode a custom font; using the system font", error);
+      }
+    });
+  } catch (error) {
+    console.error("HuxerUI could not prepare a custom font; using the system font", error);
+  }
+  return false;
+});
+
+EM_JS(void, ReleaseWebFont, (const char* name), {
+  const family = UTF8ToString(name);
+  const fonts = Module.huxerUIFontFaces;
+  const entry = fonts && fonts.get(family);
+  if (!entry) return;
+  if (entry.font) document.fonts.delete(entry.font);
+  fonts.delete(family);
+});
+
 EM_JS(
     void,
     RequestWebImageDecode,
@@ -154,6 +199,24 @@ EM_JS(emscripten::EM_VAL, CaptureWebBackdrop,
 });
 // clang-format on
 
+auto& WebFontOwners() {
+  static std::unordered_map<std::uint64_t, std::weak_ptr<const FontFaceData>> owners;
+  return owners;
+}
+
+void PruneWebFonts() {
+  auto& owners = WebFontOwners();
+  for (auto entry = owners.begin(); entry != owners.end();) {
+    if (entry->second.expired()) {
+      const auto name = "huxerui_font_" + std::to_string(entry->first);
+      ReleaseWebFont(name.c_str());
+      entry = owners.erase(entry);
+    } else {
+      ++entry;
+    }
+  }
+}
+
 float NumberProperty(const val& object, const char* name, float fallback) {
   const val value = object[name];
   if (value.isUndefined() || value.isNull()) {
@@ -172,8 +235,17 @@ std::string CssColor(Color color) {
 }
 
 std::string CssFont(const Font& font) {
+  if (const auto face = ResolveFontFace(font)) {
+    WebFontOwners().insert_or_assign(face->identity, face);
+    const auto name = "huxerui_font_" + std::to_string(face->identity);
+    if (PrepareWebFont(name.c_str(), face->bytes.data(), face->bytes.size())) {
+      // Each alias already selects one face; neutral CSS descriptors avoid synthetic weight or slant.
+      return "normal 400 " + std::to_string(font.Size()) + "px \"" + name + "\"";
+    }
+  }
   std::string family;
   switch (font.FamilyKind()) {
+  case FontFamilyKind::Custom:
   case FontFamilyKind::System:
     family = "system-ui, sans-serif";
     break;
@@ -829,6 +901,17 @@ WebRenderer::WebRenderer(std::uintptr_t session_id, val canvas)
 
 WebRenderer::~WebRenderer() = default;
 
+void ResetWebFonts() {
+  EM_ASM({
+    const fonts = Module.huxerUIFontFaces;
+    delete Module.huxerUIFontFaces;
+    if (fonts) for (const entry of fonts.values()) {
+      if (entry.font) document.fonts.delete(entry.font);
+    }
+  });
+  WebFontOwners().clear();
+}
+
 void WebRenderer::SetViewport(Size viewport, float display_scale) {
   viewport_ = viewport;
   display_scale_ = std::max(1.0F, display_scale);
@@ -841,11 +924,18 @@ void WebRenderer::Invalidate() noexcept {
   force_redraw_ = true;
 }
 
+void WebRenderer::InvalidateTextMetrics() noexcept {
+  paragraph_cache_.clear();
+  paragraph_bytes_ = 0;
+  Invalidate();
+}
+
 bool WebRenderer::TakeInvalidation() noexcept {
   return std::exchange(force_redraw_, false);
 }
 
 void WebRenderer::BeginFrame() {
+  PruneWebFonts();
   if (external_texture_draw_epoch_ == std::numeric_limits<std::uint64_t>::max()) {
     external_texture_draw_epoch_ = 0;
     for (const std::unique_ptr<CachedExternalTexture>& entry : external_textures_) {

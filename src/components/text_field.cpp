@@ -1,5 +1,8 @@
 #include "runtime/mounted_node_internal.h"
 #include "runtime/gesture_internal.h"
+#if defined(__EMSCRIPTEN__)
+#include "internal_access.h"
+#endif
 #include "graphics/geometry_internal.h"
 #include "graphics/paint_internal.h"
 #include "graphics/effects_internal.h"
@@ -1442,6 +1445,19 @@ private:
   }
 
   void EnsureLayouts(UiWindow& ui_window) {
+#if defined(__EMSCRIPTEN__)
+    const auto revision = detail::InternalAccess::TextMetricsRevision(ui_window);
+    if (text_metrics_revision_ != revision) {
+      text_metrics_revision_ = revision;
+      text_layout_.reset();
+      label_layout_.reset();
+      floating_label_layout_.reset();
+      placeholder_layout_.reset();
+      validation_layout_.reset();
+      preferred_caret_x_.reset();
+      RequestCaretReveal();
+    }
+#endif
     if (!text_layout_) {
       PreparedTextLayout prepared = PrepareTextFieldLayout(
           ui_window,
@@ -2409,6 +2425,9 @@ private:
   TextInputSessionId session_id_ = 0;
   std::uint64_t revision_ = 0;
   std::uint64_t content_revision_ = 0;
+#if defined(__EMSCRIPTEN__)
+  std::uint64_t text_metrics_revision_ = 0;
+#endif
   TextLayoutOptions text_layout_options_;
   float text_layout_width_ = std::numeric_limits<float>::infinity();
   float validation_text_layout_width_ = std::numeric_limits<float>::infinity();

@@ -6,11 +6,11 @@ This is a decision-oriented catalog, not a replacement for the active SDK's publ
 
 | Component | Important contract |
 | --- | --- |
-| `Text` | Takes `StringVariant` and optional `TextRole`; `.Style(TextStyle)` overrides text styling and `.Shaping(TextShapingOptions)` overrides shaping direction or locale. `.Align(TextAlign)` and `.VerticalAlign(TextVerticalAlign)` place the paragraph inside its text rectangle. `Text::Format` supports literal and resource formats. |
+| `Text` | Takes `StringVariant` or `AttributedText` and optional `TextRole`; `.Style(TextStyle)` overrides the paragraph base style and `.Shaping(TextShapingOptions)` overrides shaping direction or locale. `.Align(TextAlign)` and `.VerticalAlign(TextVerticalAlign)` place the paragraph inside its text rectangle. `Text::Format` supports literal and resource formats. See [text and selection](text-input-and-semantics.md#text-and-selection) for spans and links. |
 | `Image` | Takes `ImageVariant` or `std::shared_ptr<ExternalTexture>`; pass generated resources directly for static artwork, then configure `.Fit`, `.Align`, `.Sampling`, and `.Tint`. |
 | `Canvas` | Takes a `CanvasPainter` for genuinely dynamic or generated custom drawing; do not use it instead of a static image resource, ordinary Text, layout, or a built-in control. |
 | `Divider` | Horizontal by default; pass `Axis::Vertical` only when height is bounded. |
-| `SelectionArea` | Wraps content that participates in text selection. |
+| `SelectionArea` | Enables selection across static Text. `.Source(snapshot)` and `Text::SelectionBlock(id)` also support offscreen paragraphs in a virtualized document; see [text and selection](text-input-and-semantics.md#text-and-selection). |
 
 Use the complete container, scrolling, virtualization, navigation-shell, and responsive-layout guidance in [layout-and-ui.md](layout-and-ui.md).
 

@@ -70,7 +70,8 @@ ToastStyle FlatToastStyle(const ThemeSpec& theme) {
   background.alpha *= 0.94F;
   return {
       .background = background,
-      .text_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.inverse_on_surface},
+      .text_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                              theme.colors.inverse_on_surface},
       .padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small + theme.spacing.extra_small),
       .shadow = Shadow{Color::Rgb(0, 0, 0, 0.24F), {}, theme.elevation.medium, 0.0F},
       .corner_radii = CornerRadii{theme.shapes.small},
@@ -86,8 +87,10 @@ SnackBarStyle FlatSnackBarStyle(const ThemeSpec& theme) {
   background.alpha *= 0.98F;
   return {
       .background = background,
-      .message_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.inverse_on_surface},
-      .action_text_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.primary},
+      .message_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                                 theme.colors.inverse_on_surface},
+      .action_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.primary},
       .action_background = Color::Transparent(),
       .action_padding = EdgeInsets::Symmetric(theme.spacing.small + theme.spacing.extra_small, theme.spacing.small),
       .action_minimum_height = 36.0F,
@@ -109,7 +112,8 @@ TooltipStyle FlatTooltipStyle(const ThemeSpec& theme) {
   background.alpha *= 0.94F;
   return {
       .background = background,
-      .text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.inverse_on_surface},
+      .text_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small),
+                              theme.colors.inverse_on_surface},
       .padding = EdgeInsets::Symmetric(theme.spacing.small, theme.spacing.extra_small),
       .shadow = Shadow{Color::Rgb(0, 0, 0, 0.18F), {}, theme.elevation.low, 0.0F},
       .corner_radii = CornerRadii{theme.shapes.extra_small},
@@ -133,10 +137,15 @@ DialogStyle FlatDialogStyle(const ThemeSpec& theme) {
       .background = theme.colors.surface,
       .shadow = Shadow{Color::Rgb(0, 0, 0, 0.24F), {}, theme.elevation.high, 0.0F},
       .title_style =
-          TextStyle{Font::System(theme.typography.title_large).WithWeight(FontWeight::Bold), theme.colors.on_surface},
-      .message_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .positive_action_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_primary},
-      .negative_action_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.title_large).WithWeight(FontWeight::Bold),
+              theme.colors.on_surface},
+      .message_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .positive_action_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_primary},
+      .negative_action_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_surface},
       .positive_action_background = theme.colors.primary,
       .negative_action_background = Color::Transparent(),
       .positive_action_indication = FlatIndication(theme.colors.on_primary, theme),
@@ -157,10 +166,11 @@ DialogStyle FlatDialogStyle(const ThemeSpec& theme) {
       .content_alignment = HorizontalAlignment::Start,
       .action_layout = Axis::Horizontal,
       .action_alignment = HorizontalAlignment::End,
-      .motion = PresentationMotion{
-          .enter = TweenSpec{.duration = theme.motion.normal},
-          .exit = TweenSpec{.duration = theme.motion.fast},
-      },
+      .motion =
+          PresentationMotion{
+              .enter = TweenSpec{.duration = theme.motion.normal},
+              .exit = TweenSpec{.duration = theme.motion.fast},
+          },
   };
 }
 
@@ -214,7 +224,9 @@ TopAppBarStyle FlatTopAppBarStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.surface,
       .title_style =
-          TextStyle{Font::System(theme.typography.title_large).WithWeight(FontWeight::Bold), theme.colors.on_surface},
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.title_large).WithWeight(FontWeight::Bold),
+              theme.colors.on_surface},
       .height = 48.0F,
       .horizontal_padding = theme.spacing.small,
       .title_inset = theme.spacing.large,
@@ -228,7 +240,8 @@ NavigationBarStyle FlatNavigationBarStyle(const ThemeSpec& theme) {
   disabled.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = theme.colors.surface,
-      .label_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.on_surface_variant},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small),
+                               theme.colors.on_surface_variant},
       .selected_content = theme.colors.primary,
       .disabled_content = disabled,
       .indicator = theme.colors.surface_container_highest,
@@ -250,7 +263,8 @@ NavigationPaneStyle FlatNavigationPaneStyle(const ThemeSpec& theme) {
   disabled.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = theme.colors.surface,
-      .label_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface_variant},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                               theme.colors.on_surface_variant},
       .selected_content = theme.colors.primary,
       .disabled_content = disabled,
       .indicator = theme.colors.surface_container_highest,
@@ -318,7 +332,9 @@ ButtonStyle MaterialButtonStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.primary,
       .label_style =
-          TextStyle{Font::System(theme.typography.label_large).WithWeight(FontWeight::Medium), theme.colors.on_primary},
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.label_large).WithWeight(FontWeight::Medium),
+              theme.colors.on_primary},
       .disabled_background = disabled_background,
       .disabled_label = disabled_label,
       .padding = EdgeInsets::Symmetric(24.0F, 8.0F),
@@ -353,7 +369,8 @@ ChipStyle MaterialChipStyle(const ThemeSpec& theme) {
   return {
       .background = Color::Transparent(),
       .selected_background = theme.colors.secondary_container,
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface_variant},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large),
+                               theme.colors.on_surface_variant},
       .selected_label = theme.colors.on_secondary_container,
       .disabled_background = Color::Transparent(),
       .disabled_selected_background = disabled_container,
@@ -377,7 +394,8 @@ SegmentedButtonStyle MaterialSegmentedButtonStyle(const ThemeSpec& theme) {
   return {
       .background = Color::Transparent(),
       .selected_background = theme.colors.secondary_container,
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_surface},
       .selected_label = theme.colors.on_secondary_container,
       .border = Border{theme.colors.outline, 1.0F},
       .selected_border = Border{theme.colors.outline, 1.0F},
@@ -399,10 +417,11 @@ TabsStyle MaterialTabsStyle(const ThemeSpec& theme) {
   divider_color.alpha *= 0.4F;
   return {
       .background = theme.colors.surface,
-      .label_style = TextStyle{
-          Font::System(theme.typography.label_large).WithWeight(FontWeight::Medium),
-          theme.colors.on_surface_variant,
-      },
+      .label_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.label_large).WithWeight(FontWeight::Medium),
+              theme.colors.on_surface_variant,
+          },
       .selected_label = theme.colors.primary,
       .disabled_label = disabled_label,
       .indicator = theme.colors.primary,
@@ -437,7 +456,8 @@ SelectStyle MaterialSelectStyle(const ThemeSpec& theme) {
       .active_item_background = active_item_background,
       .selected_item_background = selected_item_background,
       .validation_error = theme.colors.error,
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .trigger_padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
       .item_padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
       .popup_padding = {},
@@ -471,14 +491,19 @@ DatePickerStyle MaterialDatePickerStyle(const ThemeSpec& theme) {
       .hover_background = hover,
       .border = std::nullopt,
       .validation_error = theme.colors.error,
-      .title_style = TextStyle{
-          Font::System(theme.typography.body_large).WithWeight(FontWeight::Medium),
-          theme.colors.on_surface,
-      },
-      .weekday_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface_variant},
-      .day_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .label_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .title_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.body_large).WithWeight(FontWeight::Medium),
+              theme.colors.on_surface,
+          },
+      .weekday_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                                 theme.colors.on_surface_variant},
+      .day_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .padding = EdgeInsets::All(theme.spacing.small + theme.spacing.extra_small),
       .cell_size = 40.0F,
       .column_spacing = 4.0F,
@@ -510,17 +535,22 @@ TimePickerStyle MaterialTimePickerStyle(const ThemeSpec& theme) {
       .hand = theme.colors.primary,
       .border = std::nullopt,
       .validation_error = theme.colors.error,
-      .header_style = TextStyle{
-          Font::System(56.0F),
-          theme.colors.on_surface,
-      },
-      .period_style = TextStyle{
-          Font::System(theme.typography.body_large).WithWeight(FontWeight::Medium),
-          theme.colors.on_surface_variant,
-      },
-      .dial_style = TextStyle{Font::System(theme.typography.body_large), theme.colors.on_surface},
-      .label_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .header_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, 56.0F),
+              theme.colors.on_surface,
+          },
+      .period_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.body_large).WithWeight(FontWeight::Medium),
+              theme.colors.on_surface_variant,
+          },
+      .dial_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_large), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .padding = EdgeInsets::All(theme.spacing.large),
       .dial_size = 256.0F,
       .header_height = 80.0F,
@@ -591,10 +621,14 @@ TextFieldStyle MaterialTextFieldStyle(const ThemeSpec& theme) {
               .corner_radii = CornerRadii{theme.shapes.extra_small},
               .minimum_height = 56.0F,
           },
-      .text_style = TextStyle{Font::System(theme.typography.body_large), theme.colors.on_surface},
-      .label_style = TextStyle{Font::System(theme.typography.body_large), theme.colors.on_surface_variant},
-      .floating_label_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.on_surface_variant},
-      .placeholder_style = TextStyle{Font::System(theme.typography.body_large), theme.colors.on_surface_variant},
+      .text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_large), theme.colors.on_surface},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_large),
+                               theme.colors.on_surface_variant},
+      .floating_label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small),
+                                        theme.colors.on_surface_variant},
+      .placeholder_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_large),
+                                     theme.colors.on_surface_variant},
       .disabled_text = disabled_content,
       .focused_label = theme.colors.primary,
       .disabled_label = disabled_content,
@@ -633,7 +667,8 @@ TextFieldStyle MaterialTextFieldStyle(const ThemeSpec& theme) {
       .validation_error = theme.colors.error,
       .validation_border_width = 1.0F,
       .focused_validation_border_width = 2.0F,
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .validation_spacing = theme.spacing.extra_small,
   };
 }
@@ -823,7 +858,8 @@ ScrollBarStyle MaterialScrollBarStyle(const ThemeSpec& theme) {
 ToastStyle MaterialToastStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.inverse_surface,
-      .text_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.inverse_on_surface},
+      .text_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                              theme.colors.inverse_on_surface},
       .padding = EdgeInsets::Symmetric(theme.spacing.medium, 14.0F),
       .shadow = MaterialShadow(Color::Rgb(0, 0, 0, 0.18F), theme.elevation.medium),
       .corner_radii = CornerRadii{theme.shapes.extra_small},
@@ -831,19 +867,22 @@ ToastStyle MaterialToastStyle(const ThemeSpec& theme) {
       .maximum_width = 600.0F,
       .viewport_padding = EdgeInsets{16.0F, 16.0F, 24.0F, 16.0F},
       .placement = VerticalPlacement::Bottom,
-      .motion = PresentationMotion{
-          .slide_distance = 12.0F,
-          .enter = TweenSpec{.duration = theme.motion.normal},
-          .exit = TweenSpec{.duration = theme.motion.fast},
-      },
+      .motion =
+          PresentationMotion{
+              .slide_distance = 12.0F,
+              .enter = TweenSpec{.duration = theme.motion.normal},
+              .exit = TweenSpec{.duration = theme.motion.fast},
+          },
   };
 }
 
 SnackBarStyle MaterialSnackBarStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.inverse_surface,
-      .message_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.inverse_on_surface},
-      .action_text_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.primary},
+      .message_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                                 theme.colors.inverse_on_surface},
+      .action_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.primary},
       .action_background = Color::Transparent(),
       .action_padding = EdgeInsets::Symmetric(12.0F, 8.0F),
       .action_minimum_height = 40.0F,
@@ -856,18 +895,20 @@ SnackBarStyle MaterialSnackBarStyle(const ThemeSpec& theme) {
       .minimum_height = 48.0F,
       .maximum_width = 600.0F,
       .viewport_padding = EdgeInsets{16.0F, 16.0F, 24.0F, 16.0F},
-      .motion = PresentationMotion{
-          .slide_distance = 12.0F,
-          .enter = TweenSpec{.duration = theme.motion.normal},
-          .exit = TweenSpec{.duration = theme.motion.fast},
-      },
+      .motion =
+          PresentationMotion{
+              .slide_distance = 12.0F,
+              .enter = TweenSpec{.duration = theme.motion.normal},
+              .exit = TweenSpec{.duration = theme.motion.fast},
+          },
   };
 }
 
 TooltipStyle MaterialTooltipStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.inverse_surface,
-      .text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.inverse_on_surface},
+      .text_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small),
+                              theme.colors.inverse_on_surface},
       .padding = EdgeInsets::Symmetric(8.0F, 4.0F),
       .shadow = {},
       .corner_radii = CornerRadii{theme.shapes.extra_small},
@@ -888,12 +929,18 @@ DialogStyle MaterialDialogStyle(const ThemeSpec& theme) {
       .scrim = theme.colors.scrim,
       .background = theme.colors.surface_container_high,
       .shadow = MaterialShadow(Color::Rgb(0, 0, 0, 0.16F), theme.elevation.medium),
-      .title_style = TextStyle{Font::System(theme.typography.headline_small), theme.colors.on_surface},
-      .message_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface_variant},
+      .title_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.headline_small),
+                               theme.colors.on_surface},
+      .message_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium),
+                                 theme.colors.on_surface_variant},
       .positive_action_style =
-          TextStyle{Font::System(theme.typography.label_large).WithWeight(FontWeight::Medium), theme.colors.primary},
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.label_large).WithWeight(FontWeight::Medium),
+              theme.colors.primary},
       .negative_action_style =
-          TextStyle{Font::System(theme.typography.label_large).WithWeight(FontWeight::Medium), theme.colors.primary},
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.label_large).WithWeight(FontWeight::Medium),
+              theme.colors.primary},
       .positive_action_background = Color::Transparent(),
       .negative_action_background = Color::Transparent(),
       .positive_action_indication = MaterialIndication(theme.colors.primary, theme),
@@ -914,11 +961,12 @@ DialogStyle MaterialDialogStyle(const ThemeSpec& theme) {
       .content_alignment = HorizontalAlignment::Start,
       .action_layout = Axis::Horizontal,
       .action_alignment = HorizontalAlignment::End,
-      .motion = PresentationMotion{
-          .initial_scale = 0.94F,
-          .enter = TweenSpec{.duration = theme.motion.normal},
-          .exit = TweenSpec{.duration = theme.motion.fast},
-      },
+      .motion =
+          PresentationMotion{
+              .initial_scale = 0.94F,
+              .enter = TweenSpec{.duration = theme.motion.normal},
+              .exit = TweenSpec{.duration = theme.motion.fast},
+          },
   };
 }
 
@@ -978,7 +1026,8 @@ NavigationStyle MaterialNavigationStyle(const ThemeSpec& theme) {
 TopAppBarStyle MaterialTopAppBarStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.surface,
-      .title_style = TextStyle{Font::System(theme.typography.title_large), theme.colors.on_surface},
+      .title_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.title_large), theme.colors.on_surface},
       .height = 64.0F,
       .horizontal_padding = 4.0F,
       .title_inset = 16.0F,
@@ -992,7 +1041,8 @@ NavigationBarStyle MaterialNavigationBarStyle(const ThemeSpec& theme) {
   disabled.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = theme.colors.surface_container,
-      .label_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.on_surface_variant},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small),
+                               theme.colors.on_surface_variant},
       .selected_content = theme.colors.on_secondary_container,
       .disabled_content = disabled,
       .indicator = theme.colors.secondary_container,
@@ -1014,7 +1064,8 @@ NavigationPaneStyle MaterialNavigationPaneStyle(const ThemeSpec& theme) {
   disabled.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = theme.colors.surface_container_low,
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface_variant},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large),
+                               theme.colors.on_surface_variant},
       .selected_content = theme.colors.on_secondary_container,
       .disabled_content = disabled,
       .indicator = theme.colors.secondary_container,
@@ -1166,7 +1217,7 @@ TextStyle DefaultTextStyle(const ThemeSpec& theme, TextRole role) {
     font_size = theme.typography.title_large;
   }
   return {
-      Font::System(font_size),
+      Font::FromFamily(theme.typography.family, font_size),
       theme.colors.on_surface,
   };
 }
@@ -1178,7 +1229,8 @@ ButtonStyle DefaultButtonStyle(const ThemeSpec& theme) {
   disabled_label.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = theme.colors.primary,
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_primary},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_primary},
       .disabled_background = disabled_background,
       .disabled_label = disabled_label,
       .padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
@@ -1219,7 +1271,8 @@ ChipStyle DefaultChipStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.surface,
       .selected_background = theme.colors.primary,
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_surface},
       .selected_label = theme.colors.on_primary,
       .disabled_background = disabled_background,
       .disabled_selected_background = disabled_selected_background,
@@ -1245,7 +1298,8 @@ SegmentedButtonStyle DefaultSegmentedButtonStyle(const ThemeSpec& theme) {
   return {
       .background = theme.colors.surface,
       .selected_background = theme.colors.primary,
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_surface},
       .selected_label = theme.colors.on_primary,
       .border = Border{border, 1.0F},
       .selected_border = Border{theme.colors.primary, 1.0F},
@@ -1265,7 +1319,8 @@ TabsStyle DefaultTabsStyle(const ThemeSpec& theme) {
   disabled_label.alpha *= theme.interactions.disabled_opacity;
   return {
       .background = Color::Transparent(),
-      .label_style = TextStyle{Font::System(theme.typography.label_large), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), theme.colors.on_surface},
       .selected_label = theme.colors.primary,
       .disabled_label = disabled_label,
       .indicator = theme.colors.primary,
@@ -1319,7 +1374,8 @@ SelectStyle DefaultSelectStyle(const ThemeSpec& theme) {
       .active_item_background = active_item_background,
       .selected_item_background = selected_item_background,
       .validation_error = theme.colors.error,
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .trigger_padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
       .item_padding = EdgeInsets::Symmetric(theme.spacing.medium, theme.spacing.small),
       .popup_padding = {},
@@ -1355,14 +1411,19 @@ DatePickerStyle DefaultDatePickerStyle(const ThemeSpec& theme) {
       .hover_background = hover,
       .border = Border{border, 1.0F},
       .validation_error = theme.colors.error,
-      .title_style = TextStyle{
-          Font::System(theme.typography.body_large).WithWeight(FontWeight::Medium),
-          theme.colors.on_surface,
-      },
-      .weekday_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.on_surface_variant},
-      .day_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .label_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .title_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.body_large).WithWeight(FontWeight::Medium),
+              theme.colors.on_surface,
+          },
+      .weekday_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small),
+                                 theme.colors.on_surface_variant},
+      .day_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .padding = EdgeInsets::All(theme.spacing.small),
       .cell_size = 32.0F,
       .column_spacing = 2.0F,
@@ -1396,17 +1457,22 @@ TimePickerStyle DefaultTimePickerStyle(const ThemeSpec& theme) {
       .hand = theme.colors.primary,
       .border = Border{border, 1.0F},
       .validation_error = theme.colors.error,
-      .header_style = TextStyle{
-          Font::System(32.0F),
-          theme.colors.on_surface,
-      },
-      .period_style = TextStyle{
-          Font::System(theme.typography.body_small).WithWeight(FontWeight::Medium),
-          theme.colors.on_surface_variant,
-      },
-      .dial_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .label_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .header_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, 32.0F),
+              theme.colors.on_surface,
+          },
+      .period_style =
+          TextStyle{
+              Font::FromFamily(theme.typography.family, theme.typography.body_small).WithWeight(FontWeight::Medium),
+              theme.colors.on_surface_variant,
+          },
+      .dial_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .padding = EdgeInsets::All(theme.spacing.small + theme.spacing.extra_small),
       .dial_size = 208.0F,
       .header_height = 52.0F,
@@ -1478,10 +1544,13 @@ TextFieldStyle DefaultTextFieldStyle(const ThemeSpec& theme) {
               .corner_radii = CornerRadii{theme.shapes.extra_small + 2.0F},
               .minimum_height = 36.0F,
           },
-      .text_style = TextStyle{Font::System(theme.typography.body_medium), theme.colors.on_surface},
-      .label_style = TextStyle{Font::System(theme.typography.body_medium), placeholder},
-      .floating_label_style = TextStyle{Font::System(theme.typography.body_small), placeholder},
-      .placeholder_style = TextStyle{Font::System(theme.typography.body_medium), placeholder},
+      .text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), theme.colors.on_surface},
+      .label_style = TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), placeholder},
+      .floating_label_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), placeholder},
+      .placeholder_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_medium), placeholder},
       .disabled_text = disabled_content,
       .focused_label = theme.colors.primary,
       .disabled_label = disabled_content,
@@ -1520,7 +1589,8 @@ TextFieldStyle DefaultTextFieldStyle(const ThemeSpec& theme) {
       .validation_error = theme.colors.error,
       .validation_border_width = 1.0F,
       .focused_validation_border_width = 2.0F,
-      .validation_text_style = TextStyle{Font::System(theme.typography.body_small), theme.colors.error},
+      .validation_text_style =
+          TextStyle{Font::FromFamily(theme.typography.family, theme.typography.body_small), theme.colors.error},
       .validation_spacing = theme.spacing.extra_small,
   };
 }

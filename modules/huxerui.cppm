@@ -159,6 +159,7 @@ export namespace huxerui {
     using huxerui::FocusRing;
     using huxerui::Focusable;
     using huxerui::Font;
+    using huxerui::FontFamily;
     using huxerui::FontFamilyKind;
     using huxerui::FontMetrics;
     using huxerui::FontSize;

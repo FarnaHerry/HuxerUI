@@ -639,9 +639,12 @@ TEST_CASE("DirectoryReferencesKeepRetainedChildrenAndRejectLinksAndRenamedChildr
   REQUIRE(retained.has_value());
   REQUIRE(retained->AsFile().has_value());
   REQUIRE(retained->AsFile()->ReadString().Value() == "value");
+#if !defined(__EMSCRIPTEN__)
+  // Case-folded alias metadata belongs to native backends, even when Node fixtures use a case-insensitive host.
   if (fs::equivalent(destination.Child("Case").Path(), destination.Child("case").Path())) {
     REQUIRE(rejected_alias);
   }
+#endif
 }
 
 } // namespace huxerui::test

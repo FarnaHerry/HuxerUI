@@ -53,7 +53,8 @@ void ApplyIconButtonDefaults(detail::ViewSpec& spec, const std::shared_ptr<const
   const float interactive_size = std::max(icon_size, std::max(0.0F, style.minimum_interactive_size));
   const float state_layer_size = std::min(std::max(0.0F, style.state_layer_size), interactive_size);
   const float corner_radius = std::max(0.0F, style.corner_radius);
-  spec.properties.text_style = TextStyle{Font::System(theme.typography.label_large), style.foreground};
+  spec.properties.text_style =
+      TextStyle{Font::FromFamily(theme.typography.family, theme.typography.label_large), style.foreground};
   spec.properties.text_layout_options.align = TextAlign::Leading;
   spec.properties.text_layout_options.vertical_align = TextVerticalAlign::Center;
   spec.properties.text_layout_options.wrap = TextWrap::NoWrap;

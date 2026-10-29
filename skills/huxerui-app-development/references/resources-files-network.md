@@ -17,7 +17,7 @@ resources/
     zh.properties
 ```
 
-The CLI initially creates empty `images` and `raw` directories and writes `strings/default.properties`. Do not add another namespace directory below `resources`; the generated application CMake registers `RESOURCES resources` with `RESOURCE_NAMESPACE app`. The build generates typed identifiers in `<app_resources.h>` and packages framework and application resources together.
+The CMake project template creates empty `images` and `raw` directories and writes `strings/default.properties`. Do not add another namespace directory below `resources`; the generated CMake registers `RESOURCES resources` with `RESOURCE_NAMESPACE app`. The build generates typed identifiers in `<app_resources.h>` and packages framework and application resources together. The mcpp rules use the same resource categories with their own namespace configuration; follow [cpp-modules-and-mcpp.md](cpp-modules-and-mcpp.md).
 
 - `StringResource` and `StringVariant` support localized strings and formatted values.
 - `ImageResource`, `ImageVariant`, and `ImageAsset` separate declarative identity from resolved image data.
@@ -34,7 +34,9 @@ Generated libraries use the same directory categories but register their own tar
 
 Pass resource values directly to components and `VisualFill` when their public overloads accept them. In particular, ordinary `Image` and icon properties should receive the generated `ImageResource` instead of resolving an SVG first. Use `UseString(...)`, `UseImage(...)`, `UseVectorImage(...)`, or `UseRawResource(...)` only when application code needs the resolved value itself. These reads are composition-bound and therefore belong in a composable function.
 
-Keep resource identifiers and namespace consistent with generated CMake. Do not open `resources.bin` directly.
+Outside composition, obtain `UseService<Resources>()` and use `GetString`, `GetImage`, `GetVectorImage`, or `GetRawResource` on the original application thread. These methods return immediate values without subscribing composition. `Configuration()` captures the calling context's effective configuration; image and string getters also accept an explicit snapshot. Window callbacks use that window's configuration and local Locale, while application-only work uses Runtime defaults. A raw resource has no locale/density variant. Do not replace reactive UI resource hooks with unobserved Get calls when configuration changes should refresh the UI.
+
+Keep resource identifiers and namespaces consistent with the project's build configuration. Do not open `resources.bin` directly.
 
 `UseRawResource(app::raw::config_json)` resolves a lazy `RawAsset` without reading its payload. Capture the asset into an event or task, then choose `ReadBytes(cache = false)` or `ReadString(cache = false)` for complete content, or `OpenRead()` / `OpenReadAsync()` for an independent incremental cursor. A true cache argument retains successfully read complete bytes across asset copies; false still reuses an existing cache and does not evict it. Avoid reading large complete payloads during composition; use asynchronous streams or run a blocking complete read with `RunWorker()`.
 
@@ -46,13 +48,13 @@ Text, built-in labels, TextField, and Canvas text inherit the effective `Locale`
 
 ## Clipboard
 
-Obtain the current Runtime's plain-text clipboard with `UseApplication().Clipboard()` during composition, then capture the shared handle into a UI-thread event handler. A captured `ApplicationHandle` can also return the same clipboard outside composition. `IsAvailable()` reports whether the Runtime currently has synchronous clipboard access. `ReadText()` returns an optional UTF-8 string, and `WriteText(text)` reports whether valid UTF-8 text was accepted.
+Obtain the application's plain-text clipboard with `UseApplication().Clipboard()` on the application thread, including outside composition. `IsAvailable()` reports whether the Runtime currently has synchronous clipboard access. `ReadText()` returns an optional UTF-8 string, and `WriteText(text)` reports whether valid UTF-8 text was accepted.
 
 Clipboard operations are synchronous and may enter native APIs. Do not call them from `RunWorker()` or another application worker thread. A captured handle remains safe after its Runtime is destroyed but reports unavailable results. Web does not expose this application clipboard service; browser-managed TextField copy, cut, and paste continue through trusted editing events.
 
 ## Files and directories
 
-Obtain the runtime-installed services during composition with `UseService<FilePicker>()` and `UseService<HttpClient>()`. These return shared service handles; their public constructors are not application construction APIs. Store the required handle before launching a lifetime-bound task, then capture that handle into the task rather than looking up a composition service after suspension.
+Obtain the per-window `FilePicker` with `UseService<FilePicker>()` in a live window context and launch its work from a user action. It is not directly constructed by application code. `HttpClient` is an application service: obtain the shared instance with `UseService<HttpClient>()` or construct a client directly as described below. Capture window-bound handles before launching their tasks; acquiring an application service does not require composition.
 
 `Bytes` from `<huxerui/data.h>` is the canonical owned binary buffer. Use `std::span<const std::byte>` only for borrowed binary input instead of introducing another application byte-container type.
 
@@ -100,22 +102,24 @@ For external file reception, use the separate [file-drop contract](gestures-and-
 
 ## HTTP
 
+`HttpClient` may be constructed directly on the active application thread after Runtime initialization begins, including in an `ApplicationHook`. It can be a business client's member or be created through `std::make_unique` / `std::make_shared`; no manual registration is required. `UseService<HttpClient>()` returns the framework's shared client. Each client remains bound to its original Runtime and neither extends its lifetime nor rebinds after shutdown.
+
 Create requests with `HttpRequest`, `HttpMethod`, and headers during the owning application flow. `HttpRequest::body` and `HttpResponse::body` are owned `Bytes`; HuxerUI does not implicitly encode request text or decode response bytes.
 
 Use `HttpClient::SendAsync()` for a buffered `HttpResult<HttpResponse>`, or `SendStreamAsync()` for a `HttpResult<HttpResponseStream>` whose body is consumed incrementally. `HttpResult<T>` aliases `Result<T, HttpError>`; check `Succeeded()` before accessing `Value()` or `Error()`. Read the move-only response's `Body()` with `ReadAsync(maximum_bytes)` until a successful empty `Bytes` reports EOF. Only one body read or copy may be pending. An error before response headers is carried by `HttpResult<HttpResponseStream>`, while a later body error is carried by the operation's `IoResult`.
 
-Both request forms accept an optional progress callback receiving `HttpProgress`; the callback runs on the owning Runtime UI thread. Upload and download totals are optional, and HTTP status codes remain responses rather than transport errors. Keep retry, decoding, persistence, and user-visible error policy in application code.
+Both request forms accept an optional progress callback receiving `HttpProgress`; the callback runs on the application thread. Upload and download totals are optional, and HTTP status codes remain responses rather than transport errors. Keep retry, decoding, persistence, and user-visible error policy in application code.
 
 For downloads, check the response status according to application policy, copy `Body()` into an asynchronous output stream, and close the output explicitly after a successful copy. Request uploads still take complete `Bytes`; the response-stream API does not imply streaming request bodies.
 
 ## Task lifetime
 
-Launch app-side async flows from `UseTaskScope()` so unmount cancels work. Capture the required service and `State` values before launching the task rather than calling composition-bound facilities after suspension. Avoid detached platform callbacks that capture UI objects indefinitely.
+Use `UseTaskScope()` for work canceled with a component, or `UseApplicationTaskScope()` for work that must survive window retirement. Keep shared results in an application-owned model and let UI state reads subscribe to it. Application tasks have no implicit window Environment; do not launch pickers or presentation through them. See [task lifetimes](fundamentals.md#lifecycle-and-tasks) for launch timing, cancellation, and external callback delivery.
 
 Call File asynchronous methods, `HttpClient::SendAsync()`, `HttpClient::SendStreamAsync()`, and the response body's `ReadAsync()` directly from the owning Task. File Async already owns its platform-appropriate worker or event completion path, while HTTP keeps its platform asynchronous transport; do not wrap these APIs in `RunWorker()`.
 
-After `co_await` on these operations, the continuation is already back on the owning Runtime UI thread and may update captured `State` directly while the task scope remains alive. Do not use `TaskScope::Post()` for that continuation; `Post()` is only for an external thread or callback outside a running HuxerUI Task.
+After `co_await` on these operations, the continuation is already back on the application thread and may update captured `State` directly while the task scope remains alive. Composition-bound hooks remain unavailable inside task continuations. Do not use `TaskScope::Post()` for that continuation; `Post()` is only for an external thread or callback outside a running HuxerUI Task.
 
-Use `RunWorker()` only for application-owned synchronous CPU-bound or blocking work. Use `TaskScope::Post()` to hand an external callback back to the UI scope. These APIs do not keep a mobile application running in the background; platform background tasks are a separate capability.
+Use `RunWorker()` only for application-owned synchronous CPU-bound or blocking work. Use the appropriately owned `TaskScope::Post()` to deliver an external callback. Application tasks do not grant mobile background execution time; platform suspension can pause work even while its application lifetime remains valid.
 
 The active SDK's services are installed by the application runtime. If a service is unavailable on a platform, report that public capability limit rather than reaching into a private adapter.

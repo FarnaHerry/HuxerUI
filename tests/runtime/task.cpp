@@ -589,6 +589,9 @@ TEST_CASE("RuntimeDestructionClosesRunningTaskScopes") {
 }
 
 TEST_CASE("HuxerUIAwaitableRestoresTaskExecutionToTheOwningUIThread") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   captured_task_scope = {};
   task_value = State<int>{};
   std::mutex queue_mutex;
@@ -1002,7 +1005,7 @@ TEST_CASE("WorkerSequenceReportsUnavailableWebWorkerExecution") {
 
 #endif
 
-TEST_CASE("TaskScopePostDefersOwnedCallbacksAndPreservesExternalThreadOrder") {
+TEST_CASE("TaskScopePostDefersOwnedCallbacksAndPreservesOrder") {
   captured_task_scope = {};
   ThreadSafeTaskQueue queue;
   TestPlatform platform(queue.Dispatcher());
@@ -1017,14 +1020,19 @@ TEST_CASE("TaskScopePostDefersOwnedCallbacksAndPreservesExternalThreadOrder") {
   queue.Drain();
   REQUIRE(values == std::vector<int>{1});
 
-  std::thread external([tasks = captured_task_scope, &values, &callback_thread] {
+  const auto post = [tasks = captured_task_scope, &values, &callback_thread] {
     tasks.Post([&values, &callback_thread] {
       callback_thread = std::this_thread::get_id();
       values.push_back(2);
     });
     tasks.Post([&values] { values.push_back(3); });
-  });
+  };
+#if defined(__EMSCRIPTEN__)
+  post();
+#else
+  std::thread external(post);
   external.join();
+#endif
   REQUIRE(values == std::vector<int>{1});
 
   queue.Drain();

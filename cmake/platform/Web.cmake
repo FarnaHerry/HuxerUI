@@ -17,19 +17,21 @@ set(HUXERUI_PLATFORM_COMPILE_OPTIONS
 set(HUXERUI_PLATFORM_INTERFACE_COMPILE_OPTIONS
         -fexceptions
 )
+# Repository tests supply their own Node.js executable options on the consuming target.
+set(web_application "$<NOT:$<BOOL:$<TARGET_PROPERTY:_HUXERUI_WEB_TEST>>>")
 set(HUXERUI_PLATFORM_LINK_OPTIONS
         --bind
-        --no-entry
+        "$<${web_application}:--no-entry>"
         "$<BUILD_INTERFACE:SHELL:--pre-js \"${HUXERUI_PROJECT_DIR}/platform/web/web_platform_registry.js\">"
-        "$<BUILD_INTERFACE:SHELL:--pre-js \"${HUXERUI_PROJECT_DIR}/platform/web/web_file.js\">"
+        "$<BUILD_INTERFACE:$<${web_application}:SHELL:--pre-js \"${HUXERUI_PROJECT_DIR}/platform/web/web_file.js\">>"
         -fexceptions
         -lidbfs.js
-        "-sMODULARIZE=1"
-        "-sEXPORT_ES6=1"
-        "-sEXPORT_NAME=createHuxerUIApp"
+        "$<${web_application}:-sMODULARIZE=1>"
+        "$<${web_application}:-sEXPORT_ES6=1>"
+        "$<${web_application}:-sEXPORT_NAME=createHuxerUIApp>"
         "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8"
-        "-sENVIRONMENT=web"
+        "$<${web_application}:-sENVIRONMENT=web>"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sSTACK_SIZE=1048576"
-        "-sNO_EXIT_RUNTIME=1"
+        "$<${web_application}:-sNO_EXIT_RUNTIME=1>"
 )

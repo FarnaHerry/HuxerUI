@@ -102,6 +102,9 @@ public:
 
 // These inputs describe shaping geometry, not the foreground colors or link targets of the latest declaration.
 struct ParagraphLayout {
+#if defined(__EMSCRIPTEN__)
+  std::uint64_t revision = 0;
+#endif
   AttributedText text;
   Font font;
   TextLayoutOptions options;

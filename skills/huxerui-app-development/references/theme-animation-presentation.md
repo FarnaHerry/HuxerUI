@@ -2,7 +2,7 @@
 
 ## Theme
 
-`ThemeSpec` groups color, typography, shape, spacing, elevation, motion, interaction, and focus-ring schemes. Start with the built-in visual system that matches the application:
+`ThemeSpec` groups color, typography, shape, spacing, elevation, motion, interaction, and semantic brightness. Focus-ring policy belongs to its interaction scheme. Start with the built-in visual system that matches the application:
 
 ```cpp
 return MaterialTheme {
@@ -22,6 +22,28 @@ Use this order:
 
 `UseTheme()` reads the current `ThemeSpec`. Do not hardcode a Material visual into app components that must work under Flat or custom themes.
 
+## System appearance
+
+`UseSystemThemeBrightness()` from `<huxerui/environment.h>` reads and observes the current window host's effective `ThemeBrightness::Light` or `Dark` preference during composition. It has no ordered state slot and may be read conditionally. A nested Theme does not override the host preference; hosts without a preference use Light.
+
+Keep follow-system versus explicit light/dark selection in application state. For example, use an optional override in the application root:
+
+```cpp
+auto theme_override = UseState(std::optional<ThemeBrightness>{});
+const ThemeBrightness brightness = theme_override.Get()
+    ? *theme_override.Get() : UseSystemThemeBrightness();
+ThemeSpec theme = brightness == ThemeBrightness::Dark
+    ? MaterialDarkThemeSpec() : MaterialLightThemeSpec();
+return MaterialTheme {
+  theme,
+  SettingsContent(theme_override),
+};
+```
+
+The application-owned settings content assigns `std::nullopt` for System or an explicit brightness. An explicit override stops the system subscription; returning to System reads the latest preference. Use a shared application model when several windows should share this selection. HuxerUI provides no theme-selection policy enum or persistence.
+
+`ThemeSpec::brightness` describes the selected theme; changing it alone does not transform its palette. Start from the matching light/dark factory, then customize tokens. It is distinct from `SystemBarContentBrightness`, which describes system icon/text foreground contrast. Theme selection does not automatically recolor native title bars or embedded platform controls.
+
 ## Customize built-in tokens
 
 Use `FlatLightThemeSpec`, `FlatDarkThemeSpec`, `MaterialLightThemeSpec`, or `MaterialDarkThemeSpec` as the mutable starting point. Pass the result to `FlatTheme` or `MaterialTheme`; the selected theme system then rebuilds its component styles from those tokens.
@@ -31,7 +53,10 @@ ThemeSpec theme = MaterialLightThemeSpec();
 theme.colors.primary = Color::Rgb(32, 96, 180);
 theme.shapes.medium = 10.0F;
 
-return MaterialTheme(theme, AppContent());
+return MaterialTheme {
+  theme,
+  AppContent(),
+};
 ```
 
 For a branded dark Material theme, customize `MaterialDarkThemeSpec()` and still pass it to `MaterialTheme`. The `MaterialDarkTheme` convenience is for the unmodified built-in dark definition. Flat follows the same pattern.
@@ -79,7 +104,10 @@ definition.Set(DividerStyle{
     .thickness = 2.0F,
 });
 
-return Theme(definition, AppContent());
+return Theme {
+  definition,
+  AppContent(),
+};
 ```
 
 Use `FlatThemeDefinition(tokens)` for the equivalent Flat boundary. Do not use `ThemeDefinition{tokens}` as a shortcut for either built-in system.
@@ -93,7 +121,10 @@ overrides.Set(DividerStyle{
     .thickness = 1.0F,
 });
 
-return Theme(overrides, SettingsContent());
+return Theme {
+  overrides,
+  SettingsContent(),
+};
 ```
 
 Do not put a bare `ThemeDefinition{}` at the application root merely to choose colors. Use a built-in theme and tokens instead. A bare definition is appropriate for local typed overrides or intentionally app-defined style values that inherit an outer theme.
@@ -134,7 +165,9 @@ Attach PageTransition{push, pop, replace} to a NavigationStack page root with Wi
 It overrides the complete NavigationStyle::motion policy, and an empty PageTransition selects immediate motion.
 Push selects the incoming page, Pop selects the departing page, and Replace selects the incoming page.
 Use TransitionSpec::Reversed() to exchange both samples and drawing order; active descriptions remain frozen during an operation.
-Use SharedElement(key) for corresponding content and SharedBounds(key) for different content that crossfades inside moving bounds. Both live in animation.h and attach with With(). Navigation pairs its participating pages automatically; local mutations use UseSharedTransition(), a stable container.With(handle.Scope()), and handle.Run(AnimationSpec, synchronous_mutation). Mark descendants, keep keys unique per participating side, and do not match both an ancestor and descendant. BoundsTransform(value) accepts a copied comparable pure Rect Evaluate(Rect, Rect, float) const that preserves endpoints. Local scope input is blocked during playback; keep retarget controls outside it. Nested local scopes follow active outer ownership; nested NavigationStacks are separate boundaries. Missing, partially ancestor-clipped, native, external-texture, or unsupported transform content skips pairing. See docs/guide/themes-and-presentation.md for examples and limitations.
+Use `SharedElement(key)` for corresponding content and `SharedBounds(key)` for different content that crossfades inside moving bounds. Both live in `animation.h` and attach with `.With(...)`. Navigation pairs its participating pages automatically; local mutations use `UseSharedTransition()`, a stable `container.With(handle.Scope())`, and `handle.Run(AnimationSpec, synchronous_mutation)`. Mark descendants, keep keys unique per participating side, and do not match both an ancestor and descendant. `BoundsTransform(value)` accepts a copied, comparable, pure `Rect Evaluate(Rect, Rect, float) const` that preserves endpoints.
+
+Local scope input is blocked during playback; keep retarget controls outside it. Nested local scopes follow active outer ownership; nested NavigationStacks are separate boundaries. Missing, partially ancestor-clipped, native, external-texture, or unsupported transform content skips pairing. Consult the selected SDK's themes and presentation guide for examples and limitations.
 
 ## Presentation services
 
@@ -145,7 +178,7 @@ Use SharedElement(key) for corresponding content and SharedBounds(key) for diffe
 - `UseMenu()` anchors menu entries with enabled, checked, nested, icon, and icon-tint state.
 - `Tooltip` is a modifier for hover/long-press help.
 
-Layer content is outside the ordinary application subtree but captures its environment. Keep modal dismissal, focus trapping, and owner state explicit. Do not retain a presentation context after its layer is dismissed.
+Layer content is outside the ordinary application subtree but retains its captured live Environment. Open layers follow theme changes without replacing their identifiers, content state, focus, or timeout progress; after a provider unmounts, retained layers keep its last values. Keep modal dismissal and owner state explicit, and do not retain a presentation context after dismissal. Presentation handles belong to their window and cannot present from an application task with no live window context.
 Set `PopupOptions::retain_anchor_focus` only when pointer interaction with non-focusable popup content must keep an editor or other keyboard session on its mounted anchor; focusable popup descendants still receive focus.
 
 With `popup.Anchor()` attached to a View, `Show` follows that View's full bounds, while `ShowAtAnchor(local_bounds, ...)` follows a node-local rectangle through layout, scrolling, and presentation transforms. Use `UpdateAnchor(id, local_bounds)` to move the latter without replacing its layer or content; false means a stale id or another anchor mode. `ShowAt(window_point, ...)` remains a fixed window-DIP position. Choose the anchor mode directly instead of manually tracking transforms or dismissing and recreating a popup to reposition it.

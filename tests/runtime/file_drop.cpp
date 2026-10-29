@@ -360,6 +360,9 @@ TEST_CASE_METHOD(FileDropFixture, "File drop concurrent pending deliveries do no
 }
 
 TEST_CASE_METHOD(FileDropFixture, "File drop preparation may complete off the UiWindow thread") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   std::vector<std::function<void()>> queued;
   TestPlatform platform{[&queued](auto task) { queued.push_back(std::move(task)); }};
   ManualFileDrop source;
