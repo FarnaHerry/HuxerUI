@@ -45,6 +45,44 @@ Links inherit Theme primary color and underlining unless a range explicitly over
 
 Attributed text contains resolved direct text; translating sentence fragments independently is not a substitute for localizing the whole sentence. Existing StringResource-based plain Text declarations remain unchanged.
 
+### Custom fonts
+
+`FontFamily` is a reusable immutable family; `Font` adds size, weight, and slant.
+Existing system, monospace, and installed-name factories remain available.
+Supply application fonts as ordinary raw resources, local files, or owned bytes:
+
+```cpp
+auto family = FontFamily::FromResources({app::raw::brand_regular_ttf, app::raw::brand_bold_ttf});
+auto title = Font::FromFamily(family, 24.0F).WithWeight(FontWeight::Bold);
+auto body = title.WithSize(16.0F).WithWeight(FontWeight::Regular);
+auto replacement = body.WithFamily(FontFamily::Monospace());
+
+auto disk_family = FontFamily::FromFiles({File("/absolute/path/Regular.ttf"), File("/absolute/path/Bold.ttf")});
+auto memory_family = FontFamily::FromBytes({std::move(regular_bytes), std::move(bold_bytes)});
+
+auto single_resource = Font::FromResource(app::raw::brand_regular_ttf, 16.0F);
+auto single_file = Font::FromFile(File("/absolute/path/Regular.ttf"), 16.0F);
+auto single_bytes = Font::FromBytes(std::move(font_bytes), 16.0F);
+return Text("Custom font").Style(TextStyle{title, Color::Black()});
+```
+
+The single-source Font factories are conveniences over FontFamily; use a family when supplying several weights/slants or sharing it through [theme typography](themes-and-presentation.md).
+Custom families accept static single-face TTF/OTF files of the same typographic family and width, with distinct weight/slant pairs.
+The framework prefers a matching slant and then the nearest weight according to CSS Fonts matching rules; it does not synthesize a missing custom bold or italic face.
+Missing glyphs retain native platform fallback. Collections, variable fonts, WOFF, and explicit fallback chains are not supported.
+
+`FromResources` uses the current Runtime's existing Resources service on the application thread; it works without a window or composition.
+File and byte factories do not require Runtime and can run on a worker thread.
+File loading is synchronous: use the existing `File::ReadBytesAsync()` followed by `FontFamily::FromBytes()` when blocking is inappropriate.
+Files are read once into owned snapshots; later changes or deletion do not alter existing fonts.
+Invalid/unsupported data or invalid combinations throw `std::invalid_argument`, file read failures throw `std::runtime_error`, and unavailable resource context or missing resources throw `std::logic_error`.
+Native decoding can still reject a structurally accepted font; that emits a diagnostic and uses system fallback.
+
+Web displays system fallback while the browser decodes the bytes, then updates text measurement, line wrapping, paint, selection, and TextField geometry automatically.
+Controlled text, selection, and focus survive that update.
+On Web, `UseTextMeasurer()` subscribes composition to font readiness changes; remeasure during recomposition to update geometry derived from its results.
+Previously returned measurements remain snapshots and do not update themselves.
+
 ### Selection and virtualized text
 
 Wrap ordinary content in `SelectionArea` to select across descendant Text nodes. Nested areas are independent; copied paragraphs are separated by newlines. Static content supports Copy and Select All but never starts an IME session. Mouse dragging, double-click, Shift-click, touch long press, and selection handles use retained geometry.

@@ -526,6 +526,11 @@ struct UiWindow::State {
   std::shared_ptr<Environment> root_environment_;
   std::shared_ptr<detail::AppResources> app_resources_;
   std::shared_ptr<detail::DebugMetricsState> debug_metrics_;
+#if defined(__EMSCRIPTEN__)
+  std::uint64_t text_metrics_revision_ = 0;
+  std::shared_ptr<detail::CompositionDependency> text_metrics_dependency_ =
+      std::make_shared<detail::CompositionDependency>();
+#endif
   std::shared_ptr<detail::WindowService> window_service_;
   std::shared_ptr<detail::SceneTransitionService> scene_transition_service_;
   std::unique_ptr<detail::TextInteraction> text_;

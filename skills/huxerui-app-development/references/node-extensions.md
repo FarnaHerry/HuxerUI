@@ -21,9 +21,9 @@ An extension with specialized retained hover geometry overrides `HoverHitTest` a
 Override `HoverWhenDisabled` only when that affordance intentionally remains active on a disabled View.
 
 `OnKey` receives the focused node's key event after `KeyIntercept` and focused text-input handling but before the node's public `KeyDown` or `KeyUp` event.
-Return `true` only when the extension consumed it; Runtime then skips the public target event and later defaults.
+Return `true` only when the extension consumed it; UiWindow then skips the public target event and later defaults.
 
-Do not retain raw `ViewNode*`, child references, or platform objects across reconciliation. Visible retained-state changes call protected `InvalidatePaint`; semantic changes call `InvalidateSemantics`. Returning `needs_frame` schedules work but does not itself invalidate an already cached paint sequence.
+Do not retain raw `ViewNode*`, child references, or borrowed native objects beyond their documented lifetime. An extension may own resources across compatible reconciliation when it manages their lifetime and releases them on teardown. Visible retained-state changes call protected `InvalidatePaint`; semantic changes call `InvalidateSemantics`. Returning `needs_frame` schedules work but does not itself invalidate an already cached paint sequence.
 
 ## Typed output
 

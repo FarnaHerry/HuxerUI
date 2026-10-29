@@ -165,7 +165,7 @@ function(_huxerui_configure_resources target_name)
     # Gradle stages Android packages after all ABI builds; CMake stages desktop targets with one output package.
     if (EMSCRIPTEN)
         target_link_options(${target_name} PRIVATE
-                "SHELL:--preload-file \"${HUXERUI_RESOURCE_OUTPUT}/package@/\""
+                "$<$<NOT:$<BOOL:$<TARGET_PROPERTY:_HUXERUI_WEB_TEST>>>:SHELL:--preload-file \"${HUXERUI_RESOURCE_OUTPUT}/package@/\">"
         )
         set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS
                 "${HUXERUI_RESOURCE_INDEX}"

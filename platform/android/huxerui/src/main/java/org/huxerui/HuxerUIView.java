@@ -48,6 +48,9 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
 import java.nio.charset.StandardCharsets;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -98,6 +101,7 @@ public final class HuxerUIView extends ViewGroup {
     private static final int TEXT_DIRECTION_RIGHT_TO_LEFT = 2;
     private static final int FONT_FAMILY_MONOSPACE = 1;
     private static final int FONT_FAMILY_NAMED = 2;
+    private static final int FONT_FAMILY_CUSTOM = 3;
     private static final int TEXT_DECORATION_UNDERLINE = 1;
     private static final int TEXT_DECORATION_STRIKE_THROUGH = 2;
     private static final int STROKE_CAP_ROUND = 1;
@@ -160,6 +164,7 @@ public final class HuxerUIView extends ViewGroup {
     private final Path scratchPath = new Path();
     private final LruCache<PathKey, Path> pathCache = new LruCache<>(128);
     private final LruCache<FontKey, Typeface> fontCache = new LruCache<>(32);
+    private final LruCache<String, Typeface> customFontCache = new LruCache<>(32);
     private static final int PARAGRAPH_CACHE_BUDGET = 8 * 1024 * 1024;
     private final LruCache<ParagraphKey, HuxerUITextLayout> paragraphCache =
             new LruCache<ParagraphKey, HuxerUITextLayout>(PARAGRAPH_CACHE_BUDGET) {
@@ -2223,6 +2228,30 @@ public final class HuxerUIView extends ViewGroup {
     }
 
     private Typeface resolveTypeface(int familyKind, String familyName, int weight, int slant) {
+        if (familyKind == FONT_FAMILY_CUSTOM) {
+            Typeface cached = customFontCache.get(familyName);
+            if (cached != null) return cached;
+            Typeface result = Typeface.DEFAULT;
+            File snapshot = null;
+            try {
+                byte[] bytes = nativeFontBytes(Long.parseLong(familyName));
+                if (bytes == null) throw new IOException("font data is unavailable");
+                // The file-based loader supports API 23; Typeface retains the face after the snapshot is deleted.
+                snapshot = File.createTempFile("huxerui-font-", ".font", getContext().getCacheDir());
+                try (FileOutputStream stream = new FileOutputStream(snapshot)) {
+                    stream.write(bytes);
+                }
+                result = Typeface.createFromFile(snapshot);
+            } catch (IOException | RuntimeException error) {
+                android.util.Log.e("HuxerUI", "HuxerUI could not decode a custom font; using the system font", error);
+            } finally {
+                if (snapshot != null && !snapshot.delete()) {
+                    android.util.Log.w("HuxerUI", "HuxerUI could not remove a font snapshot");
+                }
+            }
+            customFontCache.put(familyName, result);
+            return result;
+        }
         FontKey key = new FontKey(familyKind, familyName, weight, slant);
         Typeface typeface = fontCache.get(key);
         if (typeface == null) {
@@ -2329,6 +2358,9 @@ public final class HuxerUIView extends ViewGroup {
             nativeDestroy(nativeHandle);
             nativeHandle = 0L;
         }
+        paragraphCache.evictAll();
+        customFontCache.evictAll();
+        fontCache.evictAll();
     }
 
     private void handleNativeApplicationActivation(HuxerUIApplicationActivation activation) {
@@ -2344,6 +2376,7 @@ public final class HuxerUIView extends ViewGroup {
     private static native void nativeUpdateWindowLifecycleState(long handle, int lifecycleState);
 
     private static native void nativeDestroy(long handle);
+    private static native byte[] nativeFontBytes(long identity);
 
     private static native void nativeResize(
             long handle, float width, float height, float safeLeft, float safeTop, float safeRight, float safeBottom);

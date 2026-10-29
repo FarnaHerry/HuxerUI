@@ -432,6 +432,7 @@ private:
   std::shared_ptr<detail::AppResources> resources_;
   std::weak_ptr<detail::ApplicationRuntimeState> application_;
   friend class Runtime;
+  friend class FontFamily;
 };
 
 /// Platform capability for installed-package access and current resource defaults.

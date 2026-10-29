@@ -1,5 +1,4 @@
 #include "android_renderer.h"
-#include "internal_access.h"
 
 #include <algorithm>
 #include <bit>
@@ -7,17 +6,21 @@
 #include <concepts>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <huxerui/android/jni.h>
 
+#include "internal_access.h"
+#include "text/font_internal.h"
 #include "graphics/path_internal.h"
 #include "graphics/paint_internal.h"
 #include "resources/resource_internal.h"
@@ -25,6 +28,26 @@
 #include "text/text_internal.h"
 
 namespace huxerui::detail {
+
+namespace {
+std::mutex font_sources_mutex;
+std::unordered_map<std::uint64_t, std::weak_ptr<const FontFaceData>> font_sources;
+}
+
+std::string AndroidFontName(const Font& font) {
+  const auto face = ResolveFontFace(font);
+  if (!face) return std::string(font.FamilyName());
+  std::scoped_lock lock(font_sources_mutex);
+  std::erase_if(font_sources, [](const auto& entry) { return entry.second.expired(); });
+  font_sources.insert_or_assign(face->identity, face);
+  return std::to_string(face->identity);
+}
+
+std::shared_ptr<const FontFaceData> AndroidFontSource(std::uint64_t identity) {
+  std::scoped_lock lock(font_sources_mutex);
+  const auto found = font_sources.find(identity);
+  return found == font_sources.end() ? nullptr : found->second.lock();
+}
 
 namespace {
 
@@ -370,7 +393,7 @@ void AndroidRenderer::RenderCommand(JNIEnv* environment, jobject view, jobject c
     return;
   }
   auto bytes = android::BytesToJavaByteArray(environment, ByteSpan(command.text.PlainText()));
-  auto family = android::BytesToJavaByteArray(environment, ByteSpan(command.style.font.FamilyName()));
+  auto family = android::BytesToJavaByteArray(environment, ByteSpan(AndroidFontName(command.style.font)));
   auto locale = android::BytesToJavaByteArray(environment, ByteSpan(command.options.shaping.locale));
   if (!bytes || !family || !locale) {
     return;
@@ -410,7 +433,7 @@ void AndroidRenderer::RenderCommand(
   };
   for (const TextRun& run : command.runs) {
     const auto text_range = append(text_data, run.text);
-    const auto family_range = append(metadata, run.style.font.FamilyName());
+    const auto family_range = append(metadata, AndroidFontName(run.style.font));
     const auto locale_range = append(metadata, run.shaping.locale);
     text_ranges.insert(text_ranges.end(), {text_range.first, text_range.second});
     baselines.insert(baselines.end(), {run.baseline_origin.x, run.baseline_origin.y});
@@ -857,7 +880,7 @@ AndroidTextAttributes(JNIEnv* environment, const AttributedText& text, const Tex
       append(static_cast<std::uint32_t>(PackColor(run.style.foreground)));
       append(static_cast<std::uint32_t>(PackColor(run.background)));
       append(static_cast<std::uint32_t>(run.style.decoration));
-      const auto family = font.FamilyName();
+      const auto family = AndroidFontName(font);
       if (family.size() > static_cast<std::size_t>(std::numeric_limits<jint>::max())) {
         throw std::invalid_argument("HuxerUI Android font family exceeds the supported length");
       }
@@ -871,3 +894,15 @@ AndroidTextAttributes(JNIEnv* environment, const AttributedText& text, const Tex
 }
 
 } // namespace huxerui::detail
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_org_huxerui_HuxerUIView_nativeFontBytes(JNIEnv* environment, jclass, jlong identity) {
+  if (identity <= 0) return nullptr;
+  try {
+    const auto face = huxerui::detail::AndroidFontSource(static_cast<std::uint64_t>(identity));
+    if (!face) return nullptr;
+    return huxerui::android::BytesToJavaByteArray(environment, face->bytes).Release();
+  } catch (const std::exception&) {
+    return nullptr;
+  }
+}

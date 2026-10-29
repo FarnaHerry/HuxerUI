@@ -55,6 +55,8 @@ public:
         PackageRequirement{"gtk4", "4.14"},
         PackageRequirement{"epoxy", "1.5"},
         PackageRequirement{"gio-2.0", {}},
+        PackageRequirement{"pangoft2", {}},
+        PackageRequirement{"fontconfig", {}},
         PackageRequirement{"libsoup-3.0", "3.0"},
     };
     for (const PackageRequirement& package : packages) {

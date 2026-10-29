@@ -1,8 +1,10 @@
 #include <catch2/catch_amalgamated.hpp>
 #include <algorithm>
 #include <emscripten/val.h>
+#include <emscripten.h>
 #include "web_renderer.h"
 #include "text/text_internal.h"
+#include "font_test_support.h"
 
 using namespace huxerui;
 
@@ -14,7 +16,8 @@ emscripten::val TextTestCanvas() {
       calls: [],
       measureText(text) {
         this.calls.push(text);
-        return {width: Array.from(text).length * 10, fontBoundingBoxAscent: 8, fontBoundingBoxDescent: 2};
+        const advance = this.font && this.font.includes("huxerui_font_") ? 20 : 10;
+        return {width: Array.from(text).length * advance, fontBoundingBoxAscent: 8, fontBoundingBoxDescent: 2};
       }
     };
     return {context, getContext() {return context;}};
@@ -97,6 +100,40 @@ TEST_CASE("WebParagraphReusesWrapMeasurementsForCaretGeometry") {
     const Rect caret = layout->CaretRect(offset, TextAffinity::Downstream);
     REQUIRE(layout->HitTest({caret.x, caret.y + caret.height * 0.5F}).offset == offset);
   }
+}
+
+TEST_CASE("WebCustomFontReadinessRebuildsCachedParagraphAndCaretGeometry") {
+  EM_ASM({
+    Module.fontTestSaved = ({document: globalThis.document, fontFace: globalThis.FontFace});
+    globalThis.document = {fonts: new Set()};
+    globalThis.FontFace = class {
+      load() { return {then(callback) { Module.fontTestComplete = callback; return {catch() {}}; }}; }
+    };
+  });
+  struct Cleanup {
+    ~Cleanup() {
+      detail::ResetWebFonts();
+      EM_ASM({
+        globalThis.document = Module.fontTestSaved.document;
+        globalThis.FontFace = Module.fontTestSaved.fontFace;
+        delete Module.fontTestSaved;
+        delete Module.fontTestComplete;
+      });
+    }
+  } cleanup;
+  const auto canvas = TextTestCanvas();
+  detail::WebRenderer renderer(0, canvas);
+  const TextStyle style{Font::FromBytes(huxerui::test::TestFontBytes(), 20.0F), Color::Black()};
+  const AttributedText text("AA");
+  const auto before = renderer.CreateTextLayout(text, style, 200.0F, {.wrap = TextWrap::NoWrap});
+  REQUIRE(before->CaretRect(2, TextAffinity::Upstream).x == 20.0F);
+  EM_ASM({ Module.fontTestComplete(); });
+  renderer.InvalidateTextMetrics();
+  const auto after = renderer.CreateTextLayout(text, style, 200.0F, {.wrap = TextWrap::NoWrap});
+  REQUIRE(renderer.MeasureText(text, style, 200.0F).size.width == 40.0F);
+  REQUIRE(after->CaretRect(2, TextAffinity::Upstream).x == 40.0F);
+  REQUIRE(after->HitTest({30.0F, 5.0F}).offset == 2);
+  REQUIRE(before->CaretRect(2, TextAffinity::Upstream).x == 20.0F);
 }
 
 } // namespace

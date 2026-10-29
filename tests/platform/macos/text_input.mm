@@ -4,6 +4,7 @@
 #include "appkit_renderer.h"
 #include "text/text_internal.h"
 #include "runtime_test_support.h"
+#include "font_test_support.h"
 
 namespace huxerui::test {
 namespace {
@@ -260,6 +261,31 @@ TEST_CASE("MacTextLayoutAlignsExplicitNoWrapLinesWithinAvailableWidth") {
         }
       }
     }
+  }
+}
+
+TEST_CASE("MacCustomFontsUseSelectedBytesInMetricsRichTextAndRetainedLayouts") {
+  @autoreleasepool {
+    auto renderer = std::make_unique<detail::AppKitRenderer>();
+    auto family = TestFontFamily();
+    const auto font = Font::FromFamily(family, 20.0F);
+    const TextStyle style{font, Color::Black()};
+    REQUIRE(renderer->MeasureRun("AA", style, {}).advance == Catch::Approx(20.0F));
+    REQUIRE(renderer->MeasureRun("AA", TextStyle{font.WithWeight(FontWeight::Bold), Color::Black()}, {}).advance ==
+        Catch::Approx(32.0F));
+    REQUIRE(renderer->MeasureRun("AA", TextStyle{font.WithSlant(FontSlant::Italic), Color::Black()}, {}).advance ==
+        Catch::Approx(26.0F));
+    const auto paragraph = AttributedText::FromRanges("AA", {{{1, 2}, {.font_weight = FontWeight::Bold}}});
+    auto layout = renderer->CreateTextLayout(paragraph, style, 200.0F, {.wrap = TextWrap::NoWrap});
+    REQUIRE(layout->Measure().width == Catch::Approx(26.0F));
+    REQUIRE(layout->CaretRect(1, TextAffinity::Downstream).x == Catch::Approx(10.0F));
+    REQUIRE(layout->CaretRect(2, TextAffinity::Upstream).x == Catch::Approx(26.0F));
+    renderer.reset();
+    family = {};
+    float selected_width = 0.0F;
+    for (const auto& rect : layout->RangeRects({0, 2})) selected_width += rect.width;
+    REQUIRE(selected_width == Catch::Approx(26.0F));
+    REQUIRE(layout->HitTest({20.0F, 10.0F}).offset == 2);
   }
 }
 

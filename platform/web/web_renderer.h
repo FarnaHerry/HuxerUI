@@ -14,6 +14,7 @@ namespace huxerui::detail {
 
 class TextLayout;
 class WebTextLayout;
+void ResetWebFonts();
 
 class WebRenderer final {
 public:
@@ -22,6 +23,7 @@ public:
 
   void SetViewport(Size viewport, float display_scale);
   void Invalidate() noexcept;
+  void InvalidateTextMetrics() noexcept;
   [[nodiscard]] bool TakeInvalidation() noexcept;
   void BeginFrame();
 

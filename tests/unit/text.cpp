@@ -1,15 +1,22 @@
 #include <catch2/catch_amalgamated.hpp>
 
 #include <huxerui/text.h>
+#include <huxerui/file.h>
+#include <huxerui/resource.h>
 
 #include <concepts>
+#include <chrono>
+#include <filesystem>
 #include <stdexcept>
 
 #include "text/text_internal.h"
+#include "text/font_internal.h"
+#include "font_test_support.h"
 
 namespace huxerui::test {
 
 static_assert(std::equality_comparable<Font>);
+static_assert(std::equality_comparable<FontFamily>);
 static_assert(std::equality_comparable<TextStyle>);
 static_assert(std::equality_comparable<TextLayoutOptions>);
 static_assert(std::equality_comparable<AttributedText>);
@@ -42,6 +49,66 @@ TEST_CASE("FontRejectsInvalidPublicConfiguration") {
   REQUIRE_THROWS_AS(Font::Monospace(-1.0F), std::invalid_argument);
   REQUIRE_THROWS_AS(Font::Named("", 14.0F), std::invalid_argument);
   REQUIRE_THROWS_AS(Font::Named("Inter", 14.0F).WithSize(0.0F), std::invalid_argument);
+}
+
+TEST_CASE("CustomFontFamiliesPreserveValueIdentityAndSelectAvailableFaces") {
+  const auto family = TestFontFamily();
+  const auto reordered = FontFamily::FromBytes({TestFontBytes(FontWeight::Regular, FontSlant::Italic),
+      TestFontBytes(FontWeight::Bold), TestFontBytes()});
+  REQUIRE(family == reordered);
+  REQUIRE(detail::HashFontFamily(family) == detail::HashFontFamily(reordered));
+  REQUIRE(family.Kind() == FontFamilyKind::Custom);
+  REQUIRE(family.Name().empty());
+  REQUIRE(family != FontFamily::Named("HuxerUI Test"));
+  REQUIRE(FontFamily{} == FontFamily::System());
+  const auto regular = Font::FromFamily(family, 20.0F);
+  REQUIRE(detail::ResolveFontFace(regular)->weight == 400);
+  REQUIRE(detail::ResolveFontFace(regular.WithWeight(FontWeight::Medium))->weight == 400);
+  REQUIRE(detail::ResolveFontFace(regular.WithWeight(FontWeight::SemiBold))->weight == 700);
+  REQUIRE(detail::ResolveFontFace(regular.WithWeight(FontWeight::Black))->weight == 700);
+  const auto italic_bold = regular.WithWeight(FontWeight::Bold).WithSlant(FontSlant::Italic);
+  REQUIRE(detail::ResolveFontFace(italic_bold)->slant == FontSlant::Italic);
+  REQUIRE(detail::ResolveFontFace(italic_bold)->weight == 400);
+  REQUIRE(italic_bold.WithFamily(FontFamily::Monospace()) ==
+      Font::Monospace(20.0F).WithWeight(FontWeight::Bold).WithSlant(FontSlant::Italic));
+  REQUIRE(Font::FromBytes(TestFontBytes(), 20.0F) ==
+      Font::FromFamily(FontFamily::FromBytes({TestFontBytes()}), 20.0F));
+}
+
+TEST_CASE("CustomFontFamiliesRejectEmptyDuplicateAndMalformedSources") {
+  REQUIRE_THROWS_AS(FontFamily::FromBytes({}), std::invalid_argument);
+  REQUIRE_THROWS_AS(FontFamily::FromFiles({}), std::invalid_argument);
+  REQUIRE_THROWS_AS(FontFamily::FromResources({}), std::invalid_argument);
+  REQUIRE_THROWS_AS(FontFamily::FromBytes({TestFontBytes(), TestFontBytes()}), std::invalid_argument);
+  REQUIRE_THROWS_AS(Font::FromBytes({}), std::invalid_argument);
+  const auto valid = TestFontBytes();
+  for (std::size_t size : {0U, 4U, 11U, 100U, 500U}) {
+    REQUIRE_THROWS_AS(Font::FromBytes(Bytes(valid.begin(), valid.begin() + size)), std::invalid_argument);
+  }
+  auto corrupt = valid;
+  SECTION("Collection") { std::memcpy(corrupt.data(), "ttcf", 4); }
+  SECTION("Compressed font") { std::memcpy(corrupt.data(), "wOFF", 4); }
+  SECTION("Table range") { std::fill(corrupt.begin() + 20, corrupt.begin() + 24, std::byte{0xff}); }
+  SECTION("Variable font") { std::memcpy(corrupt.data() + 12, "fvar", 4); }
+  REQUIRE_THROWS_AS(Font::FromBytes(std::move(corrupt)), std::invalid_argument);
+}
+
+TEST_CASE("CustomFontFilesAreSnapshotsIndependentOfPathsAndRuntime") {
+  const auto path = std::filesystem::temp_directory_path() /
+      ("huxerui-font-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ttf");
+  struct Cleanup {
+    std::filesystem::path path;
+    ~Cleanup() { std::error_code error; std::filesystem::remove(path, error); }
+  } cleanup{path};
+  const File file(path.generic_u8string());
+  REQUIRE(file.WriteBytes(TestFontBytes()));
+  const auto snapshot = Font::FromFile(file, 18.0F);
+  REQUIRE(snapshot == Font::FromBytes(TestFontBytes(), 18.0F));
+  REQUIRE(file.WriteBytes(TestFontBytes(FontWeight::Bold)));
+  REQUIRE(snapshot != Font::FromFile(file, 18.0F));
+  REQUIRE(std::filesystem::remove(path));
+  REQUIRE(detail::ResolveFontFace(snapshot)->bytes == TestFontBytes());
+  REQUIRE_THROWS_AS(Font::FromFile(file), std::runtime_error);
 }
 
 TEST_CASE("TextDecorationFlagsComposeWithoutChangingFontIdentity") {

@@ -27,15 +27,37 @@ On Web, include `<huxerui/web/navigation.h>` and use `BrowserNavigationStack` wi
 
 `WindowTitleBar` lays out application-defined title-bar content, consumes the platform-resolved caption insets, and marks its non-interactive area as draggable. Interactive descendants such as buttons, tabs, and text fields remain interactive inside it and need no exclusion rectangles. Do not duplicate framework- or platform-managed caption controls. Use `WindowDragRegion` only when another mounted region should drag the window.
 
-`UseWindow()` exposes `Show`, `Hide`, `Activate`, `Minimize`, `Maximize`, `Restore`, `ToggleMaximize`, and `Close`. `Activate` restores a minimized window and requests foreground activation, subject to platform focus policy. It does not expose window dragging, state observation, platform window handles, or application-readable caption metrics.
+`UseWindow()` returns the current window's handle during composition or a captured window callback. It exposes `Show`, `Hide`, `Activate`, `Minimize`, `Maximize`, `Restore`, `ToggleMaximize`, and `Close`. `Activate` restores a minimized window and requests foreground activation, subject to platform focus policy. `IsOpen()` and `LifecycleState()` observe changes when read during composition; `OnLifecycleChanged()` installs a composition-lifetime observer. Hidden and minimized windows remain open. A stale handle does not target another window.
 
-`OnMinimizeRequest` and `OnCloseRequest` register lifecycle-bound handlers for platform and application window requests. Return `true` only after application code has handled the request; returning `false` preserves the normal platform action. Keep handlers synchronous and use the dependency arguments when captured values should replace a committed handler.
+`OnMinimizeRequest` and `OnCloseRequest` register lifecycle-bound synchronous handlers. Return `true` to consume the request; `false` allows the platform action only while the window remains open. Recursive requests for the same command are consumed, while the other command remains independent. Use dependency arguments when captured values should replace a committed handler. For an asynchronous close decision, consume the request now and issue a new close after updating the application's decision state.
 
-System bar background and foreground brightness come from the resolved `SystemBarsAppearance`, which is both a Theme value and a View modifier. `Light` and `Dark` describe system foreground icons and text, not the background color. Desktop custom chrome and mobile safe areas share a public window boundary but have different platform behavior.
+System bar background and foreground brightness come from the resolved `SystemBarsAppearance`, which is both a Theme value and a View modifier. Its `Light` and `Dark` foreground choices describe icons and text; `ThemeBrightness` describes theme appearance. See [system appearance](theme-animation-presentation.md#system-appearance). Desktop custom chrome and mobile safe areas share a public window boundary but have different platform behavior.
+
+## Multiple windows
+
+Check `ApplicationHandle::SupportsMultipleWindows()` before presenting a new-window action. Desktop hosts support framework-owned top-level windows; Android, iOS, and Web UI attachments remain host-owned and do not imply this capability.
+
+```cpp
+auto application = UseApplication();
+return Button("New window")
+    .With(Enabled(application.SupportsMultipleWindows()))
+    .OnClick([application] {
+      application.OpenWindow([] { return MaterialTheme { Text("New window") }; },
+                             {.title = "New window", .initial_size = {640.0F, 480.0F}});
+    });
+```
+
+`OpenWindow(ViewFactory, WindowOptions)` runs on the original application thread outside composition and application/window installation. Its retained factory is evaluated later in the new window's root scope. Windows share application services and State but have fresh root Environments, independent composition lifetimes, and their own window hooks. Explicitly supply shared models or theme policy; window options and the opener's local Theme/Locale do not transfer implicitly. Discarding the returned handle leaves the window open.
+
+Invalid options throw `std::invalid_argument`, invalid thread/lifetime throws `std::logic_error`, and unsupported or failed native creation throws `std::runtime_error`. Success means the window was created and presented, not that its first frame has rendered.
+
+`AppOptions::quit_on_last_window_closed` defaults to true for framework-owned desktop windows. Hidden windows still count; external attachments and an initially windowless Runtime do not trigger this policy. Set it to false when the application must remain alive after closing its last window, and use `ApplicationHandle::Quit()` for explicit termination. Closing a window cancels its composition tasks and presentation services; application tasks remain until shutdown.
 
 ## Activation
 
-Use `UseApplication().StartupActivation()` for the cold-start `ApplicationActivation`. Inspect its `LaunchActivation`, `UrlActivation`, `FileActivation`, or `NotificationActivation` alternative with `std::visit` or `std::get_if`. `UrlActivation::url` is an already validated `Uri`; inspect its components without reparsing `ToString()`. `FileActivation` contains `FileReference` capabilities rather than assumed local paths. `NotificationActivation` contains the validated stable identifier supplied with a local notification. Register `UseApplication().OnActivation(...)` for later activations while the declaring composition lifetime is mounted. Route external URLs, files, or notification identifiers by updating the authoritative navigation path rather than creating a parallel page stack.
+Read the optional `UseApplication().StartupActivation()` once during application installation or derive initial UI from it without side effects. Inspect its `LaunchActivation`, `UrlActivation`, `FileActivation`, or `NotificationActivation` alternative with `std::visit` or `std::get_if`. `UrlActivation::url` is a validated `Uri`, `FileActivation` contains `FileReference` capabilities, and `NotificationActivation` carries an identifier and data. Validate application-level routing and authorization before acting on external input.
+
+Register the single subsequent-activation handler with `ApplicationContext::OnActivation()` in `AppOptions::application_hooks`. It receives queued activations in FIFO order on the application thread, survives UI retirement, and does not replay startup. Update application-owned state or navigation from this handler; it has no implicit current window. Open a window or address a retained live handle when presentation is needed.
 
 For local-notification submission, templates, scheduling, and activation data, read [local-notifications.md](local-notifications.md).
 

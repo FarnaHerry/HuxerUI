@@ -168,6 +168,9 @@ TEST_CASE("Application hooks initialize once in order before windows and queued 
 }
 
 TEST_CASE("Application services may be acquired from a worker but State remains on its owner thread") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   TestPlatform platform;
   Application application(EmptyApplication, {
       .show_debug_overlay = false,
@@ -609,6 +612,9 @@ TEST_CASE("Application dispatch preserves unrelated task resumes after a callbac
 }
 
 TEST_CASE("A rejected application wake rolls back its callback without losing concurrent posts") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   std::deque<std::function<void()>> callbacks;
   std::function<void()> reject_wake;
   UiThreadDispatcher dispatcher;
@@ -644,6 +650,9 @@ TEST_CASE("A rejected application wake rolls back its callback without losing co
 }
 
 TEST_CASE("An in-flight native wake remains safe while its application Runtime is destroyed") {
+#if defined(__EMSCRIPTEN__)
+  SKIP("HuxerUI Web has no worker-thread execution capability");
+#endif
   struct NativeQueue {
     std::mutex mutex;
     std::deque<std::function<void()>> callbacks;

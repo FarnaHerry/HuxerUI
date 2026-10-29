@@ -362,8 +362,12 @@ TEST_CASE("FilePickerSerializesPlatformPresentationAndResumesOnTheUIThread") {
   REQUIRE(platform.transport->open_calls.front().filter.extensions == std::vector<std::string>{"txt"});
   REQUIRE(platform.transport->save_calls.empty());
 
+#if defined(__EMSCRIPTEN__)
+  platform.transport->CompleteOpen(0, {MakeReference("selected.txt")});
+#else
   std::thread completion([&platform] { platform.transport->CompleteOpen(0, {MakeReference("selected.txt")}); });
   completion.join();
+#endif
   REQUIRE_FALSE(opened_reference.has_value());
   platform.RunPlatformModuleTasks();
 

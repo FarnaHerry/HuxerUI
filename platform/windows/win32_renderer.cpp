@@ -13,12 +13,15 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <concepts>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -34,6 +37,7 @@
 #include "resources/resource_internal.h"
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
+#include "text/font_internal.h"
 #include "win32_external_texture_internal.h"
 #include "win32_internal.h"
 
@@ -42,6 +46,207 @@ namespace huxerui::detail {
 namespace {
 
 using Microsoft::WRL::ComPtr;
+
+template <class Interface> class FontComObject : public Interface {
+public:
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override {
+    if (!result)
+      return E_POINTER;
+    *result = nullptr;
+    if (id != __uuidof(IUnknown) && id != __uuidof(Interface))
+      return E_NOINTERFACE;
+    *result = static_cast<Interface*>(this);
+    AddRef();
+    return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override {
+    return ++references_;
+  }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const auto remaining = --references_;
+    if (!remaining)
+      delete this;
+    return remaining;
+  }
+
+protected:
+  virtual ~FontComObject() = default;
+
+private:
+  std::atomic<ULONG> references_{1};
+};
+
+class Win32FontStream final : public FontComObject<IDWriteFontFileStream> {
+public:
+  explicit Win32FontStream(std::shared_ptr<const FontFaceData> face) : face_(std::move(face)) {}
+  HRESULT STDMETHODCALLTYPE ReadFileFragment(const void** data, UINT64 offset, UINT64 size, void** context) override {
+    if (!data || !context)
+      return E_POINTER;
+    *data = nullptr;
+    *context = nullptr;
+    if (offset > face_->bytes.size() || size > face_->bytes.size() - offset)
+      return E_INVALIDARG;
+    *data = face_->bytes.data() + static_cast<std::size_t>(offset);
+    return S_OK;
+  }
+  void STDMETHODCALLTYPE ReleaseFileFragment(void*) override {}
+  HRESULT STDMETHODCALLTYPE GetFileSize(UINT64* size) override {
+    if (!size)
+      return E_POINTER;
+    *size = face_->bytes.size();
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetLastWriteTime(UINT64*) override {
+    return E_NOTIMPL;
+  }
+
+private:
+  std::shared_ptr<const FontFaceData> face_;
+};
+
+class Win32FontFileLoader final : public FontComObject<IDWriteFontFileLoader> {
+public:
+  explicit Win32FontFileLoader(std::shared_ptr<const FontFaceData> face) : face_(std::move(face)) {}
+  HRESULT STDMETHODCALLTYPE CreateStreamFromKey(const void* key, UINT32 size, IDWriteFontFileStream** stream) override {
+    if (!stream)
+      return E_POINTER;
+    *stream = nullptr;
+    if (!key || size != sizeof(face_->identity) || std::memcmp(key, &face_->identity, size) != 0)
+      return E_INVALIDARG;
+    *stream = new (std::nothrow) Win32FontStream(face_);
+    return *stream ? S_OK : E_OUTOFMEMORY;
+  }
+
+private:
+  std::shared_ptr<const FontFaceData> face_;
+};
+
+class Win32FontEnumerator final : public FontComObject<IDWriteFontFileEnumerator> {
+public:
+  explicit Win32FontEnumerator(IDWriteFontFile* file) : file_(file) {}
+  HRESULT STDMETHODCALLTYPE MoveNext(BOOL* current) override {
+    if (!current)
+      return E_POINTER;
+    *current = !visited_;
+    current_ = !visited_;
+    visited_ = true;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetCurrentFontFile(IDWriteFontFile** file) override {
+    if (!file)
+      return E_POINTER;
+    *file = nullptr;
+    return current_ ? file_.CopyTo(file) : E_FAIL;
+  }
+
+private:
+  Microsoft::WRL::ComPtr<IDWriteFontFile> file_;
+  bool visited_ = false;
+  bool current_ = false;
+};
+
+class Win32FontCollectionLoader final : public FontComObject<IDWriteFontCollectionLoader> {
+public:
+  explicit Win32FontCollectionLoader(IDWriteFontFile* file) : file_(file) {}
+  HRESULT STDMETHODCALLTYPE CreateEnumeratorFromKey(IDWriteFactory*, const void*, UINT32,
+                                                    IDWriteFontFileEnumerator** enumerator) override {
+    if (!enumerator)
+      return E_POINTER;
+    *enumerator = new (std::nothrow) Win32FontEnumerator(file_.Get());
+    return *enumerator ? S_OK : E_OUTOFMEMORY;
+  }
+
+private:
+  Microsoft::WRL::ComPtr<IDWriteFontFile> file_;
+};
+
+// Every native layout retains its registrations, including layouts that outlive their renderer.
+class Win32FontCollection {
+public:
+  ~Win32FontCollection() {
+    collection.Reset();
+    if (collection_registered_)
+      factory_->UnregisterFontCollectionLoader(collection_loader_.Get());
+    collection_loader_.Reset();
+    if (file_registered_)
+      factory_->UnregisterFontFileLoader(file_loader_.Get());
+  }
+
+  HRESULT Initialize(IDWriteFactory* factory, const std::shared_ptr<const FontFaceData>& face) {
+    factory_ = factory;
+    file_loader_.Attach(new (std::nothrow) Win32FontFileLoader(face));
+    if (!file_loader_)
+      return E_OUTOFMEMORY;
+    HRESULT result = factory->RegisterFontFileLoader(file_loader_.Get());
+    if (FAILED(result))
+      return result;
+    file_registered_ = true;
+    Microsoft::WRL::ComPtr<IDWriteFontFile> file;
+    result = factory->CreateCustomFontFileReference(&face->identity, sizeof(face->identity), file_loader_.Get(), &file);
+    if (FAILED(result))
+      return result;
+    collection_loader_.Attach(new (std::nothrow) Win32FontCollectionLoader(file.Get()));
+    if (!collection_loader_)
+      return E_OUTOFMEMORY;
+    result = factory->RegisterFontCollectionLoader(collection_loader_.Get());
+    if (FAILED(result))
+      return result;
+    collection_registered_ = true;
+    result = factory->CreateCustomFontCollection(collection_loader_.Get(), &face->identity, sizeof(face->identity),
+                                                 &collection);
+    if (FAILED(result))
+      return result;
+    if (collection->GetFontFamilyCount() != 1)
+      return E_FAIL;
+    Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+    result = collection->GetFontFamily(0, &family);
+    if (FAILED(result))
+      return result;
+    Microsoft::WRL::ComPtr<IDWriteLocalizedStrings> names;
+    result = family->GetFamilyNames(&names);
+    if (FAILED(result))
+      return result;
+    UINT32 length = 0;
+    result = names->GetStringLength(0, &length);
+    if (FAILED(result))
+      return result;
+    name.resize(static_cast<std::size_t>(length) + 1);
+    result = names->GetString(0, name.data(), length + 1);
+    if (FAILED(result))
+      return result;
+    name.resize(length);
+    Microsoft::WRL::ComPtr<IDWriteFont> font;
+    // DirectWrite may enumerate synthetic variants; retain the supplied face's own attributes.
+    for (UINT32 index = 0; index < family->GetFontCount(); ++index) {
+      result = family->GetFont(index, font.ReleaseAndGetAddressOf());
+      if (FAILED(result))
+        return result;
+      if (font->GetSimulations() == DWRITE_FONT_SIMULATIONS_NONE)
+        break;
+    }
+    if (!font || font->GetSimulations() != DWRITE_FONT_SIMULATIONS_NONE)
+      return E_FAIL;
+    weight = font->GetWeight();
+    style = font->GetStyle();
+    stretch = font->GetStretch();
+    return S_OK;
+  }
+
+  Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;
+  std::wstring name;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+  DWRITE_FONT_STRETCH stretch = DWRITE_FONT_STRETCH_NORMAL;
+
+private:
+  Microsoft::WRL::ComPtr<IDWriteFactory> factory_;
+  Microsoft::WRL::ComPtr<IDWriteFontFileLoader> file_loader_;
+  Microsoft::WRL::ComPtr<IDWriteFontCollectionLoader> collection_loader_;
+  bool file_registered_ = false;
+  bool collection_registered_ = false;
+};
+
+using FontRetentions = std::vector<std::shared_ptr<Win32FontCollection>>;
 
 constexpr float kDipsPerInch = 96.0F;
 constexpr float kFullCircle = 6.28318530717958647692F;
@@ -96,8 +301,7 @@ void CombineHash(std::size_t& seed, std::size_t value) noexcept {
 }
 
 std::size_t HashFont(const Font& font) noexcept {
-  std::size_t result = std::hash<FontFamilyKind>{}(font.FamilyKind());
-  CombineHash(result, std::hash<std::string_view>{}(font.FamilyName()));
+  std::size_t result = HashFontFamily(font.Family());
   CombineHash(result, std::hash<float>{}(font.Size()));
   CombineHash(result, std::hash<FontWeight>{}(font.Weight()));
   CombineHash(result, std::hash<FontSlant>{}(font.Slant()));
@@ -137,8 +341,10 @@ TextDirection ResolveTextDirection(std::wstring_view text, TextDirection request
 
 class Win32TextLayout final : public TextLayout {
 public:
-  Win32TextLayout(std::wstring text, ComPtr<IDWriteTextLayout> layout, std::vector<TextOffset> caret_offsets)
-      : text_(std::move(text)), layout_(std::move(layout)), caret_offsets_(std::move(caret_offsets)) {}
+  Win32TextLayout(std::wstring text, ComPtr<IDWriteTextLayout> layout, std::vector<TextOffset> caret_offsets,
+      FontRetentions fonts)
+      : text_(std::move(text)), fonts_(std::move(fonts)), layout_(std::move(layout)),
+        caret_offsets_(std::move(caret_offsets)) {}
 
   static std::vector<TextOffset> CaretOffsets(IDWriteTextLayout& layout) {
     UINT32 count = 0;
@@ -256,6 +462,7 @@ public:
 
 private:
   std::wstring text_;
+  FontRetentions fonts_;
   ComPtr<IDWriteTextLayout> layout_;
   std::vector<TextOffset> caret_offsets_;
 };
@@ -369,6 +576,7 @@ struct Win32Renderer::State {
   };
 
   struct CachedTextRun {
+    FontRetentions fonts;
     ComPtr<IDWriteTextLayout> layout;
     TextRunMetrics metrics;
     float baseline = 0.0F;
@@ -437,6 +645,7 @@ struct Win32Renderer::State {
   };
 
   struct CachedParagraph {
+    FontRetentions fonts;
     ComPtr<IDWriteTextLayout> layout;
     std::size_t cost = 0;
   };
@@ -445,7 +654,8 @@ struct Win32Renderer::State {
   MeasureText(const AttributedText& text, const TextStyle& style, float max_width, const TextLayoutOptions& options) {
     ValidateParagraphLength(text);
     const std::wstring wide = Utf8ToWide(text.PlainText());
-    ComPtr<IDWriteTextFormat> format = CreateTextFormat(style.font, options.shaping.locale);
+    FontRetentions fonts;
+    ComPtr<IDWriteTextFormat> format = CreateTextFormat(style.font, fonts, options.shaping.locale);
     const bool constrained = std::isfinite(max_width);
     if (constrained && max_width <= 0.0F) {
       return {};
@@ -472,7 +682,7 @@ struct Win32Renderer::State {
         "HuxerUI could not create a DirectWrite text layout"
     );
 
-    ApplyTextAttributes(*layout.Get(), text, style, false);
+    ApplyTextAttributes(*layout.Get(), text, style, false, fonts);
     DWRITE_TEXT_METRICS metrics{};
     ThrowIfFailed(layout->GetMetrics(&metrics), "HuxerUI could not measure a DirectWrite text layout");
     const float width = constrained ? std::min(metrics.widthIncludingTrailingWhitespace, max_width)
@@ -511,7 +721,8 @@ struct Win32Renderer::State {
       const TextLayoutOptions& options) {
     ValidateParagraphLength(text);
     std::wstring wide = Utf8ToWide(text.PlainText());
-    ComPtr<IDWriteTextFormat> format = CreateTextFormat(style.font, options.shaping.locale);
+    FontRetentions fonts;
+    ComPtr<IDWriteTextFormat> format = CreateTextFormat(style.font, fonts, options.shaping.locale);
     const bool constrained = std::isfinite(max_width);
     ConfigureTextFormat(*format.Get(), options, wide);
 
@@ -529,8 +740,8 @@ struct Win32Renderer::State {
     );
     // Font overrides may split DirectWrite glyph runs inside a grapheme; caret stops belong to the undecorated body.
     auto caret_offsets = Win32TextLayout::CaretOffsets(*layout.Get());
-    ApplyTextAttributes(*layout.Get(), text, style, false);
-    return std::make_unique<Win32TextLayout>(std::move(wide), std::move(layout), std::move(caret_offsets));
+    ApplyTextAttributes(*layout.Get(), text, style, false, fonts);
+    return std::make_unique<Win32TextLayout>(std::move(wide), std::move(layout), std::move(caret_offsets), std::move(fonts));
   }
 
   static void ValidateParagraphLength(const AttributedText& text) {
@@ -539,17 +750,21 @@ struct Win32Renderer::State {
     }
   }
 
-  void ApplyTextAttributes(IDWriteTextLayout& layout, const AttributedText& text, const TextStyle& base, bool drawing) {
+  void ApplyTextAttributes(IDWriteTextLayout& layout, const AttributedText& text, const TextStyle& base, bool drawing,
+      FontRetentions& fonts) {
     for (const auto& run : ResolveTextRuns(text, base)) {
       const DWRITE_TEXT_RANGE range{static_cast<UINT32>(run.range.start), static_cast<UINT32>(run.range.Length())};
-      const auto family = FontFamilyName(run.style.font);
-      ThrowIfFailed(layout.SetFontFamilyName(family.c_str(), range), "HuxerUI could not set paragraph font family");
+      const auto resolved = ResolveFont(run.style.font, fonts);
+      ThrowIfFailed(layout.SetFontCollection(resolved.collection.Get(), range),
+          "HuxerUI could not set paragraph font collection");
+      ThrowIfFailed(layout.SetFontStretch(resolved.stretch, range), "HuxerUI could not set paragraph font stretch");
+      ThrowIfFailed(layout.SetFontFamilyName(resolved.name.c_str(), range), "HuxerUI could not set paragraph font family");
       ThrowIfFailed(layout.SetFontSize(run.style.font.Size(), range), "HuxerUI could not set paragraph font size");
-      ThrowIfFailed(layout.SetFontWeight(static_cast<DWRITE_FONT_WEIGHT>(run.style.font.Weight()), range),
+      ThrowIfFailed(layout.SetFontWeight(resolved.weight, range),
           "HuxerUI could not set paragraph font weight");
       ThrowIfFailed(
           layout.SetFontStyle(
-              run.style.font.Slant() == FontSlant::Italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL, range),
+              resolved.style, range),
           "HuxerUI could not set paragraph font slant"
       );
       ThrowIfFailed(layout.SetUnderline(HasTextDecoration(run.style.decoration, TextDecoration::Underline), range),
@@ -617,7 +832,39 @@ struct Win32Renderer::State {
     return L"Segoe UI";
   }
 
-  ComPtr<IDWriteTextFormat> CreateTextFormat(const Font& font, std::string_view locale = {}) const {
+  struct ResolvedFont {
+    ComPtr<IDWriteFontCollection> collection;
+    std::wstring name;
+    DWRITE_FONT_WEIGHT weight;
+    DWRITE_FONT_STYLE style;
+    DWRITE_FONT_STRETCH stretch = DWRITE_FONT_STRETCH_NORMAL;
+  };
+
+  ResolvedFont ResolveFont(const Font& font, FontRetentions& retained) {
+    if (auto face = ResolveFontFace(font)) {
+      auto cached = custom_fonts_.find(face->identity);
+      if (cached == custom_fonts_.end()) {
+        auto loaded = std::make_shared<Win32FontCollection>();
+        if (FAILED(loaded->Initialize(write_factory_.Get(), face))) {
+          OutputDebugStringW(L"HuxerUI could not decode a custom font; using the system font\n");
+          loaded.reset();
+        }
+        if (custom_fonts_.size() >= 64) custom_fonts_.erase(custom_fonts_.begin());
+        cached = custom_fonts_.emplace(face->identity, std::move(loaded)).first;
+      }
+      if (const auto& loaded = cached->second) {
+        if (std::find(retained.begin(), retained.end(), loaded) == retained.end()) retained.push_back(loaded);
+        return {loaded->collection, loaded->name, loaded->weight, loaded->style, loaded->stretch};
+      }
+    }
+    ComPtr<IDWriteFontCollection> system;
+    ThrowIfFailed(write_factory_->GetSystemFontCollection(system.GetAddressOf()),
+        "HuxerUI could not access the DirectWrite font collection");
+    return {std::move(system), FontFamilyName(font), static_cast<DWRITE_FONT_WEIGHT>(font.Weight()),
+        font.Slant() == FontSlant::Italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL};
+  }
+
+  ComPtr<IDWriteTextFormat> CreateTextFormat(const Font& font, FontRetentions& retained, std::string_view locale = {}) {
     wchar_t locale_name[LOCALE_NAME_MAX_LENGTH]{};
     std::wstring requested_locale;
     if (locale.empty()) {
@@ -629,14 +876,14 @@ struct Win32Renderer::State {
     }
 
     ComPtr<IDWriteTextFormat> format;
-    const std::wstring family = FontFamilyName(font);
+    const auto resolved = ResolveFont(font, retained);
     ThrowIfFailed(
         write_factory_->CreateTextFormat(
-            family.c_str(),
-            nullptr,
-            static_cast<DWRITE_FONT_WEIGHT>(font.Weight()),
-            font.Slant() == FontSlant::Italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
+            resolved.name.c_str(),
+            resolved.collection.Get(),
+            resolved.weight,
+            resolved.style,
+            resolved.stretch,
             font.Size(),
             requested_locale.empty() ? locale_name : requested_locale.c_str(),
             format.GetAddressOf()
@@ -673,7 +920,8 @@ struct Win32Renderer::State {
     }
 
     const std::wstring wide = Utf8ToWide(text);
-    ComPtr<IDWriteTextFormat> format = CreateTextFormat(style.font, shaping.locale);
+    FontRetentions fonts;
+    ComPtr<IDWriteTextFormat> format = CreateTextFormat(style.font, fonts, shaping.locale);
     ConfigureTextFormat(*format.Get(), TextLayoutOptions{.shaping = shaping, .wrap = TextWrap::NoWrap}, wide);
     ComPtr<IDWriteTextLayout> layout;
     ThrowIfFailed(
@@ -752,6 +1000,7 @@ struct Win32Renderer::State {
     auto [inserted, was_inserted] = text_runs_.emplace(
         TextRunKey{std::string(text), style.font, style.decoration, shaping},
         CachedTextRun{
+            std::move(fonts),
             std::move(layout),
             {advance, visual_bounds, font_metrics},
             line.baseline,
@@ -761,18 +1010,19 @@ struct Win32Renderer::State {
     return inserted->second;
   }
 
-  ComPtr<IDWriteTextLayout> ParagraphFor(const DrawTextCommand& command) {
+  CachedParagraph ParagraphFor(const DrawTextCommand& command) {
     ValidateParagraphLength(command.text);
     const Size size{command.rect.width, command.rect.height};
     const auto cached = paragraphs_.find(
         ParagraphKeyView{command.text, command.style.font, command.style.decoration, command.options, size}
     );
     if (cached != paragraphs_.end()) {
-      return cached->second.layout;
+      return cached->second;
     }
 
     const std::wstring text = Utf8ToWide(command.text.PlainText());
-    ComPtr<IDWriteTextFormat> format = CreateTextFormat(command.style.font, command.options.shaping.locale);
+    FontRetentions fonts;
+    ComPtr<IDWriteTextFormat> format = CreateTextFormat(command.style.font, fonts, command.options.shaping.locale);
     ConfigureTextFormat(*format.Get(), command.options, text);
     ComPtr<IDWriteTextLayout> layout;
     ThrowIfFailed(
@@ -786,12 +1036,12 @@ struct Win32Renderer::State {
         ),
         "HuxerUI could not create a DirectWrite text paragraph"
     );
-    ApplyTextAttributes(*layout.Get(), command.text, command.style, true);
+    ApplyTextAttributes(*layout.Get(), command.text, command.style, true, fonts);
     constexpr std::size_t maximum_paragraphs = 256;
     const auto cost = ParagraphCacheCost(command.text);
     // Draw oversized paragraphs without retaining their full body or evicting reusable cache entries.
     if (cost > paragraph_cache_budget) {
-      return layout;
+      return {std::move(fonts), layout, cost};
     }
     while (!paragraphs_.empty() &&
            (paragraphs_.size() >= maximum_paragraphs || paragraph_bytes_ + cost > paragraph_cache_budget)) {
@@ -799,9 +1049,9 @@ struct Win32Renderer::State {
       paragraphs_.erase(paragraphs_.begin());
     }
     paragraph_bytes_ += cost;
-    paragraphs_.emplace(ParagraphKey{command.text, command.style.font, command.style.decoration, command.options, size},
-        CachedParagraph{layout, cost});
-    return layout;
+    CachedParagraph result{std::move(fonts), layout, cost};
+    paragraphs_.emplace(ParagraphKey{command.text, command.style.font, command.style.decoration, command.options, size}, result);
+    return result;
   }
 
   FontMetrics Metrics(const Font& font) {
@@ -809,12 +1059,10 @@ struct Win32Renderer::State {
     if (cached != font_metrics_.end()) {
       return cached->second;
     }
-    ComPtr<IDWriteFontCollection> collection;
-    ThrowIfFailed(
-        write_factory_->GetSystemFontCollection(collection.GetAddressOf()),
-        "HuxerUI could not access the DirectWrite font collection"
-    );
-    const std::wstring family_name = FontFamilyName(font);
+    FontRetentions retained;
+    const auto selected = ResolveFont(font, retained);
+    auto collection = selected.collection;
+    const std::wstring& family_name = selected.name;
     UINT32 family_index = 0;
     BOOL exists = FALSE;
     ThrowIfFailed(
@@ -832,9 +1080,9 @@ struct Win32Renderer::State {
     ComPtr<IDWriteFont> resolved;
     ThrowIfFailed(
         family->GetFirstMatchingFont(
-            static_cast<DWRITE_FONT_WEIGHT>(font.Weight()),
-            DWRITE_FONT_STRETCH_NORMAL,
-            font.Slant() == FontSlant::Italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+            selected.weight,
+            selected.stretch,
+            selected.style,
             resolved.GetAddressOf()
         ),
         "HuxerUI could not resolve a DirectWrite font"
@@ -1396,7 +1644,8 @@ struct Win32Renderer::State {
     if (command.rect.width <= 0.0F || command.rect.height <= 0.0F) {
       return;
     }
-    ComPtr<IDWriteTextLayout> layout = ParagraphFor(command);
+    auto paragraph = ParagraphFor(command);
+    const auto& layout = paragraph.layout;
     DWRITE_TEXT_METRICS metrics{};
     ThrowIfFailed(layout->GetMetrics(&metrics), "HuxerUI could not measure a DirectWrite text paragraph");
     const float remaining_height = std::max(0.0F, command.rect.height - metrics.height);
@@ -2505,6 +2754,7 @@ struct Win32Renderer::State {
   bool platform_composition_ = false;
   ComPtr<ID2D1Factory1> d2d_factory_;
   ComPtr<IDWriteFactory> write_factory_;
+  std::unordered_map<std::uint64_t, std::shared_ptr<Win32FontCollection>> custom_fonts_;
   ComPtr<IWICImagingFactory> wic_factory_;
   ComPtr<ID3D11Device> d3d_device_;
   ComPtr<ID2D1Device> d2d_device_;
@@ -2556,6 +2806,7 @@ void Win32Renderer::Discard() noexcept {
   state_->text_runs_.clear();
   state_->font_metrics_.clear();
   state_->wic_factory_.Reset();
+  state_->custom_fonts_.clear();
   state_->write_factory_.Reset();
   state_->d2d_factory_.Reset();
 #if defined(HUXERUI_WINDOWS_7_COMPAT)

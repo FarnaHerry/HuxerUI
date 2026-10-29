@@ -58,6 +58,9 @@ struct TypographyScheme {
   float title_large = 20.0F;
   float headline_small = 24.0F;
 
+  /// Family used by theme-derived text; role sizes and component emphasis remain independent.
+  FontFamily family = FontFamily::System();
+
   bool operator==(const TypographyScheme&) const = default;
 };
 

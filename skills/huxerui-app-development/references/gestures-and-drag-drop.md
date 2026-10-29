@@ -34,7 +34,7 @@ Middle, Back, and Forward remain available to the raw Pointer handler and Pointe
 Bind `ViewEvents::ContextMenuRequested` for context actions:
 
 ```cpp
-return content.On<ViewEvents::ContextMenuRequested>([menu](Point position) {
+return std::move(content).On<ViewEvents::ContextMenuRequested>([menu](Point position) {
   menu.ShowAt(position, {MenuItem("Refresh", Refresh)});
 });
 ```
@@ -49,7 +49,7 @@ PlatformViews retain native context menus, and Web preserves a pointer-initiated
 Bind `ViewEvents::Hover` for direct mouse or pen presence without claiming a pointer sequence:
 
 ```cpp
-return content.On<ViewEvents::Hover>([hovered](const HoverEvent& event) {
+return std::move(content).On<ViewEvents::Hover>([hovered](const HoverEvent& event) {
   hovered = event.type != HoverEventType::Leave;
 });
 ```
@@ -91,7 +91,7 @@ Bind `ViewEvents::PointerIntercept` when application-level pointer logic must ob
 Its signature is `Event<bool(const PointerEvent&)>`:
 
 ```cpp
-return content.On<ViewEvents::PointerIntercept>([](const PointerEvent& event) {
+return std::move(content).On<ViewEvents::PointerIntercept>([](const PointerEvent& event) {
   return event.type == PointerEventType::Move && ShouldTakePointer(event.position);
 });
 ```
@@ -160,7 +160,7 @@ Attach `.With(FileDropTarget::Accepts(options))` and bind `FileDropEvents` throu
 
 An optional `Accepts(options, predicate)` receives `FileDropOffer` with an optional count and possibly incomplete MIME types. Keep the predicate quick and side-effect-free, without I/O or permission requests; hover acceptance is provisional, and metadata filtering does not validate file contents.
 
-Use `Entered`, `Moved`, and `Exited` for hover feedback. Physical drop sends `Exited` before deferred `Dropped` or `Failed`; Exited alone does not mean cancellation. Dropped supplies a borrowed `const std::vector<FileReference>&`, while Failed supplies `IoError`. Copy references to retain access, and distinguish successful reception from subsequent application I/O. Events use the Runtime UI thread and retain the target-local and window DIP coordinates from physical drop. Unmount cancels pending delivery; separate accepted drops may finish independently.
+Use `Entered`, `Moved`, and `Exited` for hover feedback. Physical drop sends `Exited` before deferred `Dropped` or `Failed`; Exited alone does not mean cancellation. Dropped supplies a borrowed `const std::vector<FileReference>&`, while Failed supplies `IoError`. Copy references to retain access, and distinguish successful reception from subsequent application I/O. Events use the owning application thread and retain the target-local and window DIP coordinates from physical drop. Unmount cancels pending delivery; separate accepted drops may finish independently.
 
 Reception negotiates Copy only and does not automatically read, import, or write files. Dropped references are read-only through reference operations; provider temporary files may need reference-owned storage. Native `PlatformView` regions own their own drops. Android reception requires API 24 and a host permission lease; `HuxerUIActivity` supplies the hook, while custom hosts must follow `HuxerUIView.setFileDropPermissionRequester` and Activity lifetime rules. Provide an equivalent FilePicker action for keyboard, touch, accessibility, and unsupported hosts. See [files and references](resources-files-network.md#references-and-local-paths) for later I/O and optional path access.
 

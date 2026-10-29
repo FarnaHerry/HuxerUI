@@ -1,4 +1,14 @@
-# Text Input and Semantics
+# Text, Input, and Semantics
+
+## Text and selection
+
+Use `Text` for a plain or attributed paragraph. `Font::System`, `Font::Monospace`, and `Font::Named` describe font requests; `Named` selects a family available to the platform and does not load a bundled font file. Set application typography through `ThemeSpec::typography`, or use `Text::Style(TextStyle)` for a complete paragraph base style. `TextSpanStyle` supplies partial character overrides within that paragraph.
+
+Build `AttributedText` from `TextSpan` fragments, or supply validated style and link ranges over an existing UTF-8 body. Ranges use paragraph-local UTF-16 offsets and must not split surrogate pairs; do not use UTF-8 byte indices. Alignment, wrapping, direction, and shaping locale remain paragraph-wide. Handle `TextEvents::LinkActivated` to apply application navigation policy; a link target is not opened automatically.
+
+`SelectionArea` enables selection and Copy across descendant static Text without creating an editor. For virtualized documents, supply an immutable `TextSelectionSource` through `.Source(snapshot)` and bind each mounted complete paragraph with `Text::SelectionBlock(id)`. Use `.Key(id)` separately for composition identity. Source IDs must be stable and unique; publish the source and visible Text from the same snapshots. Unbound decorative Text is excluded in explicit-source mode.
+
+The source keeps offscreen text available for Copy without mounting Views. Its lookups must not fetch data, parse content, or depend on mounted nodes. Share unchanged blocks and indexes when publishing a replacement snapshot instead of rebuilding the whole document for each appended chunk. Keep accumulated streaming content in the owning model and batch State updates on the application thread; virtual rows only render the published snapshot. Removing a selected endpoint block clears selection, and appending content does not automatically extend it.
 
 ## Controlled editing
 
@@ -41,7 +51,7 @@ Use `SetActiveChild(local_id)` when one virtual child represents the focused par
 
 Child availability is combined with the mounted owner's Enabled state and every virtual ancestor. Disabled children remain discoverable but expose no executable actions. Reuse the real input availability predicate and invalidate semantics when it changes; semantic declarations do not disable pointer or keyboard handlers themselves.
 
-Windows, macOS, Android, and iOS map the shared semantic tree to their platform accessibility systems. Linux and Web do not provide mappings for HuxerUI-rendered content and those bridges are not planned. Native DOM PlatformViews on Web retain their browser-provided accessibility independently.
+Windows, macOS, Android, and iOS map the shared semantic tree to their platform accessibility systems. Linux and Web do not provide mappings for HuxerUI-rendered content. Native DOM PlatformViews on Web retain their browser-provided accessibility independently.
 
 ## Review checklist
 

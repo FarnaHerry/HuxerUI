@@ -14,6 +14,7 @@
 #include "linux_renderer.h"
 
 #include "text/text_internal.h"
+#include "font_test_support.h"
 
 namespace huxerui::test {
 namespace {
@@ -816,6 +817,21 @@ TEST_CASE("LinuxOversizedTextSkipsTheLayoutCacheWithoutEvictingCachedEntries") {
   REQUIRE(cached_after.size.width == cached_before.size.width);
   REQUIRE(cached_after.size.height == cached_before.size.height);
   renderer.Discard();
+}
+
+TEST_CASE("LinuxCustomFontsKeepExactFaceAndPrivateMapAcrossRendererDiscard") {
+  detail::LinuxRenderer renderer;
+  renderer.Initialize();
+  const auto font = Font::FromFamily(TestFontFamily(), 20.0F);
+  const TextStyle regular{font, Color::Black()};
+  REQUIRE(renderer.MeasureRun("AA", regular, {}).advance == Catch::Approx(20.0F));
+  REQUIRE(renderer.MeasureRun("AA", {font.WithWeight(FontWeight::Bold), Color::Black()}, {}).advance == Catch::Approx(32.0F));
+  const auto rich = AttributedText::FromRanges("AA", {{{1, 2}, {.font_weight = FontWeight::Bold}}});
+  auto layout = renderer.CreateTextLayout(rich, regular, 200.0F, {.wrap = TextWrap::NoWrap});
+  REQUIRE(layout->CaretRect(2, TextAffinity::Upstream).x == Catch::Approx(26.0F));
+  renderer.Discard();
+  REQUIRE(layout->Measure().width == Catch::Approx(26.0F));
+  REQUIRE(layout->HitTest({20.0F, 10.0F}).offset == 2);
 }
 
 } // namespace huxerui::test

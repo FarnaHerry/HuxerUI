@@ -9,7 +9,7 @@ The shared C++ layer owns platform-neutral font identity, text style, shaping in
 Platform adapters own platform font resolution, shaping, paragraph layout, glyph drawing, and bounded platform caches.
 Platform font, glyph, layout, and brush objects never enter a View, PaintCommand, RenderScene, or application state value.
 
-`AttributedText`, `Font`, `TextStyle`, `TextShapingOptions`, and `TextLayoutOptions` compare by value.
+`AttributedText`, `FontFamily`, `Font`, `TextStyle`, `TextShapingOptions`, and `TextLayoutOptions` compare by value.
 A value change therefore participates naturally in View reconciliation, layout invalidation, PaintSequence invalidation, and renderer cache lookup without a separate generation counter or manual invalidation API.
 
 ## Font and style
@@ -28,6 +28,26 @@ The family is system, monospace, or explicitly named.
 Size belongs to Font because platform font metrics and shaped glyph advances depend on it.
 Weight and slant also belong to Font because they select the platform face.
 The platform may fall back when a requested named family or exact face is unavailable, but the declarative Font value remains unchanged.
+
+`FontFamily` separates reusable source identity from a Font's size, weight, and slant.
+System, Monospace, and Named refer to platform families; Custom owns validated, immutable bytes from existing RawResource, File, or Bytes values.
+The single-source `Font::FromResource`, `FromFile`, and `FromBytes` factories delegate to the corresponding FontFamily factories and `Font::FromFamily`.
+FontFamily adds no service, resource category, registration API, or composition hook.
+`TypographyScheme::family` defaults to System and supplies the family for theme-derived text and component styles; explicit Font and TextStyle overrides remain authoritative.
+
+Custom families accept static single-face TTF or OTF data with Unicode or ASCII family metadata.
+The shared parser validates bounded sfnt tables and extracts typographic family (name ID 16, falling back to ID 1), weight, width, and slant.
+Faces must share a family and width and have distinct weight/slant combinations; input order does not affect value equality.
+Equality and renderer hashes use owned contents, not source paths, resource names, native pointers, or internal face identifiers.
+Selection first prefers the requested slant, then applies the CSS Fonts weight matching order; only a selected supplied face reaches the native loader, without synthetic bold or italic.
+Missing glyphs use each native engine's ordinary fallback.
+Collections, variable fonts, WOFF, explicit fallback chains, and width selection are unsupported.
+
+Resource factories run on the application thread and cache parsed families in the existing application resources owner, without requiring a window.
+Missing resources and unavailable application context throw `std::logic_error`; file I/O failures throw `std::runtime_error`; invalid or unsupported data and invalid family combinations throw `std::invalid_argument`.
+File and byte factories are independent of Runtime and may be used on a worker thread.
+Font values retain snapshots across source-file edits, window destruction, and application shutdown; resource lookups cannot bind a retained service to a replacement Runtime.
+Metadata acceptance does not guarantee that every native engine will decode the outlines: a native rejection emits a diagnostic and uses system fallback.
 
 `TextStyle` combines the font with foreground color and composable decoration flags:
 
@@ -152,7 +172,7 @@ Replacing it with runs would force ordinary components to implement wrapping and
 ## Platform caches
 
 Platform caches are private to one platform renderer or host view.
-A resolved-font or metrics key contains family kind and name, size, weight, and slant; a backend may omit size only when its cached platform typeface is explicitly size independent.
+A resolved-font or metrics key contains family value, size, weight, and slant; a backend may omit size only when its cached platform typeface is explicitly size independent.
 A paragraph or shaped-run key additionally contains text, shaping options, width, alignment, and wrapping.
 Color may be excluded when the platform API applies it at draw time.
 Decoration remains in the key whenever it changes platform layout state or the conservative visual bounds.
@@ -161,7 +181,13 @@ Caches retain bounded reusable entries rather than unbounded histories and use v
 Changing a Font, TextStyle, text string, shaping option, or layout width naturally misses the old entry.
 Device-dependent resources are cleared when the platform drawing device is recreated.
 Host destruction releases all remaining entries.
-System font database changes may clear font-dependent entries at the platform boundary without invalidating shared Runtime state.
+When Web finishes decoding a custom font, its backend first clears the renderer's paragraph cache and calls internal `InternalAccess::InvalidateTextMetrics()` on the application thread.
+This Web-only path advances an internal per-window text metrics revision, invalidates measured nodes and paragraph geometry, refreshes paint and selection overlays, and schedules a frame.
+On Web, `UseTextMeasurer()` observes this dependency, so composition-derived geometry updates as well.
+TextField compares the revision when ensuring layouts and rebuilds editable, label, placeholder, and validation layouts while retaining controlled text, selection, focus, and IME state.
+The extra revision fields, dependency allocation and observation, cache checks, and internal invalidation operations compile only with `__EMSCRIPTEN__`; UiWindow and TextMeasurer expose no font-availability notification or revision API.
+Other backends load custom fonts synchronously and retain ordinary input-based cache invalidation without this additional state.
+Retained layout and measurement snapshots are not mutated; Web composition code must remeasure when its `UseTextMeasurer()` dependency changes.
 
 Cache hits are an optimization only.
 They cannot change measurement, line breaking, baseline placement, selection geometry, or damage bounds.
@@ -187,6 +213,18 @@ They do not introduce a second platform text ownership path.
 - Android maps Font to cached Typeface values, keeps a bounded StaticLayout paragraph cache, and submits each exact-run batch through one JNI call for baseline-positioned Canvas replay.
 - Linux configures one Pango attributed layout for each measurement, geometry, or drawing operation.
 - Web retains Canvas-backed paragraph geometry with the deliberate shaping limitations below.
+
+CoreText creates custom CTFont values from byte-backed CGFont values without process-wide font registration.
+DirectWrite uses private in-memory file and collection loaders; every retained layout keeps the corresponding registrations alive independently of renderer-cache eviction.
+Android caches Typeface values by the selected face's internal identity, using a private temporary snapshot file on API 23 and later and deleting the snapshot after Typeface creation.
+Linux uses a private Fontconfig configuration per Pango font map, assigns custom faces unique aliases, and retains temporary snapshots through the map's lifetime, pruning unused faces when loading another family.
+Neither installed fonts with the same name nor other windows' native caches can replace a selected custom face.
+
+Web registers byte-backed FontFace objects under private aliases in `document.fonts`.
+Until decoding finishes, measurement and painting both use system fallback; completion coalesces a notification to each attached window, clears its paragraph cache, and advances its text-metrics revision.
+Failures retain fallback without retrying on every frame.
+Released sources and retired application generations ignore late Promise completion; application shutdown removes registered FontFace objects.
+No public loading state or font-specific asynchronous task is introduced; applications may load bytes asynchronously through the existing File and task APIs.
 
 All mappings consume logical coordinates and UTF-8 shared text at the host boundary.
 Platform adapters perform their required UTF-16 or platform-string conversion locally.

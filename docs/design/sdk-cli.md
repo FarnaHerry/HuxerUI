@@ -162,7 +162,7 @@ Source-build target and platform configuration remains private to the repository
 `HuxerUIConfig.cmake` is the only public CMake package and exposes only canonical HuxerUI framework targets.
 Desktop packages import both targets by default, and `huxerui_add_app` selects the static target.
 Android imports only the shared `HuxerUI::huxerui` target because its Java host loads `libhuxerui.so`; Web and iOS use static framework artifacts.
-Consumers may request only `COMPONENTS shared` or `COMPONENTS static`; requesting the Linux shared component does not resolve static-only dependencies, while the static component resolves the distribution-owned GTK 4, GIO, and libsoup 3 libraries through pkg-config.
+Consumers may request only `COMPONENTS shared` or `COMPONENTS static`; requesting the Linux shared component does not resolve static-only dependencies, while the static component resolves the distribution-owned GTK 4, libepoxy, GIO, libsoup 3, pangoft2, and Fontconfig libraries through pkg-config.
 Platform package managers may carry platform libraries and integration code, but they do not introduce a second public HuxerUI package or a forwarding target hierarchy.
 The CLI or source-controlled platform shell supplies the resolved SDK location to CMake; application source does not encode an SDK archive layout.
 An in-tree source override creates the same canonical targets and loads the same helpers without changing the application declarations below the SDK bootstrap.

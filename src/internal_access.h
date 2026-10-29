@@ -84,6 +84,11 @@ struct InternalAccess {
   static const MountedNode* RootNode(const UiWindow& ui_window) noexcept;
   // Returns the complete mounted tree, including runtime-owned containers.
   static const MountedNode* MountedRoot(const UiWindow& ui_window) noexcept;
+#if defined(__EMSCRIPTEN__)
+  static std::uint64_t TextMetricsRevision(const UiWindow& ui_window) noexcept;
+  // Web clears its renderer caches before invalidating shared text geometry on the application thread.
+  static void InvalidateTextMetrics(UiWindow& ui_window);
+#endif
   static const ScrollPhysics& DefaultScrollPhysics(const UiWindow& ui_window) noexcept;
   static void NotifyScrollActivity(UiWindow& ui_window, MountedNode& node, const ScrollActivity& activity);
   static void RequestFrame(UiWindow& ui_window);
@@ -259,6 +264,7 @@ struct InternalAccess {
 
   static bool SameBody(const AttributedText& left, const AttributedText& right) noexcept;
   static std::size_t BodyHash(const AttributedText& text) noexcept;
+  static const std::shared_ptr<const FontFamilyData>& FontData(const FontFamily& family) noexcept;
 
 #pragma endregion
 

@@ -99,7 +99,7 @@ sources = ["platform/linux/*.cpp"]
 # cmake/platform/Linux.cmake requires -- the two answer "where does GTK come
 # from" differently on purpose.
 #
-# The list is the transitive .pc closure of gtk4 + epoxy + libsoup, pinned. A
+# The list is the transitive .pc closure of GTK, epoxy, libsoup and custom-font support, pinned. A
 # missing entry surfaces as `Package <x> was not found in the pkg-config search
 # path`, which names what to add.
 #

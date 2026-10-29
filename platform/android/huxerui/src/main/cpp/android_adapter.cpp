@@ -1249,7 +1249,7 @@ public:
     if (environment == nullptr || view_ == nullptr) {
       return {};
     }
-    jbyteArray family = ToByteArray(environment, font.FamilyName());
+    jbyteArray family = ToByteArray(environment, AndroidFontName(font));
     if (family == nullptr) {
       return {};
     }
@@ -1294,7 +1294,7 @@ public:
       return {};
     }
     jbyteArray bytes = ToByteArray(environment, text);
-    jbyteArray family = ToByteArray(environment, style.font.FamilyName());
+    jbyteArray family = ToByteArray(environment, AndroidFontName(style.font));
     jbyteArray locale = ToByteArray(environment, options.locale);
     if (bytes == nullptr || family == nullptr || locale == nullptr) {
       if (bytes != nullptr) {
@@ -1365,7 +1365,7 @@ public:
       return {};
     }
     jbyteArray bytes = ToByteArray(environment, text.PlainText());
-    jbyteArray family = ToByteArray(environment, style.font.FamilyName());
+    jbyteArray family = ToByteArray(environment, AndroidFontName(style.font));
     jbyteArray locale = ToByteArray(environment, options.shaping.locale);
     if (bytes == nullptr || family == nullptr || locale == nullptr) {
       if (bytes != nullptr) {
@@ -1424,7 +1424,7 @@ public:
       return {};
     }
     jbyteArray bytes = ToByteArray(environment, text.PlainText());
-    jbyteArray family = ToByteArray(environment, style.font.FamilyName());
+    jbyteArray family = ToByteArray(environment, AndroidFontName(style.font));
     jbyteArray locale = ToByteArray(environment, options.shaping.locale);
     if (bytes == nullptr || family == nullptr || locale == nullptr) {
       if (bytes != nullptr) {

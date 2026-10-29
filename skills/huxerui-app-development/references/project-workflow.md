@@ -1,6 +1,6 @@
 # Project Workflow
 
-Use the actual installed CLI and generated project as the contract. CLI arguments can change between SDK versions.
+Use the selected CLI and generated project as the contract. This reference covers the CMake/SDK workflow; package-based mcpp projects follow [cpp-modules-and-mcpp.md](cpp-modules-and-mcpp.md). CLI arguments can change between SDK versions.
 
 ## Locate the tools and SDK
 
@@ -16,8 +16,8 @@ When the task creates, configures, builds, runs, or diagnoses a project:
 The packaged CLI exposes these top-level forms at the time this Skill is distributed:
 
 ```text
-huxerui create app <name> [--id <project-id>] [-p|--platform <platform-list>] [--agent <agent-list>]
-huxerui create library <name> [--namespace <cpp-namespace>] [--target <public-cmake-target>] [--id <project-id>] [-p|--platform <platform-list>] [--agent <agent-list>]
+huxerui create app <name> [--build cmake|mcpp] [--template <name>] [--id <project-id>] [-p|--platform <platform-list>] [--agent <agent-list>]
+huxerui create library <name> [--build cmake|mcpp] [--template <name>] [--namespace <cpp-namespace>] [--target <public-cmake-target>] [--id <project-id>] [-p|--platform <platform-list>] [--agent <agent-list>]
 huxerui platform add <platform-list>
 huxerui doctor [platform-list]
 huxerui setup <platform-list> [--yes]
@@ -29,7 +29,7 @@ huxerui package <platform-list> [--device <id>] [--profile debug|release] [--gen
 huxerui open ios [--source <path>]
 ```
 
-Re-read current help before copying these commands.
+Re-read current help before copying these commands. CMake is the default build system. `--template` requires `--build mcpp`, and mcpp creation rejects `--platform`; the CMake-specific layouts and packaging steps below do not apply to that path.
 
 The CLI copies this Skill into new projects by default.
 `--agent` accepts `codex`, `claude`, `antigravity`, `opencode`, `command-code`, `omp`, `dsh`, and `zcode`; `all` selects every distinct supported Skill directory, while `none` omits the Skill.
@@ -157,7 +157,7 @@ Do not add a second dependency manifest or invoke FetchContent separately for a 
 
 ## Build and run without changing toolchains
 
-For an independent project that uses mcpp, run `huxerui mcpp build`. The selected directory must contain `mcpp.toml`; this frontend invokes mcpp directly and does not change the CMake-based HuxerUI project workflow below.
+For a package-based mcpp project, use `mcpp build` and `mcpp run` with its existing rules. The separate `huxerui mcpp build` frontend only delegates an already configured mcpp build; it does not convert an SDK/CMake project or supply missing integration. See [prebuilt SDK consumers](mcpp-build.md) when that is the actual project setup.
 
 - Reuse the project's compatible build directory and generator.
 - On Windows, keep the existing MSVC generator; do not switch to MinGW or pin a Visual Studio release without a project requirement.

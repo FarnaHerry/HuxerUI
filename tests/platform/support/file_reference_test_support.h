@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime_test_support.h"
+#include "async_test_support.h"
 
 #include <atomic>
 #include <chrono>
@@ -77,7 +78,8 @@ public:
       std::function<void()> task;
       {
         std::unique_lock lock(queue_->mutex);
-        const bool ready = queue_->condition.wait_until(lock, deadline, [this] { return !queue_->tasks.empty(); });
+        const bool ready = WaitForTestCondition(queue_->condition, lock, deadline,
+                                                [this] { return !queue_->tasks.empty(); });
         REQUIRE(ready);
         task = std::move(queue_->tasks.front());
         queue_->tasks.pop_front();

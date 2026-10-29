@@ -44,6 +44,48 @@ public:
   int layouts = 0;
 };
 
+class ChangingTextPlatform final : public TestPlatform {
+public:
+  TextLayoutMetrics MeasureText(const AttributedText& text, const TextStyle& style, float width,
+      const TextLayoutOptions& options) override {
+    const float layout_scale = scale * style.font.Size() / 20.0F;
+    auto result = TestPlatform::MeasureText(text, style, width / layout_scale, options);
+    result.size.width *= layout_scale;
+    return result;
+  }
+  std::unique_ptr<detail::TextLayout> CreateTextLayout(const AttributedText& text, const TextStyle& style, float width,
+      const TextLayoutOptions& options) override {
+    class ScaledLayout final : public detail::TextLayout {
+    public:
+      ScaledLayout(std::unique_ptr<detail::TextLayout> inner, float scale) : inner_(std::move(inner)), scale_(scale) {}
+      Size Measure() const override { auto size = inner_->Measure(); size.width *= scale_; return size; }
+      TextPosition HitTest(Point point) const override { point.x /= scale_; return inner_->HitTest(point); }
+      Rect CaretRect(TextOffset offset, TextAffinity affinity) const override {
+        auto rect = inner_->CaretRect(offset, affinity); rect.x *= scale_; return rect;
+      }
+      std::vector<Rect> RangeRects(TextRange range) const override {
+        auto rects = inner_->RangeRects(range);
+        for (auto& rect : rects) { rect.x *= scale_; rect.width *= scale_; }
+        return rects;
+      }
+      TextOffset PreviousCaretOffset(TextOffset offset) const override { return inner_->PreviousCaretOffset(offset); }
+      TextOffset NextCaretOffset(TextOffset offset) const override { return inner_->NextCaretOffset(offset); }
+    private:
+      std::unique_ptr<detail::TextLayout> inner_;
+      float scale_;
+    };
+    ++layouts;
+    const float layout_scale = scale * style.font.Size() / 20.0F;
+    return std::make_unique<ScaledLayout>(
+        TestPlatform::CreateTextLayout(text, style, width / layout_scale, options), layout_scale);
+  }
+  float scale = 1.0F;
+  int layouts = 0;
+};
+
+std::function<View()> metric_root;
+View MetricApp() { return metric_root(); }
+
 void ResetParagraph() {
   paragraph = AttributedText::FromRanges("Go first then second.", {},
       {{{3, 8}, Uri("https://example.com/first")}, {{14, 20}, Uri("https://example.com/second")}});
@@ -224,6 +266,75 @@ TEST_CASE("AttributedParagraphDoubleClickSelectsLinkWordWithoutSecondActivation"
   REQUIRE(link_activations == 1);
   REQUIRE(runtime.PerformTextEditingAction(TextEditingAction::Copy));
   REQUIRE(clipboard.text == "first");
+}
+
+TEST_CASE("TextFontChangesRefreshObservationSelectionAndTextFieldWithoutResettingState") {
+  class Input final : public PlatformTextInput {
+  public:
+    void Start(TextInputSessionId, const TextInputConfiguration&, const TextInputState&,
+        const TextInputGeometry& value) override { geometry = value; ++starts; }
+    void Update(TextInputSessionId, const TextInputState&, const TextInputGeometry& value) override { geometry = value; }
+    void Restart(TextInputSessionId, const TextInputConfiguration&, const TextInputState&,
+        const TextInputGeometry&) override { ++restarts; }
+    void Stop(TextInputSessionId) override {}
+    TextInputGeometry geometry;
+    int starts = 0;
+    int restarts = 0;
+  } input;
+  ChangingTextPlatform platform;
+  platform.platform_text_input = &input;
+  State<TextEditingValue> value;
+  State<Font> font;
+  float observed_width = 0.0F;
+  int compositions = 0;
+  metric_root = [&]() -> View {
+    ++compositions;
+    value = UseState(TextEditingValue::FromText("edit"));
+    font = UseState(Font::System(20.0F));
+    const TextStyle style{font.Get(), Color::Black()};
+    observed_width = UseTextMeasurer().MeasureText("measure", style).size.width;
+    return Column {
+      SelectionArea(Text("paragraph").Style(style)),
+      TextField(value)
+          .OnChanged([state = value](const TextEditingValue& changed) mutable { state = changed; })
+          .With(FontSize{style.font.Size()}, Frame{.width = 200.0F, .height = 48.0F}),
+    };
+  };
+  UiWindow window(MetricApp, platform);
+  window.SetWindowMetrics({.viewport = {300.0F, 160.0F}});
+  window.BuildFrame();
+  auto selection = value.Get();
+  selection.selection = {1, 3};
+  value = selection;
+  const auto& before = window.BuildFrame();
+  const auto width = FindText(before, "paragraph")->rect.width;
+  const auto field = FindText(before, "edit")->rect;
+  const auto observed = observed_width;
+  const auto count = platform.layouts;
+  const auto old_compositions = compositions;
+  ClickAt(window, {field.x + 10.0F, field.y + 10.0F});
+  const auto editing = value.Get();
+  const auto before_caret = input.geometry.caret;
+  SECTION("Font value changes") {
+    font = font.Get().WithSize(40.0F);
+  }
+#if defined(__EMSCRIPTEN__)
+  SECTION("Web font availability changes") {
+    platform.scale = 2.0F;
+    detail::InternalAccess::InvalidateTextMetrics(platform);
+  }
+#endif
+  const auto& after = window.BuildFrame();
+  REQUIRE(observed_width == Catch::Approx(observed * 2.0F));
+  REQUIRE(FindText(after, "paragraph")->rect.width == Catch::Approx(width * 2.0F));
+  REQUIRE(platform.layouts > count);
+  REQUIRE(compositions == old_compositions + 1);
+  REQUIRE(value.Get() == editing);
+  REQUIRE(input.starts == 1);
+  REQUIRE(input.restarts == 0);
+  REQUIRE(input.geometry.caret.x - field.x == Catch::Approx((before_caret.x - field.x) * 2.0F));
+  REQUIRE(window.HandleKeyEvent({.type = KeyEventType::Down, .key = Key::ArrowRight}));
+  REQUIRE(value.Get().selection.active == editing.selection.active + 1);
 }
 
 } // namespace huxerui::test

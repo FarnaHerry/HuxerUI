@@ -293,7 +293,7 @@ TEST_CASE("HttpClientSendsOneTypedOperationAndAggregatesItsPullReads") {
   REQUIRE(request.method == HttpMethod::Post);
   REQUIRE(request.body == request_body);
 
-  std::thread response([&platform] {
+  const auto respond = [&platform] {
     platform.transport->Respond(
         0,
         {
@@ -302,8 +302,13 @@ TEST_CASE("HttpClientSendsOneTypedOperationAndAggregatesItsPullReads") {
             .headers = {{"Content-Type", "application/json"}},
             .body_size = 4,
         });
-  });
+  };
+#if defined(__EMSCRIPTEN__)
+  respond();
+#else
+  std::thread response(respond);
   response.join();
+#endif
   platform.RunPlatformModuleTasks();
   REQUIRE(platform.transport->ReadRequests(0) == 1);
 
@@ -583,13 +588,18 @@ TEST_CASE("HttpProgressIsMonotonicAndRunsOnTheRuntimeUIThread") {
       }));
   platform.RunPlatformModuleTasks();
 
-  std::thread transport([&platform] {
+  const auto report_progress = [&platform] {
     platform.transport->Upload(0, 2);
     platform.transport->Upload(0, 1);
     platform.transport->Upload(0, 9);
     platform.transport->Respond(0, {.url = "https://example.test/progress", .status_code = 200, .body_size = 3});
-  });
+  };
+#if defined(__EMSCRIPTEN__)
+  report_progress();
+#else
+  std::thread transport(report_progress);
   transport.join();
+#endif
   platform.RunPlatformModuleTasks();
   platform.transport->Body(0, BytesFromString("abc"));
   platform.RunPlatformModuleTasks();
