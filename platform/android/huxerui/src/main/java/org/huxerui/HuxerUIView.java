@@ -281,7 +281,7 @@ public final class HuxerUIView extends ViewGroup {
         setFocusable(true);
         setFocusableInTouchMode(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // HuxerUI paints its own focus indication. Android's default highlight covers this entire host View.
+            // HuxerUI paints component focus indication within this host.
             setDefaultFocusHighlightEnabled(false);
         }
         setClickable(true);

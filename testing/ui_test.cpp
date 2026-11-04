@@ -730,7 +730,7 @@ void UiTest::UpdateResourceConfiguration(ResourceConfiguration configuration) {
   });
 }
 void UiTest::UpdateWindowLifecycleState(WindowLifecycleState state) {
-  session_->Mutate([&] { session_->window.UiWindow::UpdateWindowLifecycleState(state); });
+  session_->Mutate([&] { session_->window.UpdateWindowLifecycleState(state); });
 }
 void UiTest::SendPointer(const PointerEvent& event) { session_->Pointer(event); }
 Point UiTest::SendScroll(const ScrollInputEvent& event) {

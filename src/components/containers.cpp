@@ -578,26 +578,22 @@ LayoutResult MeasureAxisLayout(LayoutContext& context, ViewNode& node, Constrain
   const float maximum_cross = MaximumCross(constraints, vertical);
   const bool tight_cross = stretch && std::isfinite(maximum_cross) && minimum_cross == maximum_cross;
   const Constraints initial = tight_cross ? TightCross(loose, vertical, maximum_cross) : loose;
+  const float max_main = MaximumMain(constraints, vertical);
   float total_grow = 0.0F;
-  const bool main_bounded = std::isfinite(MaximumMain(constraints, vertical));
 
   for (ViewNode& child : node.Children()) {
     total_grow += child.GrowFactor();
-    // A grow child under a bounded main axis is measured below with its final main size. A non-stretching layout
-    // recomputes its cross extent from that result; a tight cross axis already fixes the stretching cross extent.
-    // In either case, a speculative loose measurement contributes no sizing information and recursively doubles
-    // the work of deeply nested layouts.
-    if (main_bounded && child.GrowFactor() > 0.0F && (!stretch || tight_cross)) {
+    // Bounded grow children receive their final main size below. Tight stretching already fixes their cross size;
+    // non-stretching layouts recompute it afterward, so a speculative measurement only multiplies subtree work.
+    if (child.GrowFactor() > 0.0F && std::isfinite(max_main) && (!stretch || tight_cross)) {
       continue;
     }
-    // A tight cross axis already determines the stretch result. Measuring loose first would recursively double the
-    // work of every nested stretching linear layout without contributing another layout decision.
     static_cast<void>(context.Measure(child, initial));
   }
 
-  float target_cross = std::clamp(MaxCrossSize(node, vertical), minimum_cross, maximum_cross);
-
+  float target_cross = minimum_cross;
   if (stretch && !tight_cross) {
+    target_cross = std::clamp(MaxCrossSize(node, vertical), minimum_cross, maximum_cross);
     for (ViewNode& child : node.Children()) {
       static_cast<void>(context.Measure(child, TightCross(loose, vertical, target_cross)));
     }
@@ -611,7 +607,6 @@ LayoutResult MeasureAxisLayout(LayoutContext& context, ViewNode& node, Constrain
     }
   }
 
-  const float max_main = MaximumMain(constraints, vertical);
   float target_main = fixed_main + spacing;
   if (total_grow > 0.0F && std::isfinite(max_main)) {
     target_main = max_main;

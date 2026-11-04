@@ -13,7 +13,7 @@ import android.text.TextPaint;
 
 import java.lang.reflect.Method;
 
-/** Android-runtime regression checks; the actual host View requires a matching native HuxerUI library. */
+/** Android-runtime regression checks; host checks require the matching native HuxerUI library. */
 public final class HuxerUIRuntimeTest extends Instrumentation {
     @Override
     public void onCreate(Bundle arguments) {
@@ -52,26 +52,24 @@ public final class HuxerUIRuntimeTest extends Instrumentation {
     private static int assertions;
 
     private void verifyHostFocusHighlight() {
-        final boolean[] state = new boolean[3];
         final Throwable[] failure = new Throwable[1];
         runOnMainSync(() -> {
             try {
                 HuxerUIView host = new HuxerUIView(getTargetContext());
-                state[0] = host.isFocusable();
-                state[1] = host.isFocusableInTouchMode();
-                state[2] = Build.VERSION.SDK_INT < Build.VERSION_CODES.O
-                        || !host.getDefaultFocusHighlightEnabled();
+                check(host.isFocusable(), "The host must remain focusable for keyboard input");
+                check(host.isFocusableInTouchMode(), "The host must remain focusable in touch mode for IME input");
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    check(!host.getDefaultFocusHighlightEnabled(),
+                            "Android default focus highlighting must not cover the HuxerUI host");
+                }
             } catch (Throwable error) {
-                // Report main-thread setup errors through Instrumentation rather than terminating its process.
+                // Report main-thread setup and assertion failures through the instrumentation result.
                 failure[0] = error;
             }
         });
         if (failure[0] != null) {
-            throw new AssertionError("Host focus checks require matching libhuxerui.so and its runtime dependencies", failure[0]);
+            throw new AssertionError("HuxerUI host focus regression failed", failure[0]);
         }
-        check(state[0], "The host remains focusable for keyboard input");
-        check(state[1], "The host remains focusable in touch mode for IME input");
-        check(state[2], "Android default focus highlighting must not tint the whole host");
     }
 
     private static void check(boolean value, String message) {

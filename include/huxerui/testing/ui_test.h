@@ -620,7 +620,14 @@ public:
   /// ui.Pump();
   /// @endcode
   void UpdateResourceConfiguration(ResourceConfiguration configuration);
-  /// Publishes a native window lifecycle transition; Pump commits its observers and resulting UI.
+  /// Injects this window's native-style lifecycle state without pumping; query observations change on Pump.
+  /// Application lifecycle is unchanged, and no native window operation is performed.
+  /// @param state Foreground state of this test window.
+  /// @throws std::invalid_argument If state is not a valid WindowLifecycleState.
+  /// @code
+  /// ui.UpdateWindowLifecycleState(WindowLifecycleState::Inactive);
+  /// ui.Pump();
+  /// @endcode
   void UpdateWindowLifecycleState(WindowLifecycleState state);
   /// Forwards a raw pointer event without pumping, preserving normal hit testing, capture, and cancellation.
   /// Use complete pointer sequences with stable identities; no missing Down, Up, or Cancel is synthesized.

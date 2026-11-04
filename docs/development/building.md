@@ -11,6 +11,7 @@ Application developers using a released SDK should follow [Getting Started](../g
 - The required platform SDK and dependencies
 
 Apple builds require Xcode 26 or later for the standard library's `std::stop_token` and `std::stop_source` support without experimental-library flags. Release CI selects Xcode 26.2 explicitly through `DEVELOPER_DIR` for iOS artifacts and both macOS architectures, including their host-tool builds. For a local build, select a supported Xcode before configuring a fresh build directory. The build-machine requirement is separate from the deployment targets, which remain iOS 15.0 and macOS 12.0.
+The root CMake project selects the native macOS 12.0 default before the first `project()` call, including when invoked by the SDK packaging script. Explicit deployment settings and `MACOSX_DEPLOYMENT_TARGET` retain precedence; when a toolchain file is supplied, that toolchain owns the deployment setting. Existing build caches retain their configured values.
 
 Linux additionally requires GTK 4.14 or later, libepoxy, Pango (including pangoft2), Fontconfig, Cairo, GIO, and libsoup 3 development packages discoverable through pkg-config.
 Linux release CI uses GCC 14. Select it explicitly with `CC=gcc-14 CXX=g++-14` when configuring a fresh build directory; GCC 13 can encounter an internal compiler error in the coroutine-based local-notification example.
@@ -81,9 +82,10 @@ Code-generation changes also require the codegen tests and updated required host
 CI maintains all checked-in host packages through [Host-tool updates](sdk-packaging.md#host-tool-updates).
 When changing that workflow or its support script, run `python -B tests/scripts/host_tools_test.py`; it uses temporary Git repositories and requires only Python 3.12 or later and Git.
 
-Android Runtime tests run on a device or emulator with `./gradlew :HuxerUI:connectedDebugAndroidTest` from `platform/android` (`gradlew.bat` on Windows).
+Android Runtime tests run on a device or emulator with `./gradlew :HuxerUI:connectedDebugAndroidTest -PhuxeruiBuildNative=true` from `platform/android` (`gradlew.bat` on Windows).
 The library's `androidTest` source set uses `tests/platform/android/instrumentation/HuxerUIRuntimeTest.java` as its platform Instrumentation runner and needs no AndroidX/JUnit dependency.
-The actual host focus check loads native HuxerUI: build with `-PhuxeruiBuildNative=true`, or supply `-PhuxeruiRuntimeTestJniDirectory=/absolute/path/to/jni` containing matching ABI subdirectories with `libhuxerui.so` and its runtime dependencies, such as `libc++_shared.so`.
+The host focus checks construct a real `HuxerUIView`, so the test package must include the matching native HuxerUI library and its runtime dependencies; `huxeruiBuildNative=true` builds and packages them for the configured ABIs.
+Alternatively, supply `-PhuxeruiRuntimeTestJniDirectory=/absolute/path/to/jni` containing matching ABI subdirectories with `libhuxerui.so` and its runtime dependencies, such as `libc++_shared.so`.
 It covers host focus highlighting, paragraph geometry, and local-notification Intent identity and activation normalization, and installs only the separate test package rather than replacing an example application.
 
 The separate windowless UI smoke runs with `./gradlew :ui_testing:connectedDebugAndroidTest` from the same directory.

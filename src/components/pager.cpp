@@ -249,8 +249,8 @@ public:
       relative.emplace_back(index, physical_direction);
     };
 
+    add(displayed_index_, 0);
     if (mode_ == Mode::Animating) {
-      add(displayed_index_, 0);
       const auto peer = animation_target_index_ != displayed_index_
                             ? std::optional<std::size_t>{animation_target_index_}
                             : drag_target_;
@@ -258,7 +258,6 @@ public:
         add(*peer, *peer > displayed_index_ ? 1 : -1);
       }
     } else {
-      add(displayed_index_, 0);
       if (displayed_index_ > 0) {
         add(displayed_index_ - 1, -1);
       }
@@ -414,8 +413,7 @@ private:
   }
 
   void BeginAnimation(detail::MountedNode& node, std::size_t target) {
-    // Returning to the anchor during a non-adjacent jump still needs the old
-    // arriving page as its departing peer. Never reuse a completed drag target.
+    // Returning to the source keeps the previous destination visible until the rebound ends.
     if (mode_ == Mode::Animating && animation_target_index_ != displayed_index_) {
       drag_target_ = target == displayed_index_
                          ? std::optional<std::size_t>{animation_target_index_}

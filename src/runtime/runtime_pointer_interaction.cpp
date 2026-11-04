@@ -295,7 +295,7 @@ DropEvent LocalDropEvent(const MountedNode& node, const DragEvent& drag) {
 
 LayerPlacement DragPreviewPlacement(Point position, Point grab_offset) {
   return {
-      .kind = LayerPlacementKind::FollowPointer,
+      .kind = LayerPlacementKind::Positioned,
       .anchor = {position.x, position.y, 0.0F, 0.0F},
       .offset = {-grab_offset.x, -grab_offset.y},
   };

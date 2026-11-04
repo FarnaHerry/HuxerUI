@@ -34,8 +34,9 @@ return Column {
 
 `Grow()` is parent-child layout metadata.
 It affects participation in a compatible parent layout and propagates across transparent composition boundaries such as scopes and Environment providers.
-When the main axis is bounded and the stretching cross axis is already tight, growing children are measured with their final allocated main size without an extra speculative measurement.
-A loose cross axis still uses intrinsic cross sizing, and growing children under an unbounded main axis retain their natural main size.
+`Row` and `Column` allocate finite remaining main-axis space by grow factor; an unbounded main axis preserves natural sizes instead.
+Growing children avoid speculative measurement when the cross axis does not stretch or its stretched size is already fixed by tight constraints.
+Stretching under loose cross-axis constraints still measures intrinsic cross sizes before allocating space.
 
 ## Mounted coordinate spaces
 

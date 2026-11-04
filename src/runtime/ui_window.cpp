@@ -511,11 +511,9 @@ public:
           viewport_height - vertical_margin - child_size.height,
       };
       break;
-    case LayerPlacementKind::FollowPointer: {
-      // Drag feedback belongs to the pointer, not to the viewport. Popover
-      // anchor rules (side flipping and viewport clamping) make a dragged
-      // item jump away from the grab point near the window edges.
+    case LayerPlacementKind::Positioned: {
       child_size = context.Measure(child, loose);
+      // LayoutNode adds the safe-area padding back after placing the child.
       const EdgeInsets layer_padding = static_cast<detail::MountedNode&>(node).resolved_padding;
       child_offset = {
           placement.anchor.x - layer_padding.left + placement.offset.x,
@@ -770,8 +768,7 @@ bool PropagateVirtualLayoutInvalidation(MountedNode& node) {
   if (subtree_dirty) {
     node.measure_dirty = true;
   }
-  // Retain dirty state inside inactive pages for their next measurement, but do not invalidate the visible ancestor
-  // path every frame for an unrealized viewport that cannot be cleared until its page participates again.
+  // Retain pending work inside unplaced subtrees until they participate in layout again.
   return subtree_dirty && node.participates_in_layout;
 }
 

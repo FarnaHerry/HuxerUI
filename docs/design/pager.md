@@ -56,7 +56,7 @@ One private retained extension on the Pager root owns only transient paging stat
 
 - The last displayed controlled index.
 - Direct-input and release phase.
-- The adjacent page participating in the current drag.
+- The peer page retained during a drag or rebound.
 - Normalized settle animation progress.
 - The current viewport extent and local slot coordinates.
 
@@ -73,9 +73,9 @@ It still publishes enough private content extent for the existing scroll recogni
 After direct movement selects a direction, Pager measures and places the committed page and that adjacent page.
 Programmatic transitions measure and place only their source and target pages, including non-adjacent index changes without traversing intermediate pages.
 Retargeting back to the source preserves the previous target as the departing peer until the rebound ends.
-Completed transitions clear the retained drag target so later animations cannot reuse an unrelated page slot.
+Completing a transition or resetting incompatible geometry clears the retained peer so later animations cannot reuse it.
 Unplaced pages retain mounted state but remain excluded through the generic layout-participation contract.
-Pending virtual-viewport measurement remains dirty inside an unplaced page without propagating measurement invalidation into visible ancestors; showing that page resumes its pending work.
+Pending virtual measurement stays within an unplaced page without repeatedly invalidating visible ancestors and is processed when the page participates in layout again.
 
 Slots are local to the current transition rather than absolute page-index coordinates.
 When the slot set changes, Pager preserves displacement relative to the source page and remaps it into the new slots.
