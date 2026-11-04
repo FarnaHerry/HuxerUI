@@ -313,8 +313,14 @@ Size MeasureLabelContent(MountedNode& node, UiWindow& ui_window, const Constrain
 
 Size MeasureTextContent(MountedNode& node, UiWindow& ui_window, const Constraints& content_constraints) {
   const float max_width = content_constraints.max_width;
+#if defined(__EMSCRIPTEN__) || (defined(__linux__) && !defined(__ANDROID__))
+  const std::uint64_t text_metrics_revision = InternalAccess::TextMetricsRevision(ui_window);
+#endif
   const auto& memo = node.text_measurement_memo;
   if (memo.has_value() && memo->max_width == max_width && memo->options == node.properties.text_layout_options &&
+#if defined(__EMSCRIPTEN__) || (defined(__linux__) && !defined(__ANDROID__))
+      memo->text_metrics_revision == text_metrics_revision &&
+#endif
       TextLayoutInputsEqual(memo->text, memo->font, node.text, node.properties.text_style.font)) {
     return memo->size;
   }
@@ -325,6 +331,9 @@ Size MeasureTextContent(MountedNode& node, UiWindow& ui_window, const Constraint
       node.properties.text_style.font,
       node.properties.text_layout_options,
       max_width,
+#if defined(__EMSCRIPTEN__) || (defined(__linux__) && !defined(__ANDROID__))
+      text_metrics_revision,
+#endif
       measured,
   };
   return measured;

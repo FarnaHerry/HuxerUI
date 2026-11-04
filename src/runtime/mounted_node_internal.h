@@ -282,6 +282,10 @@ struct MountedNode final : public huxerui::ViewNode {
     Font font;
     TextLayoutOptions options;
     float max_width = 0.0F;
+#if defined(__EMSCRIPTEN__) || (defined(__linux__) && !defined(__ANDROID__))
+    // Platform font metrics can change without changing any shaping input; the memo must follow that revision.
+    std::uint64_t text_metrics_revision = 0;
+#endif
     Size size;
   };
   std::optional<TextMeasurementMemo> text_measurement_memo;

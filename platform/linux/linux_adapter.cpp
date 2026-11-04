@@ -5,6 +5,7 @@
 #endif
 
 #include <gtk/gtk.h>
+#include <pango/pangocairo.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/x11/gdkx.h>
 #ifdef None
@@ -536,11 +537,13 @@ std::shared_ptr<LinuxUiThreadDispatcher> InitializeGtk() {
 
 using HuxerUICanvasSnapshot = void (*)(GtkSnapshot* snapshot, int width, int height, gpointer data);
 using HuxerUICanvasAllocate = void (*)(GtkWidget* widget, int width, int height, gpointer data);
+using HuxerUICanvasStyleChangedCallback = void (*)(gpointer data);
 
 struct HuxerUICanvas {
   GtkWidget parent_instance;
   HuxerUICanvasSnapshot snapshot = nullptr;
   HuxerUICanvasAllocate allocate = nullptr;
+  HuxerUICanvasStyleChangedCallback style_changed = nullptr;
   gpointer data = nullptr;
 };
 
@@ -552,7 +555,7 @@ G_DEFINE_TYPE(HuxerUICanvas, huxerui_canvas, GTK_TYPE_WIDGET)
 
 void HuxerUICanvasSnapshotFrame(GtkWidget* widget, GtkSnapshot* snapshot) {
   auto* canvas = reinterpret_cast<HuxerUICanvas*>(widget);
-  if (canvas->snapshot != nullptr) {
+  if (canvas->snapshot != nullptr && canvas->data != nullptr) {
     canvas->snapshot(snapshot, gtk_widget_get_width(widget), gtk_widget_get_height(widget), canvas->data);
   }
 }
@@ -561,6 +564,14 @@ void HuxerUICanvasAllocateChildren(GtkWidget* widget, int width, int height, int
   auto* canvas = reinterpret_cast<HuxerUICanvas*>(widget);
   if (canvas->allocate != nullptr) {
     canvas->allocate(widget, width, height, canvas->data);
+  }
+}
+
+void HuxerUICanvasStyleChanged(GtkWidget* widget, GtkCssStyleChange* change) {
+  GTK_WIDGET_CLASS(huxerui_canvas_parent_class)->css_changed(widget, change);
+  auto* canvas = reinterpret_cast<HuxerUICanvas*>(widget);
+  if (canvas->style_changed != nullptr && canvas->data != nullptr) {
+    canvas->style_changed(canvas->data);
   }
 }
 
@@ -575,6 +586,7 @@ void HuxerUICanvasDispose(GObject* object) {
 void huxerui_canvas_class_init(HuxerUICanvasClass* canvas_class) {
   GTK_WIDGET_CLASS(canvas_class)->snapshot = HuxerUICanvasSnapshotFrame;
   GTK_WIDGET_CLASS(canvas_class)->size_allocate = HuxerUICanvasAllocateChildren;
+  GTK_WIDGET_CLASS(canvas_class)->css_changed = HuxerUICanvasStyleChanged;
   G_OBJECT_CLASS(canvas_class)->dispose = HuxerUICanvasDispose;
 }
 
@@ -582,10 +594,16 @@ void huxerui_canvas_init(HuxerUICanvas* canvas) {
   gtk_widget_set_overflow(GTK_WIDGET(canvas), GTK_OVERFLOW_HIDDEN);
 }
 
-GtkWidget* CreateHuxerUICanvas(HuxerUICanvasSnapshot snapshot, HuxerUICanvasAllocate allocate, gpointer data) {
+GtkWidget* CreateHuxerUICanvas(
+    HuxerUICanvasSnapshot snapshot,
+    HuxerUICanvasAllocate allocate,
+    HuxerUICanvasStyleChangedCallback style_changed,
+    gpointer data
+) {
   auto* canvas = static_cast<HuxerUICanvas*>(g_object_new(huxerui_canvas_get_type(), nullptr));
   canvas->snapshot = snapshot;
   canvas->allocate = allocate;
+  canvas->style_changed = style_changed;
   canvas->data = data;
   return GTK_WIDGET(canvas);
 }
@@ -898,6 +916,7 @@ public:
     renderer_.Initialize();
     const Size initial_size = ResolveInitialWindowSize(options);
     CreateWindow(options, initial_size);
+    RefreshTextDpi();
     auto configuration = runtime.Resources()->Configuration();
     configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
     text_input_.SetUiWindow(this);
@@ -1430,7 +1449,7 @@ private:
       ApplyInitialPosition(*options.initial_position);
     }
 
-    drawing_area_ = CreateHuxerUICanvas(Snapshot, AllocatePlatformViews, this);
+    drawing_area_ = CreateHuxerUICanvas(Snapshot, AllocatePlatformViews, StyleChanged, this);
     if (options.minimum_size.has_value()) {
       gtk_widget_set_size_request(
           GTK_WIDGET(drawing_area_),
@@ -1592,6 +1611,14 @@ private:
                         : g_timeout_add_full(G_PRIORITY_HIGH, std::max(1U, delay), FrameReady, this, nullptr);
   }
 
+  void RefreshTextDpi() {
+    if (drawing_area_ == nullptr) return;
+    PangoContext* context = gtk_widget_get_pango_context(drawing_area_);
+    if (renderer_.UpdateTextDpi(pango_cairo_context_get_resolution(context)) && IsInitialized()) {
+      InternalAccess::InvalidateTextMetrics(*this);
+    }
+  }
+
   void CommitFrame() {
     ExecutionGuard guard(InternalAccess::WindowExecution(*this));
     frame_source_ = 0;
@@ -1600,6 +1627,8 @@ private:
         !GTK_IS_WIDGET(drawing_area_) || !frame_state_.BeginCommit()) {
       return;
     }
+    // Keep the previous frame's text scale until its snapshot has finished, then rebuild all text geometry together.
+    RefreshTextDpi();
     try {
       const FrameCommit& commit = UiWindow::BuildFrame();
       if (drawing_area_ == nullptr || !running_ || !GTK_IS_WIDGET(drawing_area_)) {
@@ -1874,6 +1903,7 @@ private:
     DetachToplevelState();
     key_tracker_.Reset();
     committed_frame_ = nullptr;
+    if (drawing_area_ != nullptr) reinterpret_cast<HuxerUICanvas*>(drawing_area_)->data = nullptr;
     renderer_.Discard();
   }
 
@@ -1933,6 +1963,12 @@ private:
 #endif
   }
 
+  static void StyleChanged(gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    if (self.IsInitialized()) self.RequestFrameAt(self.Now());
+  }
+
   static gboolean CloseRequested(GtkWindow*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     ExecutionGuard guard(InternalAccess::WindowExecution(self));
@@ -1948,6 +1984,7 @@ private:
     auto& self = *static_cast<LinuxUiWindow*>(data);
     ExecutionGuard guard(InternalAccess::WindowExecution(self));
     self.text_input_.Reset();
+    reinterpret_cast<HuxerUICanvas*>(widget)->data = nullptr;
     if (self.drawing_area_ != nullptr && GTK_WIDGET(self.drawing_area_) == widget) {
       self.DetachCanvasCallbacks();
       self.drawing_area_ = nullptr;

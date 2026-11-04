@@ -328,6 +328,8 @@ Successful scope retirement queues TaskScope closure for the same commit boundar
 UiWindow performs retired Lifecycle cleanup before closing the corresponding composition TaskScopes, then releases window services and native state.
 TaskScope uses its owning Runtime or UiWindow dispatcher for initial execution, HuxerUI awaitable resumption, and lifecycle-bound external-thread posting.
 RunWorker, WorkerSequence, and non-Web local File asynchronous operations share one bounded process-wide C++ worker executor, while platform-native asynchronous transports keep their existing owners.
+`AwaitCallback<T>()` adapts a single callback operation to the existing Task execution and cancellation lifecycle; its weak `CallbackCompletion<T>` endpoint accepts results or failures from any thread without retaining a canceled coroutine.
+File-reference operations reuse this bridge, while domain error mapping and native presentation queues stay with their adapters.
 WorkerSequence contributes per-instance FIFO admission and cooperative cancellation without owning threads or adding Runtime state.
 Worker execution is process-local and does not imply platform background execution.
 The Task model does not add Runtime branches to State, EventBindings, Lifecycle declarations, or concrete asynchronous services.
@@ -973,6 +975,9 @@ Android exposes one `HuxerUIFileReference` class whose bridge-created instances 
 The Apple adapters retain the C++ value in a lightweight `HUXFileReference` wrapper and expose its path-backed `NSURL`; ARC releases the capability with the wrapper.
 Web exposes a retained `FileReference` wrapper whose asynchronous `getFile()` resolves the current browser handle or captured `File`, and whose `close()` releases its C++ share.
 These projections do not start a new security scope, duplicate `CanWrite()`, attenuate the original grant, or make the capability persistent.
+
+`HuxerUIFileReference.fromUri()` constructs a read-only payload-compatible capability from existing URI access without acquiring or releasing persistent grants.
+On iOS, `+[HUXFileReference copyFromFileURL:error:]` creates a read-only SDK-owned copy before returning from a provider callback; the existing shared file state retains its temporary-file owner through reference I/O.
 
 BufferReference lives in `data.h` and owns one shared backing state containing a fixed byte span and a retained owner; slices add only an offset and length.
 Construction rejects nonempty storage without an owner, and slicing validates bounds using subtraction to avoid overflow.
@@ -2287,6 +2292,7 @@ The current extension points are:
 | Component external resource lifetime | `Lifecycle(setup, dependencies...)` |
 | Composition-owned asynchronous work | `Task<T>`, `UseTaskScope()`, `TaskScope::Launch()`, `RunWorker()`, and `WorkerSequence` |
 | External-thread UI handoff | Lifecycle-bound `TaskScope::Post()` |
+| Callback operation awaiting | `AwaitCallback<T>()` and `CallbackCompletion<T>` |
 | Custom View effect | Modifier value and `NodeExtension` |
 | Custom animation | `AnimationSpec` or animated modifier value |
 | Custom interaction visual | `Indication` and `NodeExtension::OnInteraction` |
