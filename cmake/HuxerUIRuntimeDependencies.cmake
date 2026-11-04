@@ -351,11 +351,14 @@ function(_huxerui_runtime_inputs path output)
 endfunction()
 
 function(_huxerui_runtime_scan output)
+    # 可选 STAGING_ROOT <dir>：显式传入暂存树根，冲突裁决据此区分包内候选
+    # 与宿主系统副本（见下方 conflicts 处理）；不传则保持全候选校验。
+    cmake_parse_arguments(SCAN "" "STAGING_ROOT" "" ${ARGN})
     set(EXECUTABLES)
     set(LIBRARIES)
     set(MODULES)
-    list(APPEND scan_roots ${ARGN})
-    foreach (file IN LISTS ARGN)
+    list(APPEND scan_roots ${SCAN_UNPARSED_ARGUMENTS})
+    foreach (file IN LISTS SCAN_UNPARSED_ARGUMENTS)
         _huxerui_runtime_binary("${file}" kind architecture)
         _huxerui_runtime_check_architecture("${file}" "${kind}" "${architecture}")
         if (file STREQUAL scan_executable)
@@ -399,21 +402,20 @@ function(_huxerui_runtime_scan output)
         set(unresolved ${missing})
     endif ()
     if (unresolved)
-        message(FATAL_ERROR "HuxerUI unresolved runtime dependencies for ${ARGN}: ${unresolved}\nSearch directories: ${search_directories}")
+        message(FATAL_ERROR "HuxerUI unresolved runtime dependencies for ${SCAN_UNPARSED_ARGUMENTS}: ${unresolved}\nSearch directories: ${search_directories}")
     endif ()
     foreach (name IN LISTS conflicts_FILENAMES)
         # 同名依赖命中多个文件时，暂存树内的候选优先于宿主系统副本：包内
         # RUNPATH 已自包含，系统里同名库的另一 flavor（例如 Ubuntu 把 libc++
         # 同时装在 llvm-21/lib 与 x86_64-linux-gnu）不构成打包缺陷；只有暂存
-        # 树内部出现内容不同的同名文件才算冲突。未设置暂存根的调用方保持
-        # 原有的全候选校验。
+        # 树内部出现内容不同的同名文件才算冲突。未传暂存根的调用方保持原有
+        # 的全候选校验。
         set(staged)
         set(external)
         foreach (file IN LISTS conflicts_${name})
             file(REAL_PATH "${file}" real)
-            string(FIND "${real}" "${_huxerui_runtime_content_directory}/" prefix)
-            if (DEFINED _huxerui_runtime_content_directory
-                    AND _huxerui_runtime_content_directory AND prefix EQUAL 0)
+            string(FIND "${real}" "${SCAN_STAGING_ROOT}/" prefix)
+            if (SCAN_STAGING_ROOT AND prefix EQUAL 0)
                 list(APPEND staged "${real}")
             else ()
                 list(APPEND external "${real}")
@@ -430,7 +432,7 @@ function(_huxerui_runtime_scan output)
         foreach (file IN LISTS candidates)
             file(SHA256 "${file}" hash)
             if (previous AND NOT previous STREQUAL hash)
-                message(FATAL_ERROR "HuxerUI conflicting runtime dependency ${name}: ${candidates}")
+                message(FATAL_ERROR "HuxerUI conflicting runtime dependency ${name}: staged=[${staged}] external=[${external}]")
             endif ()
             set(previous "${hash}")
             list(APPEND resolved "${file}")
@@ -825,10 +827,8 @@ function(_huxerui_runtime_verify content_directory installed_executable library_
         endif ()
     endforeach ()
     list(REMOVE_DUPLICATES staged_binaries)
-    # 冲突裁决需要区分暂存树内外的候选（见 _huxerui_runtime_scan 的
-    # conflicts 处理）；经调用链作用域传给 scan。
-    set(_huxerui_runtime_content_directory "${content_directory}")
-    _huxerui_runtime_scan(final_dependencies ${staged_binaries})
+    _huxerui_runtime_scan(final_dependencies STAGING_ROOT "${content_directory}"
+            ${staged_binaries})
     foreach (dependency IN LISTS final_dependencies)
         file(REAL_PATH "${dependency}" dependency)
         file(RELATIVE_PATH relative "${content_directory}" "${dependency}")
