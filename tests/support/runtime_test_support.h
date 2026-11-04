@@ -609,7 +609,6 @@ public:
     auto window = std::make_unique<TestPlatform>();
     window->owned_native_window = true;
     window->on_destroy = [this] { ++destroyed_windows; };
-    window->on_discard = [this] { ++discarded_windows; };
     detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
     created_windows.push_back(window.get());
     return window;
@@ -933,15 +932,6 @@ public:
     applied_modal_states.emplace_back(modal, blocked);
   }
 
-  bool CanDiscardHost() const override {
-    return true;
-  }
-
-  void DiscardHost() override {
-    if (!host_discarded && on_discard) on_discard();
-    host_discarded = true;
-  }
-
   /// Tests whether shared window initialization completed; retirement resets it.
   [[nodiscard]] bool Initialized() const noexcept {
     return UiWindow::IsInitialized();
@@ -971,12 +961,9 @@ public:
   std::vector<std::pair<bool, bool>> applied_modal_states;
   int application_quit_requests = 0;
   int destroyed_windows = 0;
-  int discarded_windows = 0;
   bool owned_native_window = false;
   std::function<void()> on_destroy;
-  std::function<void()> on_discard;
   bool multiple_windows_supported = true;
-  bool host_discarded = false;
   /// Windows produced by CreateUiWindow for multi-window tests, valid until the Runtime retires them.
   std::vector<TestPlatform*> created_windows;
   std::shared_ptr<TestSystemTrayTransport> system_tray_transport;

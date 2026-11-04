@@ -469,19 +469,6 @@ public:
   /// Keep Runtime alive during this call. The callback acquires no captured Environment or scope cancellation;
   /// use TaskScope::Post when application work requires those lifetime and context rules.
   void DispatchToApplicationThread(std::function<void()> task) const;
-  /// Applies a new ownership/modality relationship to one live window.
-  /// Runtime validation rejects self-ownership and owner cycles before any native change; the platform then
-  /// receives the ownership and the derived per-window blocked state.
-  /// Framework entry used by WindowHandle::SetWindowRelationship; applications use the free function.
-  /// @param target Window service of the live target window.
-  /// @param owner Service of the new owner window, or null for an independent window.
-  /// @param modal Whether the window blocks user input to the windows its relationship covers.
-  /// Call on the application thread.
-  /// @throws std::invalid_argument If the relationship would make the window own itself or create an owner cycle.
-  /// @throws std::logic_error If the target or the requested owner has already retired.
-  void SetRelationship(
-      detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner, bool modal
-  );
   /// Returns the monotonic clock used for this Runtime's ordinary timer deadlines.
   /// @return A steady-clock time point in the same clock domain accepted by ScheduleTimerAt.
   /// Native subclasses and deterministic test hosts must keep their clock and scheduling implementation consistent.
@@ -575,14 +562,24 @@ private:
   void FinishShutdown();
   /// Idempotently closes the ordinary timer queue before its dispatcher or native owner can disappear.
   void CloseTimers() noexcept;
-  /// Resolves one window service to its live UiWindow through the attached-window registry, or null when retired.
-  [[nodiscard]] UiWindow* WindowForService(const detail::WindowService& service) const;
+  /// Applies a new ownership/modality relationship to one live window.
+  /// Runtime validation rejects self-ownership and owner cycles before any native change; the platform then
+  /// receives the ownership and the derived per-window blocked state.
+  /// @param target Window service of the live target window.
+  /// @param owner Service of the new owner window, or null for an independent window.
+  /// @param modal Whether the window blocks user input to the windows its relationship covers.
+  /// Call on the application thread.
+  /// @throws std::invalid_argument If the relationship would make the window own itself or create an owner cycle.
+  /// @throws std::logic_error If the target or the requested owner has already retired.
+  void SetRelationship(
+      detail::WindowService& target, const std::shared_ptr<detail::WindowService>& owner, bool modal
+  );
   /// Resolves one window service to its live UiWindow and throws when the window has retired.
   [[nodiscard]] UiWindow* RequireLiveWindow(const detail::WindowService& service) const;
   /// Collects every live attached window from the weak registry.
   [[nodiscard]] std::vector<UiWindow*> LiveWindows() const;
   /// Collects the owned subtree of one window through the relationship registry in deterministic depth-first order.
-  [[nodiscard]] std::vector<UiWindow*> OwnedSubtree(UiWindow& root, bool include_root) const;
+  [[nodiscard]] std::vector<UiWindow*> OwnedSubtree(UiWindow& root) const;
   /// Applies an already-validated relationship to the registry and the target's native ownership.
   void ApplyWindowRelationship(detail::WindowService& target, detail::WindowService* owner, bool modal);
   /// Removes one window from every relationship edge; returns the owner to reactivate when a modal retired.
@@ -605,6 +602,7 @@ private:
 
   friend class UiWindow;
   friend class detail::ApplicationService;
+  friend class detail::WindowService;
   friend class detail::ExecutionGuard;
   friend struct detail::InternalAccess;
   friend detail::PlatformChannelEndpoint detail::MakePlatformChannelEndpoint(Runtime& runtime);
@@ -1028,15 +1026,6 @@ protected:
   /// Runs on the application thread, disconnects the attachment, retires component work and window services, and leaves
   /// application-owned services and Tasks alive. Native callbacks must stop entering this window as retirement begins.
   void Retire() noexcept;
-  /// Synchronously destroys the native window or host surface backing this attachment. Shared teardown (Retire())
-  /// must already have run; the resulting native teardown path is idempotent. Platform adapters override this on
-  /// hosts that support Runtime-owned top-level windows; the default reports the capability gap.
-  /// @throws std::logic_error By default, when the host does not support native window disposal.
-  virtual void DiscardHost();
-  /// Reports whether DiscardHost() can discard this attachment's native window on the current host.
-  /// The default matches the throwing DiscardHost; adapters that override DiscardHost override this to true
-  /// so Runtime maintenance can release their native facilities after shared teardown.
-  [[nodiscard]] virtual bool CanDiscardHost() const;
   /// Creates the file-picker transport anchored to this native attachment during window installation.
   /// @return A transport retaining its native operations safely, or null when this host does not support picking.
   virtual std::shared_ptr<detail::FilePickerTransport> CreateFilePickerTransport();

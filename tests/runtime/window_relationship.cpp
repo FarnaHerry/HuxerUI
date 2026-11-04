@@ -1,6 +1,7 @@
 #include "runtime_test_support.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace huxerui::test {
@@ -40,7 +41,6 @@ TEST_CASE("OwnedWindowAppliesOwnershipAndRetiresWithOwner") {
   REQUIRE_FALSE(primary.IsOpen());
   REQUIRE_FALSE(child.IsOpen());
   REQUIRE(owner.destroyed_windows == 2);
-  REQUIRE(owner.discarded_windows == 2);
 }
 
 TEST_CASE("ModalWindowBlocksItsOwner") {
@@ -111,6 +111,30 @@ TEST_CASE("RelationshipRejectsRetiredWindows") {
   REQUIRE_THROWS_AS(SetWindowRelationship(retired, {.owner = live, .modal = false}), std::logic_error);
 }
 
+TEST_CASE("WindowRelationshipsRejectHandlesFromAnotherRuntime") {
+  TestPlatform platform;
+  Application application{RelationshipApp, {.show_debug_overlay = false}};
+  RuntimeLifetime runtime(application, platform);
+  const auto app = UseApplication();
+  const auto primary = app.OpenWindow(RelationshipApp);
+
+  TestPlatform foreign;
+  detail::InternalAccess::InitializeRuntime(foreign, application, LaunchActivation{}, false);
+  std::optional<WindowHandle> foreign_handle;
+  const auto foreign_window = foreign.CreateUiWindow([&] {
+    foreign_handle = UseWindow();
+    return Spacer();
+  }, {});
+  foreign_window->BuildFrame();
+  REQUIRE(foreign_handle.has_value());
+  REQUIRE_THROWS_AS(SetWindowRelationship(primary, {.owner = foreign_handle}), std::logic_error);
+  REQUIRE_THROWS_AS(SetWindowRelationship(*foreign_handle, {.owner = primary}), std::logic_error);
+  REQUIRE_THROWS_AS(app.OpenWindow(RelationshipApp, {}, {.owner = foreign_handle}), std::logic_error);
+  REQUIRE(platform.created_windows.size() == 1);
+  REQUIRE(primary.IsOpen());
+  REQUIRE(foreign_handle->IsOpen());
+}
+
 TEST_CASE("OwnedModalExclusionsKeepOwnerInteractiveForOwnChain") {
   TestPlatform owner;
   Application application{RelationshipApp, {.show_debug_overlay = false}};
@@ -153,7 +177,6 @@ TEST_CASE("WindowHandleCloseRetiresOwnedChainAndKeepsApplicationRunningWhenConfi
   REQUIRE_FALSE(settings.IsOpen());
   REQUIRE_FALSE(helper.IsOpen());
   REQUIRE(owner.destroyed_windows == 3);
-  REQUIRE(owner.discarded_windows == 3);
   // The configured close policy keeps the Runtime running so it can reopen windows.
   REQUIRE(owner.application_quit_requests == 0);
   const WindowHandle again = UseApplication().OpenWindow([] { return Spacer(); }, {.title = "again"});
@@ -179,7 +202,6 @@ TEST_CASE("WindowHandleCloseUnblocksOwnerAndReactivatesIt") {
 
   REQUIRE(owner.created_windows[0]->applied_modal_states.back() == ModalState{false, false});
   REQUIRE(ReceivedCommand(*owner.created_windows[0], WindowCommand::Activate));
-  REQUIRE(owner.discarded_windows == 1);
   REQUIRE(owner.destroyed_windows == 1);
 }
 

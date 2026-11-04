@@ -1427,14 +1427,6 @@ void UiWindow::Retire() noexcept {
   external_texture_frame_requester_->Close();
 }
 
-void UiWindow::DiscardHost() {
-  throw std::logic_error("HuxerUI host does not support native window disposal");
-}
-
-bool UiWindow::CanDiscardHost() const {
-  return false;
-}
-
 TextInputApplyResult UiWindow::HandleTextInputCommands(const TextInputCommandBatch& batch) {
   ExecutionGuard execution_guard(state_->execution_);
   return state_->text_->HandleTextInputCommands(batch);
@@ -3756,10 +3748,6 @@ std::shared_ptr<ExecutionContext> InternalAccess::WindowExecution(const UiWindow
 
 void InternalAccess::RetireWindow(UiWindow& ui_window) noexcept {
   ui_window.Retire();
-}
-
-std::shared_ptr<WindowService> InternalAccess::WindowServiceOf(UiWindow& ui_window) {
-  return ui_window.state_ ? ui_window.state_->window_service_ : nullptr;
 }
 
 } // namespace huxerui::detail

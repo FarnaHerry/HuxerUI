@@ -409,27 +409,9 @@ void Runtime::SetRelationship(detail::WindowService& target, const std::shared_p
   RebuildWindowBlocking({});
 }
 
-UiWindow* Runtime::WindowForService(const detail::WindowService& service) const {
-  if (!state_) {
-    return nullptr;
-  }
-  std::erase_if(state_->uis, [](const auto& weak) {
-    const auto ui = weak.lock();
-    return !ui || !ui->ui_window;
-  });
-  for (const auto& weak : state_->uis) {
-    if (const auto ui = weak.lock(); ui && ui->ui_window && ui->ui_window->IsInitialized()) {
-      if (detail::InternalAccess::WindowServiceOf(*ui->ui_window).get() == &service) {
-        return ui->ui_window;
-      }
-    }
-  }
-  return nullptr;
-}
-
 UiWindow* Runtime::RequireLiveWindow(const detail::WindowService& service) const {
-  UiWindow* const window = WindowForService(service);
-  if (window == nullptr) {
+  UiWindow* const window = service.NativeWindow();
+  if (window == nullptr || !window->IsInitialized() || &window->ApplicationRuntime() != this) {
     throw std::logic_error("HuxerUI window has retired");
   }
   return window;
@@ -448,11 +430,8 @@ std::vector<UiWindow*> Runtime::LiveWindows() const {
   return live;
 }
 
-std::vector<UiWindow*> Runtime::OwnedSubtree(UiWindow& root, bool include_root) const {
-  std::vector<UiWindow*> result;
-  if (include_root) {
-    result.push_back(&root);
-  }
+std::vector<UiWindow*> Runtime::OwnedSubtree(UiWindow& root) const {
+  std::vector<UiWindow*> result{&root};
   const std::function<void(UiWindow*)> walk = [&](UiWindow* window) {
     const auto edges = state_->owned_window_edges.find(window);
     if (edges == state_->owned_window_edges.end()) {
@@ -545,7 +524,7 @@ void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
       if (relation == state_->window_relations.end() || relation->second.sequence <= newest) {
         continue;
       }
-      const std::vector<UiWindow*> chain = OwnedSubtree(*modal, true);
+      const std::vector<UiWindow*> chain = OwnedSubtree(*modal);
       if (contains(chain, window)) {
         newest = relation->second.sequence;
       }
@@ -567,7 +546,7 @@ void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
       }
       const UiWindow* const covering_owner =
           covering_relation != state_->window_relations.end() ? covering_relation->second.owner : nullptr;
-      const std::vector<UiWindow*> excluded = OwnedSubtree(*covering, true);
+      const std::vector<UiWindow*> excluded = OwnedSubtree(*covering);
       if (contains(excluded, window)) {
         continue;
       }
@@ -575,7 +554,7 @@ void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
         blocked = true;
         break;
       }
-      const std::vector<UiWindow*> covered = OwnedSubtree(const_cast<UiWindow&>(*covering_owner), true);
+      const std::vector<UiWindow*> covered = OwnedSubtree(const_cast<UiWindow&>(*covering_owner));
       if (contains(covered, window)) {
         blocked = true;
         break;
@@ -592,7 +571,7 @@ void Runtime::RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate) {
     if (owner == nullptr || !owner->IsInitialized()) {
       continue;
     }
-    const std::shared_ptr<detail::WindowService> service = detail::InternalAccess::WindowServiceOf(*owner);
+    const auto& service = owner->state_->window_service_;
     if (service) {
       service->Request(WindowCommand::Activate);
     }
@@ -623,7 +602,7 @@ WindowHandle Runtime::OpenWindow(
   }
   if (!content) throw std::invalid_argument("HuxerUI window content must not be empty");
   ValidateWindowOptions(options);
-  const auto owner_service = relationship.owner ? detail::WindowServiceFor(*relationship.owner) : nullptr;
+  const auto owner_service = relationship.owner ? relationship.owner->service_ : nullptr;
   if (owner_service) static_cast<void>(RequireLiveWindow(*owner_service));
   if (!SupportsMultipleWindows()) {
     throw std::runtime_error("HuxerUI host does not support creating top-level windows");
@@ -674,21 +653,19 @@ WindowHandle Runtime::OpenWindow(
 void Runtime::CloseWindow(UiWindow& window) {
   state_->RequireThread();
   if (!window.state_ || window.state_->closing_ || window.state_->retired_) return;
-  if (state_->phase != ApplicationRuntimeState::Phase::Running || state_->window_installations) {
-    throw std::logic_error("HuxerUI cannot close a window during installation or shutdown");
+  if (state_->window_installations) {
+    throw std::logic_error("HuxerUI cannot close a window during installation");
   }
-  const auto owned = std::find_if(owned_windows_.begin(), owned_windows_.end(),
-                                [&window](const auto& entry) { return entry.get() == &window; });
-  if (owned == owned_windows_.end()) {
+  if (std::none_of(owned_windows_.begin(), owned_windows_.end(),
+                   [&window](const auto& entry) { return entry.get() == &window; })) {
     throw std::logic_error("HuxerUI cannot close an externally owned UI attachment");
   }
-  const auto retiring = OwnedSubtree(window, true);
+  const auto retiring = OwnedSubtree(window);
   for (UiWindow* entry : retiring) {
     if (!entry->state_ || entry->state_->retired_) continue;
     entry->state_->closing_ = true;
     entry->state_->window_service_->BeginClose();
   }
-  window.state_->close_requested_ = true;
   window_maintenance_needed_ = true;
   ScheduleWindowMaintenance();
 }
@@ -740,31 +717,33 @@ void Runtime::MaintainWindows() {
     FinishShutdown();
     return;
   }
+  std::vector<std::unique_ptr<UiWindow>> closed;
+  closed.reserve(owned_windows_.size());
+  std::erase_if(owned_windows_, [&closed](auto& window) {
+    if (!window->state_->closing_ && !window->state_->retired_) return false;
+    closed.push_back(std::move(window));
+    return true;
+  });
+  const bool removed_window = !closed.empty();
   std::vector<UiWindow*> retiring;
   for (const auto& weak : state_->uis) {
     if (const auto ui = weak.lock(); ui && ui->ui_window && ui->ui_window->state_->closing_) {
       retiring.push_back(ui->ui_window);
     }
   }
-  for (const auto& owned : owned_windows_) {
-    if (owned->state_->retired_ && std::find(retiring.begin(), retiring.end(), owned.get()) == retiring.end()) {
-      retiring.push_back(owned.get());
+  for (const auto& window : closed) {
+    if (std::find(retiring.begin(), retiring.end(), window.get()) == retiring.end()) {
+      retiring.push_back(window.get());
     }
   }
   OrderWindowRetirement(retiring);
-  bool closed_window = false;
   std::vector<UiWindow*> reactivate;
   for (UiWindow* window : retiring) {
-    closed_window |= window->state_->close_requested_;
     if (UiWindow* owner = RemoveWindowRelations(*window)) reactivate.push_back(owner);
     window->Retire();
-    if (window->CanDiscardHost()) window->DiscardHost();
-    const auto owned = std::find_if(owned_windows_.begin(), owned_windows_.end(),
+    const auto owned = std::find_if(closed.begin(), closed.end(),
                                   [window](const auto& entry) { return entry.get() == window; });
-    if (owned != owned_windows_.end()) {
-      auto released = std::move(*owned);
-      owned_windows_.erase(owned);
-    }
+    if (owned != closed.end()) owned->reset();
   }
   std::erase_if(reactivate, [&](UiWindow* owner) {
     return std::find(retiring.begin(), retiring.end(), owner) != retiring.end();
@@ -774,7 +753,7 @@ void Runtime::MaintainWindows() {
     const auto ui = weak.lock();
     return !ui || !ui->ui_window;
   });
-  if (closed_window && owned_windows_.empty() && state_->declaration->options.quit_on_last_window_closed) {
+  if (removed_window && owned_windows_.empty() && state_->declaration->options.quit_on_last_window_closed) {
     RequestShutdown();
   }
 }

@@ -1064,17 +1064,6 @@ public:
     input_blocked_ = false;
   }
 
-  bool CanDiscardHost() const override {
-    return true;
-  }
-
-  void DiscardHost() override {
-    system_theme_.Stop();
-    if (window_ != nullptr) {
-      static_cast<void>(DestroyWindow(window_));
-    }
-  }
-
   /// Reports the client-area origin in logical screen coordinates, matching the coordinate base of
   /// window-local pointer events so callers can translate them into screen space.
   std::optional<Point> WindowScreenOrigin() const override {

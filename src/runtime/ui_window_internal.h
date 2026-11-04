@@ -531,7 +531,6 @@ struct UiWindow::State {
   bool initialized_ = false;
   bool retired_ = false;
   bool closing_ = false;
-  bool close_requested_ = false;
   ViewFactory root_factory_;
   ViewportBreakpoints viewport_breakpoints_;
   std::shared_ptr<detail::WindowState> window_;

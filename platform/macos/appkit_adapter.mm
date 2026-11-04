@@ -730,10 +730,6 @@ public:
     delegate_ = nil;
   }
 
-  bool CanDiscardHost() const override { return true; }
-
-  void DiscardHost() override { Shutdown(); }
-
   MacRuntime& NativeRuntime() const noexcept { return *runtime_; }
 
   void NativeWindowClosed() {

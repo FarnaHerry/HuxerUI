@@ -747,9 +747,6 @@ public:
       UpdateWindowLifecycleState(WindowLifecycleState::Background);
     }
   }
-  void DiscardHost() override {
-    TestPlatform::DiscardHost();
-  }
 
 private:
   Point position_;
@@ -1118,6 +1115,47 @@ TEST_CASE("Owned windows have independent content and local State while sharing 
   REQUIRE_FALSE(app.SupportsMultipleWindows());
   REQUIRE_THROWS_AS(app.OpenWindow(EmptyOwnedWindow), std::logic_error);
   REQUIRE_NOTHROW(first.Close());
+}
+
+TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
+  OwnedWindowPlatform platform;
+  Application application(EmptyOwnedWindow, {
+      .show_debug_overlay = false,
+      .quit_on_last_window_closed = false,
+  });
+  RuntimeLifetime runtime(application, platform);
+  const auto app = UseApplication();
+  std::vector<WindowHandle> retired;
+  for (int index = 0; index < 1000; ++index) {
+    const auto window = app.OpenWindow(EmptyOwnedWindow);
+    window.Close();
+    REQUIRE(platform.destroyed == index);
+    platform.RunPlatformModuleTasks();
+    REQUIRE(platform.destroyed == index + 1);
+    retired.push_back(window);
+  }
+  const auto replacement = app.OpenWindow(EmptyOwnedWindow);
+  for (const auto& window : retired) {
+    window.Show();
+    window.Close();
+    REQUIRE_FALSE(window.IsOpen());
+    REQUIRE_FALSE(window.Position().has_value());
+  }
+  platform.RunPlatformModuleTasks();
+  REQUIRE(platform.destroyed == 1000);
+  REQUIRE(replacement.IsOpen());
+  replacement.Close();
+  platform.RunPlatformModuleTasks();
+  REQUIRE(platform.destroyed == 1001);
+  const auto parent = app.OpenWindow(EmptyOwnedWindow);
+  const auto child = app.OpenWindow(EmptyOwnedWindow, {}, {.owner = parent});
+  const auto grandchild = app.OpenWindow(EmptyOwnedWindow, {}, {.owner = child});
+  parent.Close();
+  platform.RunPlatformModuleTasks();
+  REQUIRE(platform.destroyed == 1004);
+  REQUIRE_FALSE(child.IsOpen());
+  REQUIRE_FALSE(grandchild.IsOpen());
+  REQUIRE(platform.application_quit_requests == 0);
 }
 
 TEST_CASE("Owned window closure is observable and waits for the outer UI callback") {

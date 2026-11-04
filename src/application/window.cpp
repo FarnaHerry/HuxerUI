@@ -589,25 +589,8 @@ WindowHandle UseWindow() {
   return WindowHandle{UseService<detail::WindowService>()};
 }
 
-namespace detail {
-
-WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service) {
-  if (!service) {
-    throw std::logic_error("HuxerUI window handle requires an initialized window service");
-  }
-  return WindowHandle{std::move(service)};
-}
-
-std::shared_ptr<WindowService> WindowServiceFor(const WindowHandle& handle) noexcept {
-  return handle.service_;
-}
-
-} // namespace detail
-
 void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship) {
-  detail::WindowServiceFor(window)->ApplyRelationship(
-      relationship.owner.has_value() ? detail::WindowServiceFor(*relationship.owner) : nullptr, relationship.modal
-  );
+  window.service_->ApplyRelationship(relationship.owner ? relationship.owner->service_ : nullptr, relationship.modal);
 }
 
 } // namespace huxerui

@@ -21,16 +21,10 @@
 namespace huxerui {
 
 class UiWindow;
-class WindowHandle;
+struct WindowRelationship;
 
 namespace detail {
 class WindowService;
-/// Creates a public window handle for an initialized window's service.
-/// Framework use only; applications obtain handles through UseWindow() or ApplicationHandle::OpenWindow().
-[[nodiscard]] WindowHandle MakeWindowHandle(std::shared_ptr<WindowService> service);
-/// Borrows the service behind a public window handle for framework relationship resolution.
-/// Framework use only; applications never need the service object.
-[[nodiscard]] std::shared_ptr<WindowService> WindowServiceFor(const WindowHandle& handle) noexcept;
 /// Rejects a window service key already owned by the application's service table.
 /// @param type Exact C++ key about to be installed by WindowContext::Provide.
 void ValidateRootServiceType(std::type_index type);
@@ -539,8 +533,7 @@ private:
   std::shared_ptr<detail::WindowService> service_;
 
   friend WindowHandle UseWindow();
-  friend WindowHandle detail::MakeWindowHandle(std::shared_ptr<detail::WindowService> service);
-  friend std::shared_ptr<detail::WindowService> detail::WindowServiceFor(const WindowHandle& handle) noexcept;
+  friend void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship);
   friend class Runtime;
 };
 

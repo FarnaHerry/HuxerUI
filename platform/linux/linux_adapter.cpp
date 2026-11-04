@@ -1001,21 +1001,6 @@ public:
     });
   }
 
-  bool CanDiscardHost() const override {
-    return window_ != nullptr;
-  }
-
-  /// Detaches native facilities while the widget tree is alive, before GTK disposes the window.
-  void DiscardHost() override {
-    Cleanup();
-#if defined(__GLIBC__)
-    // A headless application can stay alive indefinitely; return the retired UI's free heap pages now.
-    if (g_list_model_get_n_items(gtk_window_get_toplevels()) == 0) {
-      static_cast<void>(malloc_trim(0));
-    }
-#endif
-  }
-
   /// Reports the window origin in logical screen coordinates on X11. Wayland compositors own placement by
   /// protocol, so positions are reported as unavailable there.
   std::optional<Point> WindowScreenOrigin() const override {
@@ -1875,6 +1860,12 @@ private:
       window_ = nullptr;
       drawing_area_ = nullptr;
       gtk_window_destroy(window);
+#if defined(__GLIBC__)
+      // A headless application can stay alive indefinitely; return the retired UI's free heap pages now.
+      if (g_list_model_get_n_items(gtk_window_get_toplevels()) == 0) {
+        static_cast<void>(malloc_trim(0));
+      }
+#endif
     }
   }
 

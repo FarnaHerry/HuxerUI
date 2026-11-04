@@ -46,7 +46,8 @@ Validation runs before any native change: a window cannot own itself, no owner c
 The registry updates only from `OpenWindow` and `SetRelationship` on the application thread.
 
 Retiring a window retires its owned windows first, deepest chain first, before the window itself finishes retirement.
-Runtime marks the accepted close of an owner and its owned descendants, then maintenance performs shared retirement and native release deepest-first after active callbacks return.
+Runtime marks the accepted close of an owner and its owned descendants, then maintenance moves framework-owned attachments out of the live ownership collection after active callbacks return.
+Shared retirement and derived-destructor native cleanup run deepest-first; externally owned attachments retain native host ownership.
 The relation registry is separate from the single collection that owns native windows; application shutdown uses the same descendant-before-owner ordering.
 Reparenting an alive window moves its registry edges and restores or applies modality bookkeeping as needed; retiring a window drops it from every registry edge that names it.
 

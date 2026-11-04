@@ -67,9 +67,6 @@ struct InternalAccess {
   static void InitializeWindow(UiWindow& ui_window, Runtime& runtime, ViewFactory content,
       const WindowOptions& options, std::optional<ResourceConfiguration> configuration = std::nullopt,
       WindowLifecycleState lifecycle = WindowLifecycleState::Background);
-  /// Borrows one initialized window's service for Runtime::OpenWindow handle creation.
-  /// @return The window service, or null when the window has not completed initialization.
-  static std::shared_ptr<detail::WindowService> WindowServiceOf(UiWindow& ui_window);
   /// Borrows the frozen application catalog while preparing native facilities before UI installation.
   static PlatformRegistry& ApplicationRegistry(Runtime& runtime);
   /// Captures a native callback's window provenance; an uninitialized attachment returns no context.

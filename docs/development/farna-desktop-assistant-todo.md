@@ -113,7 +113,7 @@ They do not require an AI backend, audio stack, character engine, or new image c
 - [ ] Update the owning [window-chrome](../design/window-chrome.md), [multi-window](../design/multi-window.md), and [relationship](../design/window-relationship.md) contracts before implementation; their current non-goals do not authorize these additions.
 
 Primary files: [window.h](../../include/huxerui/window.h), [app.h](../../include/huxerui/app.h), [window_internal.h](../../src/application/window_internal.h), [window.cpp](../../src/application/window.cpp).
-Accept with focused validation, unsupported-host, disconnected-handle, and request-result tests in [window.cpp](../../tests/runtime/window.cpp) and [multi_window.cpp](../../tests/runtime/multi_window.cpp).
+Accept with focused validation, unsupported-host, disconnected-handle, and request-result tests in [window.cpp](../../tests/runtime/window.cpp).
 
 ### FD-02: Add opt-in per-pixel window transparency
 

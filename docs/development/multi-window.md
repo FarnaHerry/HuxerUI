@@ -28,7 +28,7 @@ Use the existing MSVC Release build with examples and tests enabled.
 | `huxerui_header_checks` | Standalone public headers |
 | `example_multi_window`, `example_window_relationship` | Public application API and window relationships |
 
-The focused multi-window filter is `"MultiWindow*,RuntimeOpenWindow*,RetiringOneWindow*,ApplicationHandleOpenWindow*"` against `huxerui_runtime_tests`.
+The shared multi-window contracts are covered in `tests/runtime/window.cpp`; use `"Owned window*,Owned windows*,RuntimeOpenWindow*"` against `huxerui_runtime_tests` for focused validation.
 A real-HWND lifecycle test with the hidden `[win32-native]` tag opens and closes a runtime window twice, checks requested client origins with both system and custom chrome, and verifies that GDI/USER handle counts return near baseline; run it explicitly with `huxerui_windows_tests.exe [win32-native]` because it creates real top-level windows and Direct3D devices.
 The Linux port has the mirror-image `[linux-native]` test (`LinuxRuntimeWindowsOpenAndCloseIndependently`): it opens and closes a runtime window twice against a real display, asserts the requested `initial_position` on platforms that honor placement, retires the runtime windows through the close path while the initial window stays alive, and finishes by closing the initial window to exercise whole-application shutdown; run it explicitly with `huxerui_linux_tests [linux-native]` because it creates real GTK toplevels.
 The interactive demo is `example_multi_window`: the primary window opens a secondary one at runtime, both windows share one counter service, and each window keeps its own local state.
@@ -97,7 +97,7 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 
 Host implementation anchors:
 
-- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateUiWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. `CanDiscardHost` and `DiscardHost` support native release after shared teardown. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
+- Linux: `LinuxRuntime::RunApplication` owns the GLib loop, `LinuxRuntime::CreateUiWindow` initializes hidden GTK attachments, and `LinuxUiWindow::CloseRequested` queues shared retirement. Runtime releases owned attachments through their derived destructors after shared retirement; the GTK cleanup detaches native facilities before destroying widgets. GTK callbacks route per instance and retain their execution context across shared dispatch. X11 placement uses the optional `x11` pkg-config dependency (`HUXERUI_LINUX_X11`).
 - Web: `WebUiWindow` in `platform/web/web_adapter.cpp` already mounts one composition root per JavaScript session; runtime creation would expose a second session rather than a second in-page root.
 
 ## Rebuild and retest
@@ -106,7 +106,7 @@ Windows:
 
 ```powershell
 cmake --build build\check --config Release --parallel --target example_multi_window huxerui_runtime_tests
-build\check\bin\Release\huxerui_runtime_tests.exe "MultiWindow*,RuntimeOpenWindow*"
+build\check\bin\Release\huxerui_runtime_tests.exe "Owned window*,Owned windows*,RuntimeOpenWindow*"
 ```
 
 Linux and macOS hosts use the same targets after a normal configure; see [Building HuxerUI](building.md) for toolchain selection.
