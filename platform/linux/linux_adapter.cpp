@@ -646,14 +646,11 @@ public:
     ObserveWindows();
   }
 
-  /// Creates the configured startup windows through OpenWindow, then runs the GTK main loop even without windows
+  /// Creates the optional initial window through OpenWindow, then runs the GTK main loop even without windows
   /// until shutdown. Rethrows the first recorded window failure after the loop.
   int RunApplication(const Application& application) {
     if (application.options.create_initial_window) {
       static_cast<void>(UseApplication().OpenWindow(application.root_factory, application.options.window));
-    }
-    for (const WindowOptions& extra : application.options.extra_windows) {
-      static_cast<void>(UseApplication().OpenWindow(application.root_factory, extra));
     }
     while (!Stopped()) {
       g_main_context_iteration(nullptr, TRUE);

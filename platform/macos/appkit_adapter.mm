@@ -1418,9 +1418,6 @@ int RunPlatformApplication(const Application& application) {
     if (application.options.create_initial_window) {
       UseApplication().OpenWindow(application.root_factory, application.options.window);
     }
-    for (const auto& extra : application.options.extra_windows) {
-      UseApplication().OpenWindow(application.root_factory, extra);
-    }
     [NSApplication.sharedApplication run];
     runtime.RethrowFailure();
     return 0;

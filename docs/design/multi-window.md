@@ -40,9 +40,8 @@ Creation failures retire the partial window and propagate.
 
 The desktop application entry creates the initial window by calling `ApplicationHandle::OpenWindow` with the application root factory and `AppOptions::window` when `AppOptions::create_initial_window` is true, its default value, so startup and runtime windows share one path.
 Setting the flag to false skips native window creation, renderer initialization, window hooks, and root composition for that window.
-`AppOptions::extra_windows` lists independent startup window options; these windows use the application root factory, including when initial-window creation is disabled.
-For distinct startup content, enqueue explicit `OpenWindow(content, options)` calls through the application task scope during an application hook.
-With initial-window creation disabled and no extra windows, application hooks, services, tasks, timers, activation dispatch, and the native event loop still run without a UiWindow.
+For additional startup windows, enqueue explicit `OpenWindow(content, options)` calls through the application task scope during an application hook.
+With initial-window creation disabled, application hooks, services, tasks, timers, activation dispatch, and the native event loop still run without a UiWindow until application work opens one.
 Later application work may open a window through the existing `ApplicationHandle::OpenWindow` API; work launched in application hooks remains queued until installation has finished.
 Skipping the initial window does not create an attachment; every framework-created window follows the same close policy.
 Set `AppOptions::quit_on_last_window_closed = false` to keep the Runtime running after every window closes, including after windowless startup.

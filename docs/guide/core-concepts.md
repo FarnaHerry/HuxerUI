@@ -247,7 +247,7 @@ Register primary tray activation once through `SystemTrayHandle::OnActivate(hand
 
 Set `AppOptions::create_initial_window` to `false` to start the desktop application without creating its default native window or composing the root.
 Application hooks, services, ordinary tasks, timers, activation delivery, and the application event loop still run.
-`extra_windows` are explicit independent startup windows; keep that list empty for a windowless startup.
+To open additional windows at startup, post explicit `ApplicationHandle::OpenWindow(content, options)` calls through the application task scope from an application hook.
 
 ```cpp
 const Application application{

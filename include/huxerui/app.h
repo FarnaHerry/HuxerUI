@@ -371,13 +371,8 @@ struct AppOptions {
   WindowOptions window{};
   /// Whether desktop RunApplication creates window at startup. False skips its native attachment and composition;
   /// application hooks, services, tasks, and the event loop still start. Use ApplicationHandle::OpenWindow later.
-  /// extra_windows remain independent; leave that list empty to start without any UI windows.
   /// Platform-owned mobile, Web, and embedded attachments ignore this desktop startup policy.
   bool create_initial_window = true;
-  /// Additional windows opened in declaration order immediately after the application starts.
-  /// These windows use the application root factory. OpenWindow(content, options) supplies distinct content.
-  /// An empty list preserves single-window startup.
-  std::vector<WindowOptions> extra_windows{};
   /// Width thresholds used by `UseViewportClass()`.
   ViewportBreakpoints viewport_breakpoints{};
 #if defined(NDEBUG)

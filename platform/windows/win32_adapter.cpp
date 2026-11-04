@@ -2189,9 +2189,6 @@ int RunWin32PlatformApplication(const Application& application, Win32WindowReady
     if (application.options.create_initial_window) {
       UseApplication().OpenWindow(application.root_factory, application.options.window);
     }
-    for (const auto& extra : application.options.extra_windows) {
-      UseApplication().OpenWindow(application.root_factory, extra);
-    }
     const int result = application_runtime.Run();
     notifications.SetActivationHandler({});
     return result;

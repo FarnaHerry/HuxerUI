@@ -118,11 +118,6 @@ TEST_CASE("Win32StartupCanDeferTheInitialWindowWithoutStoppingApplicationDispatc
   bool open_later = true;
   SECTION("Default startup still opens the initial window") { expected_startup_windows = 1; }
   SECTION("Application starts without a UI") { options.create_initial_window = false; }
-  SECTION("Explicit extra windows are independent of the initial window") {
-    options.create_initial_window = false;
-    options.extra_windows.push_back({.title = "HuxerUI explicit extra", .initial_size = {240.0F, 160.0F}});
-    expected_startup_windows = 1;
-  }
   SECTION("Application can quit without ever creating a UI") {
     options.create_initial_window = false;
     open_later = false;

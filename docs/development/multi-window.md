@@ -24,7 +24,7 @@ Use the existing MSVC Release build with examples and tests enabled.
 | Common CTest label | Unit, Runtime, UI, and Library suites, including window configuration and coordinate-range validation |
 | `huxerui_windows_tests` | Win32 platform behavior |
 | `huxerui_windows_tests [win32-native]` | Native lifecycle, client-origin round trips with both chrome modes, and native handle release |
-| `huxerui_windows_tests [win32-native-startup]` | Default and windowless startup, independent extra windows, timers without a UI, delayed window creation and retirement, and windowless exit |
+| `huxerui_windows_tests [win32-native-startup]` | Default and windowless startup, timers without a UI, delayed window creation and retirement, and windowless exit |
 | `huxerui_header_checks` | Standalone public headers |
 | `example_multi_window`, `example_window_relationship` | Public application API and window relationships |
 
@@ -51,7 +51,7 @@ For the deferred bidirectional-caret failure and hidden profiling failure, see [
 macOS multi-window and floating-window support remain previews accepted through CI; no physical macOS device is available for interactive validation.
 The `macOS Multi-Window Preview` workflow builds on GitHub-hosted macOS runners: arm64 with static linkage and Intel with shared linkage, both retaining the macOS 12 deployment target.
 It builds common and codegen suites, AppKit platform suites, standalone headers, `example_multi_window`, `example_window_relationship`, and `example_desktop_pet`.
-The separate native test bundle creates real NSWindows on the main thread and exercises startup extras, runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
+The separate native test bundle creates real NSWindows on the main thread and exercises runtime creation, state isolation, shared services, close interception, deferred keyboard closes, native close, failure cleanup, owner cascade, reparenting, modal stacking, and reopening after retiring every window.
 Each CTest scenario runs in a fresh process because AppKit owns a process-wide NSApplication; weak native references check that retired windows and their content views are released after bounded native autorelease cleanup.
 The native Quit scenario invokes AppKit termination from the main queue and verifies that queued Runtime shutdown completes and returns to the caller.
 
@@ -90,7 +90,7 @@ Each port follows the Windows shape: keep one application event loop at the Runt
 
 1. Hoist the per-window main loop to the Runtime owner and iterate until application shutdown, including when every window is hidden or closed with `quit_on_last_window_closed = false`.
 2. Implement `SupportsMultipleWindows()` and `CreateUiWindow(ViewFactory, const WindowOptions&)` on the platform Runtime subclass: prepare native facilities, call `InitializeWindow(runtime, content, options, configuration)`, and return a hidden attachment without entering a nested loop.
-3. Open the initial window and `AppOptions::extra_windows` through `ApplicationHandle::OpenWindow(content, options)` in the platform entry so every window shares one path.
+3. Open the initial window through `ApplicationHandle::OpenWindow(content, options)` in the platform entry when `AppOptions::create_initial_window` is true, so startup and application-requested windows share one path.
 4. Route native callbacks from the handle or object that originated them instead of a single stored window pointer.
 5. Route accepted native closure to `UiWindow::CloseWindow`, honor the shared last-window policy, and keep the event loop running when `quit_on_last_window_closed = false`.
 6. Build and run the common suites plus the platform tests on the host, then record the result in this document.
