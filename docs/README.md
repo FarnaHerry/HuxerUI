@@ -42,6 +42,7 @@ User guides describe the current public SDK, development guides cover this repos
 [Local Notifications](design/local-notifications.md) defines the shared authorization, scheduling, cancellation, and activation contract plus the Android, iOS, and macOS transports and remaining native boundaries.
 [Multi-Window](design/multi-window.md) defines runtime window creation, explicit per-window content factories, and shared-Runtime ownership rules.
 [Window Relationship](design/window-relationship.md) defines window ownership, modality, cascade retirement, and platform input blocking.
+[Split and Docking Layouts](design/split-and-docking.md) defines controlled pane resizing and retained single-window docking workspaces.
 Design documents are implementation references, not a public API stability guarantee.
 
 ## Scope

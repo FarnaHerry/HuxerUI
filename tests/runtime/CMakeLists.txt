@@ -16,6 +16,8 @@ huxerui_add_test_suite(huxerui_runtime_tests HuxerUIRuntimeTests
             interaction.cpp
             layers.cpp
             layout.cpp
+            split_layout.cpp
+            dock_layout.cpp
             lifecycle.cpp
             navigation.cpp
             navigation_ui.cpp

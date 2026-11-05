@@ -99,6 +99,11 @@ export namespace huxerui {
     using huxerui::DirectoryCopySummary;
     using huxerui::Divider;
     using huxerui::DividerStyle;
+    using huxerui::DockEvents;
+    using huxerui::DockItem;
+    using huxerui::DockLayout;
+    using huxerui::DockPlacement;
+    using huxerui::DockTree;
     using huxerui::DragDropResult;
     using huxerui::DragDropScope;
     using huxerui::DragEvent;
@@ -418,6 +423,9 @@ export namespace huxerui {
     using huxerui::Spacer;
     using huxerui::Spacing;
     using huxerui::SpacingScheme;
+    using huxerui::SplitChange;
+    using huxerui::SplitEvents;
+    using huxerui::SplitLayout;
     using huxerui::SpringSpec;
     using huxerui::Stack;
     using huxerui::StartDrawer;

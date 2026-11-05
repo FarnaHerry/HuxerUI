@@ -45,9 +45,9 @@ View CounterPanel(std::shared_ptr<SharedCounter> model, std::string label) {
   auto window = UseWindow();
   return Column {
     WindowTransfer(std::move(label)),
-    Text("Shared: " + std::to_string(model->value.Get())),
+    Text("Shared: " + std::to_string(model->value)),
     Button("Increment shared").OnClick([model] { model->value += 1; }),
-    Text("This window: " + std::to_string(local.Get())),
+    Text("This window: " + std::to_string(local)),
     Button("Increment local").OnClick([local] { local += 1; }),
     Button("Close this window").OnClick([window] { window.Close(); }),
   }.With(Padding(24.0F), Spacing(12.0F));
@@ -57,15 +57,17 @@ View App() {
   auto application = UseApplication();
   auto model = UseService<SharedCounter>();
   auto secondary = UseState(std::optional<WindowHandle>{});
-  const bool open = secondary.Get().has_value() && secondary.Get()->IsOpen();
+  const std::optional<WindowHandle>& secondary_window = secondary;
+  const bool open = secondary_window && secondary_window->IsOpen();
   return MaterialTheme {
     Column {
       Text("Multiple windows"),
       CounterPanel(model, "primary"),
       Text(open ? "Secondary window is open" : "Secondary window is closed"),
       Button(open ? "Activate secondary" : "Open secondary").OnClick([application, model, secondary] {
-        if (secondary.Get().has_value() && secondary.Get()->IsOpen()) {
-          secondary.Get()->Activate();
+        const std::optional<WindowHandle>& current = secondary;
+        if (current && current->IsOpen()) {
+          current->Activate();
         } else {
           secondary = application.OpenWindow([model] { return MaterialTheme {CounterPanel(model, "secondary")}; }, {
               .title = "Independent counter",

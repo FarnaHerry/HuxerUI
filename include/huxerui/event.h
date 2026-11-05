@@ -12,13 +12,19 @@
 #include <typeindex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <huxerui/geometry.h>
 
 namespace huxerui {
 
+class DockTree;
+
 /// Stores the complete controlled text value emitted by TextFieldEvents::Changed.
 struct TextEditingValue;
+
+/// Describes one controlled pane resize proposal emitted by SplitLayout.
+struct SplitChange;
 
 /// Describes the effective interaction state of one mounted View.
 ///
@@ -583,6 +589,18 @@ struct SliderEvents {
   /// Cancels an active pointer adjustment without rolling back the controlled value.
   /// Unmounting does not guarantee a terminal event.
   struct Canceled : Event<void()> {};
+};
+
+/// Event keys emitted by SplitLayout.
+struct SplitEvents {
+  /// Requests one synchronous batch of pane configurations in current nonempty declaration order.
+  struct Changed : Event<void(std::vector<SplitChange>)> {};
+};
+
+/// Event keys emitted by DockLayout.
+struct DockEvents {
+  /// Proposes a complete replacement tree for one user edit. Supply it to DockLayout to accept the edit.
+  struct Changed : Event<void(DockTree)> {};
 };
 
 /// Event keys emitted by SegmentedButton.
