@@ -2209,8 +2209,8 @@ int RunPlatformApplication(const Application& application) {
 namespace huxerui::windows {
 
 HWND NativeWindow(UiWindow& window) {
-  static_cast<void>(detail::CurrentApplicationRuntime());
-  auto* native = dynamic_cast<detail::WindowsUiWindow*>(&window);
+  static_cast<void>(huxerui::detail::CurrentApplicationRuntime());
+  auto* native = dynamic_cast<huxerui::detail::WindowsUiWindow*>(&window);
   return native ? native->BorrowNativeWindow() : nullptr;
 }
 
