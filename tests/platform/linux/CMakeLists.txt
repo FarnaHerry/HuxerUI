@@ -20,6 +20,7 @@ target_sources(huxerui_linux_tests PRIVATE
         text_input.cpp
         window_chrome.cpp
         window_drag_native.cpp
+        window_surface_native.cpp
 )
 target_include_directories(huxerui_linux_tests PRIVATE
         "${HUXERUI_PROJECT_DIR}/examples/platform_module"

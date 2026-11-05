@@ -23,6 +23,20 @@ See [Local Notifications](../design/local-notifications.md) for authorization, a
 
 ## Native window placement
 
+Platform extensions that need the original native attachment can opt into platform-specific headers.
+`<huxerui/windows/platform_registry.h>` exposes `windows::NativeWindow(UiWindow&)`, a borrowed HWND valid only until that attachment closes.
+`<huxerui/linux/window.h>` exposes `linux::NativeGeometry(UiWindow&)`, with the borrowed GdkSurface, canvas origin inside the surface, and display scale.
+Call these APIs on the original application's thread; do not destroy the borrowed native objects or discover a replacement window after closure.
+Unavailable or retired attachments return null or empty geometry while their original application remains live.
+
+The Linux header also provides `SetWindowAperture` and `SetWindowMarker` for native extensions such as screen-region capture.
+Both accept an optional rectangle in canvas-local logical coordinates and return false when the original attachment is unavailable.
+Finite positive dimensions are required; invalid rectangles throw `std::invalid_argument`.
+An aperture omits drawing within its rectangle and makes the native window background transparent; clearing it restores the original background policy.
+It does not alter input regions or X11 shapes.
+A marker paints an opaque rectangle in `linux::MarkerColor` above the canvas; clearing it removes the marker.
+These requests queue a repaint without starting a capture stream or recurring frame timer.
+
 `WindowOptions::initial_position` requests the initial client-area origin in logical screen coordinates: X increases to the right and Y downwards, with negative coordinates allowed for monitors left of or above the primary display.
 The client origin is the point corresponding to `{0, 0}` in the window's content coordinates; native title bars, borders, and shadows are excluded.
 Windows applies this preference using the native display scale; the window manager may constrain placement.

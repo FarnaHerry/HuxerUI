@@ -18,6 +18,10 @@
 
 namespace huxerui::windows {
 
+/// Borrows the HWND of the exact HuxerUI attachment on its original application thread.
+/// Returns null for an unavailable or retired attachment. Never destroy the borrowed window or retain it past closure.
+[[nodiscard]] HWND NativeWindow(UiWindow& window);
+
 /// Describes the Win32 lifecycle of one registered PlatformView type.
 ///
 /// Properties is the complete controlled value supplied by `PlatformView(name, properties)`. Instance is arbitrary

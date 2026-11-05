@@ -31,6 +31,7 @@
 #include <vector>
 
 #include <huxerui/app.h>
+#include <huxerui/windows/platform_registry.h>
 
 #include "internal_access.h"
 #include "application/platform_frame_internal.h"
@@ -834,6 +835,7 @@ public:
   ThemeBrightness QuerySystemThemeBrightness() const override { return system_theme_.Query(); }
 
   HWND Window() const noexcept { return window_; }
+  HWND BorrowNativeWindow() const noexcept { return IsInitialized() ? window_ : nullptr; }
 
   static void Dispatch(MSG& message, const std::wstring& window_class) {
     HWND root = GetAncestor(message.hwnd, GA_ROOT);
@@ -2203,3 +2205,13 @@ int RunPlatformApplication(const Application& application) {
 }
 
 } // namespace huxerui::detail
+
+namespace huxerui::windows {
+
+HWND NativeWindow(UiWindow& window) {
+  static_cast<void>(detail::CurrentApplicationRuntime());
+  auto* native = dynamic_cast<detail::WindowsUiWindow*>(&window);
+  return native ? native->BorrowNativeWindow() : nullptr;
+}
+
+} // namespace huxerui::windows

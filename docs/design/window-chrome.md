@@ -3,6 +3,12 @@
 This document defines desktop window-chrome ownership, application-defined title-bar content, standard window controls, drag hit testing, and platform fallback behavior.
 It complements the mobile-oriented [Window Insets and System Bars Design](window-insets.md) without changing safe-area semantics.
 
+Native extensions may explicitly borrow their original attachment through the platform-specific window APIs documented in [Platform Support](../guide/platforms.md).
+The shared WindowHandle stays platform-neutral.
+Linux canvas apertures clip the final scene, including PlatformView content, into the bands outside a requested rectangle and temporarily remove the window's opaque background policy.
+Locator rectangles paint afterward in a fixed opaque color, permitting an on-demand compositor stream to locate that canvas without a global Wayland window position.
+Clearing an aperture restores the creation-time transparency policy; neither operation starts a frame timer or changes native input routing.
+
 ## Goals
 
 - Keep a complete platform-owned title bar when an application wants system window chrome.

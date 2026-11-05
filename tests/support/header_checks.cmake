@@ -81,6 +81,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND HUXERUI_LINUX_PUBLIC_HEADERS
             linux/external_texture.h
             linux/platform_registry.h
+            linux/window.h
     )
 endif ()
 

@@ -46,6 +46,7 @@
 #include <huxerui/file.h>
 #include <huxerui/resource.h>
 #include <huxerui/window.h>
+#include <huxerui/linux/window.h>
 
 #include "internal_access.h"
 #include "io/file_internal.h"
@@ -902,6 +903,41 @@ public:
       : ui_dispatcher_(std::move(dispatcher)) {}
   ~LinuxUiWindow() override { Retire(); Cleanup(); }
 
+  linux::WindowGeometry BorrowNativeGeometry() const {
+    if (!IsInitialized() || window_ == nullptr || drawing_area_ == nullptr) return {};
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (surface == nullptr) return {};
+    const Point origin = ClientSurfaceOffset();
+    return {surface, origin.x, origin.y, gdk_surface_get_scale(surface)};
+  }
+
+  bool SetCanvasRegion(std::optional<Rect> region, bool marker) {
+    if (!IsInitialized() || window_ == nullptr || drawing_area_ == nullptr) return false;
+    if (region && (!std::isfinite(region->x) || !std::isfinite(region->y) ||
+                   !std::isfinite(region->width) || !std::isfinite(region->height) ||
+                   region->width <= 0.0F || region->height <= 0.0F ||
+                   !std::isfinite(region->x + region->width) || !std::isfinite(region->y + region->height))) {
+      throw std::invalid_argument("HuxerUI Linux canvas region must be finite with positive dimensions");
+    }
+    auto& current = marker ? locator_region_ : aperture_region_;
+    if (current == region) return true;
+    current = region;
+    if (!marker) {
+      if (aperture_region_ || transparent_surface_) {
+        ApplyTransparentBackground();
+        if (GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_))) {
+          G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+          gdk_surface_set_opaque_region(surface, nullptr);
+          G_GNUC_END_IGNORE_DEPRECATIONS
+        }
+      } else {
+        gtk_widget_remove_css_class(GTK_WIDGET(window_), "huxerui-transparent");
+      }
+    }
+    gtk_widget_queue_draw(drawing_area_);
+    return true;
+  }
+
   ResourceConfiguration Configuration() const {
     auto configuration = static_cast<LinuxRuntime&>(ApplicationRuntime()).Configuration();
     if (drawing_area_) configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
@@ -1649,16 +1685,51 @@ private:
       renderer_.SetDisplay(gtk_widget_get_display(drawing_area_));
       renderer_.SetViewport({static_cast<float>(gtk_widget_get_width(drawing_area_)),
                              static_cast<float>(gtk_widget_get_height(drawing_area_))});
-      if (platform_views_) {
-        platform_views_->Snapshot(snapshot, *committed_frame_);
-      } else {
-        renderer_.Snapshot(snapshot, *committed_frame_);
-      }
+      SnapshotCanvas(snapshot);
     } catch (...) {
       runtime_->ReportFailure(std::current_exception());
     }
     if (const std::optional<double> deadline = frame_state_.EndPaint(drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*deadline);
+    }
+  }
+
+  void SnapshotCanvas(GtkSnapshot* snapshot) {
+    const auto paint = [this](GtkSnapshot* target) {
+      if (platform_views_) platform_views_->Snapshot(target, *committed_frame_);
+      else renderer_.Snapshot(target, *committed_frame_);
+    };
+    if (!aperture_region_) {
+      paint(snapshot);
+    } else {
+      std::unique_ptr<GtkSnapshot, decltype(&g_object_unref)> content(gtk_snapshot_new(), &g_object_unref);
+      paint(content.get());
+      GskRenderNode* node = gtk_snapshot_free_to_node(content.release());
+      const float width = static_cast<float>(gtk_widget_get_width(drawing_area_));
+      const float height = static_cast<float>(gtk_widget_get_height(drawing_area_));
+      if (node != nullptr) {
+        const Rect& hole = *aperture_region_;
+        const float left = std::clamp(hole.x, 0.0F, width);
+        const float top = std::clamp(hole.y, 0.0F, height);
+        const float right = std::clamp(hole.x + hole.width, left, width);
+        const float bottom = std::clamp(hole.y + hole.height, top, height);
+        const Rect strips[] = {{0.0F, 0.0F, width, top}, {0.0F, bottom, width, height - bottom},
+                               {0.0F, top, left, bottom - top}, {right, top, width - right, bottom - top}};
+        for (const Rect& strip : strips) {
+          if (strip.IsEmpty()) continue;
+          const graphene_rect_t clip{{strip.x, strip.y}, {strip.width, strip.height}};
+          gtk_snapshot_push_clip(snapshot, &clip);
+          gtk_snapshot_append_node(snapshot, node);
+          gtk_snapshot_pop(snapshot);
+        }
+        gsk_render_node_unref(node);
+      }
+    }
+    if (locator_region_) {
+      const Rect& region = *locator_region_;
+      const graphene_rect_t bounds{{region.x, region.y}, {region.width, region.height}};
+      const GdkRGBA color{linux::MarkerColor.red, linux::MarkerColor.green, linux::MarkerColor.blue, 1.0F};
+      gtk_snapshot_append_color(snapshot, &color, &bounds);
     }
   }
 
@@ -2333,6 +2404,8 @@ private:
   bool custom_chrome_ = false;
   bool utility_window_ = false;
   bool transparent_surface_ = false;
+  std::optional<Rect> aperture_region_;
+  std::optional<Rect> locator_region_;
   bool passive_display_ = false;
   bool topmost_ = false;
   bool input_passthrough_ = false;
@@ -2361,3 +2434,25 @@ int RunPlatformApplication(const Application& application) {
 }
 
 } // namespace huxerui::detail
+
+namespace huxerui::linux {
+
+WindowGeometry NativeGeometry(UiWindow& window) {
+  static_cast<void>(detail::CurrentApplicationRuntime());
+  auto* native = dynamic_cast<detail::LinuxUiWindow*>(&window);
+  return native ? native->BorrowNativeGeometry() : WindowGeometry{};
+}
+
+bool SetWindowAperture(UiWindow& window, std::optional<Rect> region) {
+  static_cast<void>(detail::CurrentApplicationRuntime());
+  auto* native = dynamic_cast<detail::LinuxUiWindow*>(&window);
+  return native && native->SetCanvasRegion(region, false);
+}
+
+bool SetWindowMarker(UiWindow& window, std::optional<Rect> region) {
+  static_cast<void>(detail::CurrentApplicationRuntime());
+  auto* native = dynamic_cast<detail::LinuxUiWindow*>(&window);
+  return native && native->SetCanvasRegion(region, true);
+}
+
+} // namespace huxerui::linux
