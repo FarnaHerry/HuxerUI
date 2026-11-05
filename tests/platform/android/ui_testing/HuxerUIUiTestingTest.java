@@ -82,6 +82,7 @@ public final class HuxerUIUiTestingTest extends Instrumentation {
                 runOnMainSync(() -> result.putString("error", runNative(packagePath)));
                 if (org.huxerui.testing.BuildConfig.HUXERUI_BACKDROP_TESTS) HuxerUIBackdropTest.verify(this);
                 HuxerUIFileReferenceTest.verify(this);
+                HuxerUIActivityResultTest.verify(this);
             }
             String error = result.getString("error");
             boolean passed = error != null && error.isEmpty();

@@ -104,6 +104,22 @@ The example runner accepts `-PhuxeruiExampleProfiling=OFF` for an optimized timi
 Profiling-enabled Android builds expose ATrace sections for backdrop frame replay, hardware raster capture, optical planes, export and export-fence waiting.
 See [Android execution](../guide/testing.md#android-execution) for the resource and runner contract.
 
+The iOS smoke bundle includes native presentation and Objective-C module lifetime regressions alongside the windowless UI and file-reference tests.
+Use its UIApplication host so UIKit presentation and dismissal animations actually advance; invoking the bundle directly with the command-line `xctest` agent cannot validate those transitions.
+With an available Simulator selected, run:
+
+```bash
+cmake -S . -B build/ios-testing -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+  -DHUXERUI_BUILD_SHARED=OFF -DHUXERUI_BUILD_STATIC=ON \
+  -DHUXERUI_BUILD_TESTING_LIBRARY=ON -DHUXERUI_BUILD_TESTING_SMOKE_TESTS=ON \
+  -DHUXERUI_BUILD_CLI=OFF -DHUXERUI_BUILD_EXAMPLES=OFF -DHUXERUI_BUILD_TESTS=OFF
+xcodebuild -project build/ios-testing/huxerui.xcodeproj \
+  -scheme huxerui_ui_testing_host -configuration Debug \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' -parallel-testing-enabled NO test
+```
+
 ### Known Linux test failures
 
 `LinuxTextLayoutCaretHitTestingPreservesAlignedBidiGeometry` remains a known upstream text-layout issue, deferred by maintainer decision.

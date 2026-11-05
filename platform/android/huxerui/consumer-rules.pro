@@ -15,8 +15,13 @@
 -keep class org.huxerui.HuxerUIBufferReference$* { *; }
 -keep class org.huxerui.PlatformPayload { *; }
 -keep class org.huxerui.PlatformPayload$* { *; }
+-keep class org.huxerui.HuxerUIPlatformModule { *; }
+-keep class org.huxerui.HuxerUIPlatformModule$* { *; }
 -keep class * implements org.huxerui.HuxerUIPlatformModule$Factory { public <init>(); *; }
 -keep class * implements org.huxerui.HuxerUIPlatformView$Factory { public <init>(); *; }
+-keep class org.huxerui.HuxerUIActivityResultLauncher { *; }
+-keep class org.huxerui.HuxerUIActivityResultLauncher$* { *; }
+-keep class * implements org.huxerui.HuxerUIPlatformModule$WindowFactory { public <init>(); *; }
 -keepclassmembers class org.huxerui.HuxerUIView {
     int nativeBackdropAvailable(android.graphics.Canvas);
     int nativeBackdropFallback(java.lang.Throwable);
@@ -33,9 +38,5 @@
     void discardBackdropCanvas(android.graphics.Canvas);
     void presentBackdropHardware(android.graphics.Canvas, java.lang.Object);
     void setBackdropRasterTransform(android.graphics.Canvas, float, float, float, float, float, float);
-    boolean canOpenFiles();
-    boolean canSaveFiles();
-    org.huxerui.HuxerUIFilePicker$Operation prepareOpenDirectory(long, boolean);
-    org.huxerui.HuxerUIFilePicker$Operation prepareOpenFiles(long, java.lang.String[], java.lang.String[], boolean);
-    org.huxerui.HuxerUIFilePicker$Operation prepareSaveFile(long, java.lang.String, java.lang.String, java.lang.String[], java.lang.String[]);
+    org.huxerui.HuxerUIFilePicker filePicker();
 }
