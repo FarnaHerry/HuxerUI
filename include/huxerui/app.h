@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -813,6 +814,9 @@ public:
   /// Return false without retaining the operation when unsupported. Shared recognition and local delivery continue.
   /// Native implementations must not synchronously complete the operation before returning.
   virtual bool BeginWindowDrag(std::shared_ptr<detail::WindowDrag>) { return false; }
+  /// Creates an owned paragraph geometry snapshot on the window thread.
+  [[nodiscard]] TextParagraphLayout LayoutText(const AttributedText& text, const TextStyle& style,
+      float max_width = std::numeric_limits<float>::infinity(), const TextLayoutOptions& options = {}) final;
   /// Creates native text measurement/layout state for attributed content on the application thread.
   /// @param text Attributed content to retain or copy into the layout.
   /// @param style Resolved default typography used where spans do not override it.
