@@ -105,7 +105,7 @@ private:
 
 struct PreparedTextLayout {
   std::unique_ptr<detail::TextLayout> text_layout;
-  std::string display_text;
+  AttributedText display_text;
 };
 
 bool ParagraphLayoutOptionsEqual(const TextLayoutOptions& left, const TextLayoutOptions& right) noexcept {
@@ -131,12 +131,14 @@ PreparedTextLayout PrepareTextFieldLayout(
     const TextStyle& style,
     float max_width,
     bool secure,
-    const TextLayoutOptions& options
+    const TextLayoutOptions& options,
+    const std::vector<TextStyleRange>& text_styles = {}
 ) {
   if (!secure) {
+    const auto attributed = AttributedText::FromRanges(std::string(text), text_styles);
     return {
-        ui_window.CreateTextLayout(text, style, max_width, options),
-        std::string(text),
+        ui_window.CreateTextLayout(attributed, style, max_width, options),
+        attributed,
     };
   }
 
@@ -158,7 +160,7 @@ PreparedTextLayout PrepareTextFieldLayout(
   }
   return {
       std::make_unique<SecureTextLayout>(std::move(visual), std::move(boundaries)),
-      std::move(display_text),
+      AttributedText(std::move(display_text)),
   };
 }
 
@@ -485,6 +487,7 @@ public:
     if (!detail::IsValidTextEditingValue(modifier.value)) {
       throw std::invalid_argument("HuxerUI TextField value is invalid");
     }
+    HUXERUI_DISCARD(AttributedText::FromRanges(modifier.value.text, modifier.text_styles));
     if (!detail::Utf16Length(label).has_value()) {
       throw std::invalid_argument("HuxerUI TextField label must contain valid UTF-8");
     }
@@ -512,9 +515,13 @@ public:
     const bool paragraph_layout_options_changed =
         initialized_ && !ParagraphLayoutOptionsEqual(text_layout_options_, modifier.text_layout_options);
     const bool authoritative_value_changed = initialized_ && modifier.value != authoritative_value_;
+    const bool styled_body_changed = initialized_ && modifier.value.text != authoritative_value_.text &&
+                                     !modifier.text_styles.empty();
     const bool length_limit_changed = initialized_ && max_length_ != modifier.max_length;
     const bool validation_changed = validation_ != validation;
     const bool label_changed = label_ != label;
+    const bool text_styles_changed = text_styles_ != modifier.text_styles;
+    text_styles_ = modifier.text_styles;
     configuration_ = modifier.configuration;
     text_layout_options_ = modifier.text_layout_options;
     min_lines_ = modifier.min_lines;
@@ -552,11 +559,16 @@ public:
       floating_label_layout_.reset();
       placeholder_layout_.reset();
       validation_layout_.reset();
-    } else if (paragraph_layout_options_changed) {
+    } else if (paragraph_layout_options_changed || text_styles_changed || styled_body_changed) {
       text_layout_.reset();
       placeholder_layout_.reset();
     }
     if (text_layout_options_changed) {
+      RequestCaretReveal();
+    }
+    if (text_styles_changed || styled_body_changed) {
+      ++revision_;
+      preferred_caret_x_.reset();
       RequestCaretReveal();
     }
     if (text_layout_mode_changed) {
@@ -1471,7 +1483,8 @@ private:
           style_.text_style,
           text_layout_width_,
           configuration_.secure,
-          text_layout_options_
+          text_layout_options_,
+          editing_.value.text == authoritative_value_.text ? text_styles_ : std::vector<TextStyleRange>{}
       );
       text_layout_ = std::move(prepared.text_layout);
       laid_out_text_ = std::move(prepared.display_text);
@@ -2347,7 +2360,15 @@ private:
         start = end + 1;
       } while (start <= text.size());
     };
-    measure_lines(editing_.value.text, style_.text_style);
+    if (!configuration_.secure && editing_.value.text == authoritative_value_.text && !text_styles_.empty()) {
+      width = std::max(width, ui_window.MeasureText(
+          AttributedText::FromRanges(editing_.value.text, text_styles_), style_.text_style,
+          std::numeric_limits<float>::infinity(),
+          TextLayoutOptions{.shaping = text_layout_options_.shaping, .wrap = TextWrap::NoWrap}
+      ).size.width);
+    } else {
+      measure_lines(editing_.value.text, style_.text_style);
+    }
     if (HasVisualLabel()) {
       measure_lines(label_, style_.label_style);
       measure_lines(label_, style_.floating_label_style);
@@ -2409,7 +2430,8 @@ private:
   std::vector<HistoryEntry> redo_history_;
   std::string label_;
   std::string placeholder_;
-  std::string laid_out_text_;
+  AttributedText laid_out_text_;
+  std::vector<TextStyleRange> text_styles_;
   std::string laid_out_label_;
   std::string laid_out_placeholder_;
   std::string laid_out_validation_message_;
@@ -2749,7 +2771,7 @@ bool TextFieldModifier::LayoutEquals(const TextFieldModifier& left, const TextFi
          left.configuration.multiline == right.configuration.multiline &&
          left.configuration.secure == right.configuration.secure &&
          left.text_layout_options == right.text_layout_options && left.min_lines == right.min_lines &&
-         left.max_lines == right.max_lines && left.validation == right.validation;
+         left.max_lines == right.max_lines && left.validation == right.validation && left.text_styles == right.text_styles;
 }
 
 const ModifierDescriptor& TextFieldModifier::Descriptor() {
@@ -2870,6 +2892,13 @@ TextField TextField::Shaping(TextShapingOptions value) && {
   return std::move(*this);
 }
 
+TextField TextField::TextStyles(std::vector<TextStyleRange> value) && {
+  HUXERUI_DISCARD(AttributedText::FromRanges(value_.text, value));
+  text_styles_ = std::move(value);
+  UpdateModifier();
+  return std::move(*this);
+}
+
 TextField TextField::Align(TextAlign value) && {
   text_align_ = value;
   UpdateModifier();
@@ -2934,6 +2963,7 @@ void TextField::UpdateModifier() {
       line_limits_.Maximum(),
       max_length_,
       validation_,
+      text_styles_,
   }));
 }
 
