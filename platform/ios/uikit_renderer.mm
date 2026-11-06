@@ -31,6 +31,7 @@
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
 #include "text/font_internal.h"
+#include "macros_internal.h"
 
 namespace huxerui::detail {
 
@@ -892,7 +893,6 @@ struct UIKitRenderer::State {
       fonts.erase(fonts.begin());
     }
     auto [inserted, was_inserted] = fonts.emplace(font, CachedFont{std::move(ct_font), metrics});
-    static_cast<void>(was_inserted);
     return inserted->second;
   }
 
@@ -959,7 +959,6 @@ struct UIKitRenderer::State {
             resolved_shaping.direction,
         }
     );
-    static_cast<void>(was_inserted);
     return inserted->second;
   }
 
@@ -1223,7 +1222,7 @@ public:
       CGFloat ascent = 0.0;
       CGFloat descent = 0.0;
       CGFloat leading = 0.0;
-      static_cast<void>(CTLineGetTypographicBounds(line, &ascent, &descent, &leading));
+      HUXERUI_DISCARD(CTLineGetTypographicBounds(line, &ascent, &descent, &leading));
       line_records_.push_back({
           line,
           origins[static_cast<std::size_t>(index)],
@@ -1994,8 +1993,7 @@ void UIKitRenderer::RenderCommand(CGContextRef context, const PushPathClipComman
   CGPathRelease(path);
 }
 
-void UIKitRenderer::RenderCommand(CGContextRef context, const PopClipCommand& command) {
-  static_cast<void>(command);
+void UIKitRenderer::RenderCommand(CGContextRef context, const PopClipCommand&) {
   CGContextRestoreGState(context);
 }
 
@@ -2014,15 +2012,11 @@ void UIKitRenderer::RenderCommand(CGContextRef context, const PushTransformComma
   );
 }
 
-void UIKitRenderer::RenderCommand(CGContextRef context, const PopTransformCommand& command) {
-  static_cast<void>(command);
+void UIKitRenderer::RenderCommand(CGContextRef context, const PopTransformCommand&) {
   CGContextRestoreGState(context);
 }
 
-void UIKitRenderer::RenderCommand(CGContextRef context, const PlacePlatformViewCommand& command) {
-  static_cast<void>(context);
-  static_cast<void>(command);
-}
+void UIKitRenderer::RenderCommand(CGContextRef, const PlacePlatformViewCommand&) {}
 
 void UIKitRenderer::DrawBackdropFrame(CGContextRef context, CGRect viewport, const RenderFrame& frame,
     CommandRange* range, bool draw_background) {

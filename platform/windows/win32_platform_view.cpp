@@ -23,6 +23,7 @@
 #include <huxerui/windows/platform_registry.h>
 
 #include "runtime/ui_window_internal.h"
+#include "macros_internal.h"
 
 namespace huxerui::detail {
 
@@ -571,7 +572,6 @@ bool Win32PlatformViews::Commit(const RenderFrame& frame, float dpi_scale) {
   }
 
   for (auto& [identity, hosted] : state_->hosted_views) {
-    static_cast<void>(identity);
     hosted->event_route->active = true;
   }
   state_->ResizeOverlay();
@@ -601,7 +601,7 @@ bool Win32PlatformViews::Commit(const RenderFrame& frame, float dpi_scale) {
 void Win32PlatformViews::DidPresent() {
   if (!state_->retired.empty()) {
     // Present queues the composition buffer; wait until DWM has consumed it before exposing retired apertures.
-    static_cast<void>(DwmFlush());
+    HUXERUI_DISCARD(DwmFlush());
   }
   state_->retired.clear();
   state_->ResizeOverlay();
@@ -636,7 +636,7 @@ bool Win32PlatformViews::HandleFocusTraversal(const MSG& message) {
                            (!reverse && std::next(current) == tab_order.end());
   state_->pending_focus_visible = true;
   if (leaves_view) {
-    static_cast<void>(InternalAccess::MoveFocusFromPlatformView(*state_->ui_window, *identity, reverse));
+    HUXERUI_DISCARD(InternalAccess::MoveFocusFromPlatformView(*state_->ui_window, *identity, reverse));
     return true;
   }
   SetFocus(reverse ? *std::prev(current) : *std::next(current));
@@ -668,7 +668,6 @@ void Win32PlatformViews::Shutdown() noexcept {
     return;
   }
   for (auto& [identity, hosted] : state_->hosted_views) {
-    static_cast<void>(identity);
     hosted->event_route->active = false;
     hosted->event_route->ui_window = nullptr;
   }

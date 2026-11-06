@@ -42,6 +42,7 @@
 #include "text/font_internal.h"
 #include "win32_external_texture_internal.h"
 #include "win32_internal.h"
+#include "macros_internal.h"
 
 namespace huxerui::detail {
 
@@ -421,7 +422,6 @@ public:
         layout_->HitTestPoint(point.x, point.y, &trailing, &inside, &metrics),
         "HuxerUI could not hit test a DirectWrite text layout"
     );
-    static_cast<void>(inside);
     TextOffset offset = std::min<TextOffset>(static_cast<TextOffset>(text_.size()),
         static_cast<TextOffset>(metrics.textPosition) + (trailing != FALSE ? metrics.length : 0));
     if (offset > 0 && offset < static_cast<TextOffset>(text_.size())) {
@@ -867,7 +867,7 @@ struct Win32Renderer::State {
         ),
         "HuxerUI could not create a DirectWrite factory"
     );
-    static_cast<void>(CoCreateInstance(
+    HUXERUI_DISCARD(CoCreateInstance(
         CLSID_WICImagingFactory,
         nullptr,
         CLSCTX_INPROC_SERVER,
@@ -1063,7 +1063,6 @@ struct Win32Renderer::State {
             line.baseline,
         }
     );
-    static_cast<void>(was_inserted);
     return inserted->second;
   }
 
@@ -1394,7 +1393,7 @@ struct Win32Renderer::State {
           ThrowIfFailed(composition_result, "HuxerUI could not attach the Windows PlatformView composition surface");
         }
       } else {
-        static_cast<void>(factory->MakeWindowAssociation(window_, DXGI_MWA_NO_ALT_ENTER));
+        HUXERUI_DISCARD(factory->MakeWindowAssociation(window_, DXGI_MWA_NO_ALT_ENTER));
       }
     }
 
@@ -1472,7 +1471,7 @@ struct Win32Renderer::State {
   }
 
   void ResetExternalTextureResources() noexcept {
-    static_cast<void>(ReleaseD3D11Textures());
+    HUXERUI_DISCARD(ReleaseD3D11Textures());
     for (CachedPixelTexture& entry : pixel_textures_) {
       entry.bitmap.Reset();
     }
@@ -1523,8 +1522,8 @@ struct Win32Renderer::State {
     brush_.Reset();
     swap_chain_.Reset();
     if (composition_target_ && composition_device_) {
-      static_cast<void>(composition_target_->SetRoot(nullptr));
-      static_cast<void>(composition_device_->Commit());
+      HUXERUI_DISCARD(composition_target_->SetRoot(nullptr));
+      HUXERUI_DISCARD(composition_device_->Commit());
     }
     composition_visual_.Reset();
     composition_target_.Reset();
@@ -1643,8 +1642,8 @@ struct Win32Renderer::State {
       DiscardDeviceResources();
       return Win32RenderResult::Recreate;
     } catch (...) {
-      static_cast<void>(device_context_->EndDraw());
-      static_cast<void>(ReleaseD3D11Textures());
+      HUXERUI_DISCARD(device_context_->EndDraw());
+      HUXERUI_DISCARD(ReleaseD3D11Textures());
       DiscardDeviceResources();
       throw;
     }
@@ -2438,7 +2437,7 @@ struct Win32Renderer::State {
           "HuxerUI could not create a Direct2D bitmap for a Windows D3D11 texture"
       );
     } catch (...) {
-      static_cast<void>(cached.keyed_mutex->ReleaseSync(1));
+      HUXERUI_DISCARD(cached.keyed_mutex->ReleaseSync(1));
       cached.acquired = false;
       ResetD3D11Import(cached);
       throw;
@@ -2492,7 +2491,7 @@ struct Win32Renderer::State {
         ThrowIfFailed(result, "HuxerUI could not acquire a Windows D3D11 texture for rendering");
       }
     } catch (...) {
-      static_cast<void>(ReleaseD3D11Textures());
+      HUXERUI_DISCARD(ReleaseD3D11Textures());
       throw;
     }
     return true;
@@ -3110,8 +3109,7 @@ struct Win32Renderer::State {
     clip_stack_.push_back(std::move(state));
   }
 
-  void RenderCommand(const PopClipCommand& command) {
-    static_cast<void>(command);
+  void RenderCommand(const PopClipCommand&) {
     PopClip();
   }
 
@@ -3130,8 +3128,7 @@ struct Win32Renderer::State {
     device_context_->SetTransform(transform * previous);
   }
 
-  void RenderCommand(const PopTransformCommand& command) {
-    static_cast<void>(command);
+  void RenderCommand(const PopTransformCommand&) {
     if (transform_stack_.empty()) {
       return;
     }

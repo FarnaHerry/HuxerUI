@@ -1472,8 +1472,7 @@ void WebRenderer::RenderCommand(const PushPathClipCommand& command) {
   context_.call<void>("clip", std::string(command.fill_rule == PathFillRule::EvenOdd ? "evenodd" : "nonzero"));
 }
 
-void WebRenderer::RenderCommand(const PopClipCommand& command) {
-  static_cast<void>(command);
+void WebRenderer::RenderCommand(const PopClipCommand&) {
   context_.call<void>("restore");
 }
 
@@ -1578,13 +1577,11 @@ void WebRenderer::RenderCommand(const PushTransformCommand& command) {
   ApplyTransform(context_, command.transform);
 }
 
-void WebRenderer::RenderCommand(const PopTransformCommand& command) {
-  static_cast<void>(command);
+void WebRenderer::RenderCommand(const PopTransformCommand&) {
   context_.call<void>("restore");
 }
 
-void WebRenderer::RenderCommand(const PlacePlatformViewCommand& command) {
-  static_cast<void>(command);
+void WebRenderer::RenderCommand(const PlacePlatformViewCommand&) {
   throw std::logic_error("HuxerUI Web renderer received a PlatformView outside RenderComposition");
 }
 

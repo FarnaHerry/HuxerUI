@@ -10,6 +10,7 @@
 #include "text_field_internal.h"
 #include "text/text_input_internal.h"
 #include "text/text_internal.h"
+#include "macros_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1408,8 +1409,7 @@ public:
     return TextInputKeyResult::Unhandled;
   }
 
-  void EndTextInput(TextInputSessionId session_id, TextInputEndReason reason) override {
-    static_cast<void>(reason);
+  void EndTextInput(TextInputSessionId session_id, TextInputEndReason) override {
     if (session_id != session_id_) {
       return;
     }
@@ -1801,7 +1801,7 @@ private:
       TextInputCommand command;
       command.kind = TextInputCommandKind::CancelComposition;
       const std::uint64_t previous_revision = revision_;
-      static_cast<void>(ApplyCommands({command}));
+      HUXERUI_DISCARD(ApplyCommands({command}));
       return revision_ != previous_revision;
     }
     if (undo_history_.empty()) {
@@ -2545,15 +2545,12 @@ public:
     InvalidatePaint();
   }
 
-  void OnFocusChanged(ViewNode& node, bool focused, bool) override {
-    static_cast<void>(node);
+  void OnFocusChanged(ViewNode&, bool focused, bool) override {
     client_->FocusChanged(focused);
     InvalidatePaint();
   }
 
-  void OnScrollActivity(ViewNode& node, const ScrollActivity& activity) override {
-    static_cast<void>(node);
-    static_cast<void>(activity);
+  void OnScrollActivity(ViewNode&, const ScrollActivity&) override {
     client_->ViewportScrolled();
     InvalidatePaint();
   }
@@ -2581,8 +2578,7 @@ public:
     return true;
   }
 
-  PointerResult OnPointer(ViewNode& node, const PointerEvent& event) override {
-    static_cast<void>(node);
+  PointerResult OnPointer(ViewNode&, const PointerEvent& event) override {
     const PointerResult result = client_->Pointer(event);
     if (result != PointerResult::Ignored) {
       InvalidatePaint();

@@ -23,6 +23,7 @@
 #include "application_internal.h"
 #include "window_internal.h"
 #include "io/http_internal.h"
+#include "macros_internal.h"
 #include "resources/resource_internal.h"
 #include "runtime/task_internal.h"
 #include "system_tray_internal.h"
@@ -148,7 +149,6 @@ std::shared_ptr<ApplicationRuntimeState> CurrentApplicationRuntime() {
 
 UiWindow* CurrentUiWindow() {
   const auto state = CurrentApplicationRuntime();
-  static_cast<void>(state);
   if (!execution_context || !execution_context->requires_ui) {
     return nullptr;
   }
@@ -942,7 +942,7 @@ public:
       throw std::logic_error("HuxerUI application timers must be scheduled on their owning thread");
     }
 #if defined(__EMSCRIPTEN__)
-    static_cast<void>(deadline);
+    HUXERUI_UNUSED(deadline);
     throw std::logic_error("HuxerUI Web Runtime must provide its native timer implementation");
 #else
     const std::weak_ptr<ApplicationTimerQueue> weak = weak_from_this();

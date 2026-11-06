@@ -215,8 +215,7 @@ public:
     Update(node, modifier);
   }
 
-  void Update(ViewNode& node, const DismissAction& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const DismissAction& modifier) {
     request_ = modifier.request;
   }
 
@@ -251,15 +250,13 @@ public:
     Update(node, modifier);
   }
 
-  void Update(ViewNode& node, const ToastLifetime& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const ToastLifetime& modifier) {
     service_ = modifier.service;
     id_ = modifier.id;
     duration_ = std::max(0.0, modifier.duration);
   }
 
-  NodeExtension::FrameResult OnFrame(ViewNode& node, const FrameInfo& frame) override {
-    static_cast<void>(node);
+  NodeExtension::FrameResult OnFrame(ViewNode&, const FrameInfo& frame) override {
     if (dismissed_) {
       return {};
     }
@@ -329,8 +326,7 @@ public:
     Update(node, modifier);
   }
 
-  void Update(ViewNode& node, const SnackBarLifetime& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const SnackBarLifetime& modifier) {
     const bool request_changed = id_ != modifier.id;
     service_ = modifier.service;
     pause_ = modifier.pause;
@@ -348,13 +344,11 @@ public:
     return node.Bounds().Contains(position);
   }
 
-  void OnHover(ViewNode& node, const HoverEvent& event) override {
-    static_cast<void>(node);
+  void OnHover(ViewNode&, const HoverEvent& event) override {
     pause_->Set(pause_->surface_hovered, event.type != HoverEventType::Leave);
   }
 
-  NodeExtension::FrameResult OnFrame(ViewNode& node, const FrameInfo& frame) override {
-    static_cast<void>(node);
+  NodeExtension::FrameResult OnFrame(ViewNode&, const FrameInfo& frame) override {
     if (dismissed_ || !remaining_.has_value()) {
       return {};
     }
@@ -404,8 +398,7 @@ public:
     Update(node, modifier);
   }
 
-  void Update(ViewNode& node, const SnackBarActionPause& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const SnackBarActionPause& modifier) {
     pause_ = modifier.pause;
   }
 
@@ -413,20 +406,16 @@ public:
     return node.Bounds().Contains(position);
   }
 
-  void OnHover(ViewNode& node, const HoverEvent& event) override {
-    static_cast<void>(node);
+  void OnHover(ViewNode&, const HoverEvent& event) override {
     pause_->Set(pause_->action_hovered, event.type != HoverEventType::Leave);
   }
 
-  void OnFocusChanged(ViewNode& node, bool focused, bool) override {
-    static_cast<void>(node);
+  void OnFocusChanged(ViewNode&, bool focused, bool) override {
     pause_->Set(pause_->action_focused, focused);
   }
 
-  void OnInteraction(ViewNode& node, const InteractionState& state,
-                     const std::optional<InteractionEvent>& event) override {
-    static_cast<void>(node);
-    static_cast<void>(event);
+  void OnInteraction(ViewNode&, const InteractionState& state,
+                     const std::optional<InteractionEvent>&) override {
     pause_->Set(pause_->action_pressed, state.pressed);
   }
 
@@ -497,8 +486,7 @@ public:
     Update(node, modifier);
   }
 
-  void Update(ViewNode& node, const BottomSheetDragHandle& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const BottomSheetDragHandle& modifier) {
     if (state_ == modifier.state) {
       return;
     }
@@ -580,8 +568,7 @@ public:
     Update(node, modifier);
   }
 
-  void Update(ViewNode& node, const PresentationContentMotion& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const PresentationContentMotion& modifier) {
     if (state_ == modifier.state && bottom_sheet_drag_ == modifier.bottom_sheet_drag && motion_ == modifier.motion &&
         slide_direction_ == modifier.slide_direction && origin_ == modifier.origin &&
         slide_by_content_extent_ == modifier.slide_by_content_extent) {
@@ -1250,7 +1237,7 @@ public:
   static LayoutResult Measure(LayoutContext& context, ViewNode& node, Constraints constraints) {
     const Constraints loose = constraints.Loose();
     for (ViewNode& child : node.Children()) {
-      static_cast<void>(context.Measure(child, loose));
+      context.Measure(child, loose);
     }
 
     LayoutResult result;
@@ -1337,14 +1324,12 @@ public:
     }
   }
 
-  void Update(ViewNode& node, const DebugSampler& modifier) {
-    static_cast<void>(node);
+  void Update(ViewNode&, const DebugSampler& modifier) {
     metrics_ = modifier.metrics;
     snapshot_ = modifier.snapshot;
   }
 
-  NodeExtension::FrameResult OnFrame(ViewNode& node, const FrameInfo& frame) override {
-    static_cast<void>(node);
+  NodeExtension::FrameResult OnFrame(ViewNode&, const FrameInfo& frame) override {
     constexpr double sample_interval = 1.0;
     if (!next_sample_at_.has_value()) {
       if (metrics_) {
@@ -1740,8 +1725,7 @@ public:
     Update(node, modifier);
   }
 
-  void Update(huxerui::ViewNode& node, const MenuExpansionAction& modifier) {
-    static_cast<void>(node);
+  void Update(huxerui::ViewNode&, const MenuExpansionAction& modifier) {
     chain_ = modifier.chain;
     submenu_anchor_ = modifier.submenu_anchor;
     depth_ = modifier.depth;

@@ -31,6 +31,7 @@
 #include "graphics/shadow_internal.h"
 #include "text/text_internal.h"
 #include "text/font_internal.h"
+#include "macros_internal.h"
 
 namespace huxerui::detail {
 
@@ -892,7 +893,6 @@ struct AppKitRenderer::State {
       fonts.erase(fonts.begin());
     }
     auto [inserted, was_inserted] = fonts.emplace(font, CachedFont{std::move(ct_font), metrics});
-    static_cast<void>(was_inserted);
     return inserted->second;
   }
 
@@ -959,7 +959,6 @@ struct AppKitRenderer::State {
             resolved_shaping.direction,
         }
     );
-    static_cast<void>(was_inserted);
     return inserted->second;
   }
 
@@ -1224,7 +1223,7 @@ public:
       CGFloat ascent = 0.0;
       CGFloat descent = 0.0;
       CGFloat leading = 0.0;
-      static_cast<void>(CTLineGetTypographicBounds(line, &ascent, &descent, &leading));
+      HUXERUI_DISCARD(CTLineGetTypographicBounds(line, &ascent, &descent, &leading));
       line_records_.push_back({
           line,
           origins[static_cast<std::size_t>(index)],
@@ -1995,8 +1994,7 @@ void AppKitRenderer::RenderCommand(CGContextRef context, const PushPathClipComma
   CGPathRelease(path);
 }
 
-void AppKitRenderer::RenderCommand(CGContextRef context, const PopClipCommand& command) {
-  static_cast<void>(command);
+void AppKitRenderer::RenderCommand(CGContextRef context, const PopClipCommand&) {
   CGContextRestoreGState(context);
 }
 
@@ -2015,15 +2013,11 @@ void AppKitRenderer::RenderCommand(CGContextRef context, const PushTransformComm
   );
 }
 
-void AppKitRenderer::RenderCommand(CGContextRef context, const PopTransformCommand& command) {
-  static_cast<void>(command);
+void AppKitRenderer::RenderCommand(CGContextRef context, const PopTransformCommand&) {
   CGContextRestoreGState(context);
 }
 
-void AppKitRenderer::RenderCommand(CGContextRef context, const PlacePlatformViewCommand& command) {
-  static_cast<void>(context);
-  static_cast<void>(command);
-}
+void AppKitRenderer::RenderCommand(CGContextRef, const PlacePlatformViewCommand&) {}
 
 void AppKitRenderer::SetTransparentSurface(bool transparent) noexcept {
   transparent_surface_ = transparent;

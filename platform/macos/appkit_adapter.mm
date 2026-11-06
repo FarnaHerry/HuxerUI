@@ -40,6 +40,7 @@
 #include "text/text_internal.h"
 #include "application/window_internal.h"
 #include "internal_access.h"
+#include "macros_internal.h"
 
 namespace huxerui::detail {
 class MacUiWindow;
@@ -1070,7 +1071,7 @@ public:
       [view_ setNeedsDisplay:YES];
       frame_state_.MarkPaintPending();
     } else {
-      static_cast<void>(InvalidateDamage(commit.render_frame.damage));
+      HUXERUI_DISCARD(InvalidateDamage(commit.render_frame.damage));
     }
     if (commit.next_frame_deadline.has_value()) {
       RequestFrameAt(*commit.next_frame_deadline);
@@ -1566,7 +1567,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)draggingExited:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(sender);
   if (huxeruiFileDropHover && huxeruiWindow != nullptr) {
     huxeruiFileDropHover = NO;
     try {
@@ -1715,7 +1715,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)resourceConfigurationDidChange:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->UpdateResourceConfiguration();
   }
@@ -1865,7 +1864,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)mouseExited:(NSEvent*)event {
-  static_cast<void>(event);
   [self cancelPointer];
 }
 
@@ -1993,7 +1991,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)cancelOperation:(id)sender {
-  static_cast<void>(sender);
   [self cancelPointer];
 }
 
@@ -2057,14 +2054,12 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
        willPresentNotification:(UNNotification*)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))completionHandler {
-  static_cast<void>(center);
   completionHandler(huxerui::detail::MacLocalNotificationPresentationOptions(notification.request));
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
     didReceiveNotificationResponse:(UNNotificationResponse*)response
              withCompletionHandler:(void (^)(void))completionHandler {
-  static_cast<void>(center);
   std::optional<huxerui::NotificationActivation> activation =
       huxerui::detail::DecodeMacLocalNotificationActivation(response.notification.request, response.actionIdentifier);
   if (!activation.has_value()) {
@@ -2091,48 +2086,40 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls {
-  static_cast<void>(application);
   if (huxeruiApplicationRuntime != nullptr) {
     huxeruiApplicationRuntime->OpenURLs(urls);
   }
 }
 
 - (void)applicationDidBecomeActive:(NSNotification*)notification {
-  static_cast<void>(notification);
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateWindows();
 }
 
 - (void)applicationDidResignActive:(NSNotification*)notification {
-  static_cast<void>(notification);
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateWindows();
 }
 
 - (void)applicationDidHide:(NSNotification*)notification {
-  static_cast<void>(notification);
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateWindows();
 }
 
 - (void)applicationDidUnhide:(NSNotification*)notification {
-  static_cast<void>(notification);
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateLifecycleState();
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateWindows();
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
-  static_cast<void>(sender);
   return huxeruiApplicationRuntime == nullptr ? NSTerminateNow : huxeruiApplicationRuntime->ShouldTerminate();
 }
 
 - (void)resourceConfigurationDidChange:(NSNotification*)notification {
-  static_cast<void>(notification);
   if (huxeruiApplicationRuntime != nullptr) huxeruiApplicationRuntime->UpdateResourceConfiguration();
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
-  static_cast<void>(sender);
   return NO;
 }
 
@@ -2141,7 +2128,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 @implementation HuxerUIWindowDelegate
 
 - (void)windowWillClose:(NSNotification*)notification {
-  static_cast<void>(notification);
   if (huxeruiWindow == nullptr) return;
   huxerui::detail::ExecutionGuard guard(huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
   huxeruiWindow->NativeWindowClosed();
@@ -2150,21 +2136,18 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (BOOL)windowShouldClose:(NSWindow*)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(sender);
   return huxeruiWindow == nullptr || huxeruiWindow->AllowWindowRequest(huxerui::WindowCommand::Close);
 }
 
 - (BOOL)windowShouldMiniaturize:(NSWindow*)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(sender);
   return huxeruiWindow == nullptr || huxeruiWindow->AllowWindowRequest(huxerui::WindowCommand::Minimize);
 }
 
 - (void)windowDidMove:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->InvalidateTextInputGeometry();
   }
@@ -2173,7 +2156,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)windowDidUpdate:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->SynchronizePlatformViewFocus();
   }
@@ -2182,7 +2164,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)windowDidResize:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->WindowGeometryChanged();
   }
@@ -2191,7 +2172,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)windowDidChangeScreen:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->UpdateResourceConfiguration();
     huxeruiWindow->WindowGeometryChanged();
@@ -2201,7 +2181,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)windowDidEnterFullScreen:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->WindowGeometryChanged();
   }
@@ -2210,7 +2189,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)windowDidExitFullScreen:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) {
     huxeruiWindow->WindowGeometryChanged();
   }
@@ -2219,28 +2197,24 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)windowDidBecomeKey:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidResignKey:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidMiniaturize:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) huxeruiWindow->UpdateWindowLifecycleState();
 }
 
 - (void)windowDidDeminiaturize:(NSNotification*)notification {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
-  static_cast<void>(notification);
   if (huxeruiWindow != nullptr && huxeruiWindow->IsInitialized()) huxeruiWindow->UpdateWindowLifecycleState();
 }
 

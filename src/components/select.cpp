@@ -24,6 +24,7 @@
 #include "runtime/mounted_node_internal.h"
 #include "indication_internal.h"
 #include "graphics/effects_internal.h"
+#include "macros_internal.h"
 
 namespace huxerui {
 
@@ -190,7 +191,7 @@ void DismissSelect(const std::shared_ptr<SelectSession>& session, const PopupHan
   const LayerId layer = *session->layer;
   session->layer.reset();
   session->popup_state.reset();
-  static_cast<void>(popup.Dismiss(layer));
+  HUXERUI_DISCARD(popup.Dismiss(layer));
   if (notify) {
     session->events.Emit<SelectEvents::ExpandedChanged>(false);
   }
@@ -455,9 +456,9 @@ public:
     const float bottom = top + active.LayoutSize().height;
     const ScrollMetrics metrics = scroll_controller_.Metrics();
     if (top < metrics.offset) {
-      static_cast<void>(scroll_controller_.ScrollTo(top));
+      HUXERUI_DISCARD(scroll_controller_.ScrollTo(top));
     } else if (bottom > metrics.offset + metrics.viewport_extent) {
-      static_cast<void>(scroll_controller_.ScrollTo(bottom - metrics.viewport_extent));
+      HUXERUI_DISCARD(scroll_controller_.ScrollTo(bottom - metrics.viewport_extent));
     }
     return PaintInvalidation::None;
   }
