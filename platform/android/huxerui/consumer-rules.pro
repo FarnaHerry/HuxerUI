@@ -39,4 +39,5 @@
     void presentBackdropHardware(android.graphics.Canvas, java.lang.Object);
     void setBackdropRasterTransform(android.graphics.Canvas, float, float, float, float, float, float);
     org.huxerui.HuxerUIFilePicker filePicker();
+    private void requestTextInputKeyboard(long, boolean);
 }

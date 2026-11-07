@@ -743,6 +743,12 @@ void ApplyViewDeclaration(MountedNode& mounted, ViewSpec& compiled, std::shared_
   mounted.pointer_events_enabled = compiled.pointer_events_enabled;
   mounted.local_enabled = compiled.local_enabled;
   mounted.focusable = compiled.focusable;
+  if (mounted.focus_target != compiled.focus_target) {
+    if (mounted.focus_target && mounted.focus_target->node_identity == mounted.identity) {
+      mounted.focus_target->node_identity = 0;
+    }
+    mounted.focus_target = std::move(compiled.focus_target);
+  }
   mounted.trap_focus = compiled.trap_focus;
 }
 
@@ -941,6 +947,18 @@ void PrepareExtensionGeometry(MountedNode& node, TextMeasurer& text_measurer) {
 }
 
 void ResolveEnabledTree(MountedNode& node, bool parent_enabled) {
+  // Publish targets after reconciliation so replacement and keyed movement cannot overlap previous bindings.
+  if (node.focus_target) {
+    auto& target = *node.focus_target;
+    const auto window = target.source->ui.lock();
+    if (!window || window->ui_window != node.ui_window) {
+      throw std::logic_error("HuxerUI focus target belongs to another window");
+    }
+    if (target.node_identity != 0 && target.node_identity != node.identity) {
+      throw std::logic_error("HuxerUI focus requester is bound to multiple mounted controls");
+    }
+    target.node_identity = node.identity;
+  }
   const bool enabled = parent_enabled && node.participates_in_layout && node.local_enabled &&
       !node.exclude_input;
   const bool applies_disabled_appearance = parent_enabled && node.participates_in_layout && !node.local_enabled;
@@ -1155,6 +1173,29 @@ std::optional<PlatformValue> InternalAccess::DispatchPlatformViewEvent(
 } // namespace huxerui::detail
 
 namespace huxerui {
+
+bool FocusRequester::RequestFocus() const {
+  if (detail::Composer::Current()) {
+    throw std::logic_error("HuxerUI cannot request focus during composition");
+  }
+  if (!state_ || !state_->source->application.lock()) return false;
+  detail::ValidateApplicationCall(state_->source);
+  const auto window = state_->source->ui.lock();
+  if (!window || !window->ui_window || state_->node_identity == 0) return false;
+  detail::ExecutionGuard guard(state_->source);
+  return window->ui_window->RequestFocus(state_->node_identity);
+}
+
+FocusRequester UseFocusRequester(const std::source_location& location) {
+  if (!detail::Composer::Current()) {
+    throw std::logic_error("HuxerUI UseFocusRequester() requires window composition");
+  }
+  auto* window = detail::CurrentUiWindow();
+  if (!window) throw std::logic_error("HuxerUI UseFocusRequester() requires window composition");
+  auto source = detail::CapturePresentationContext(detail::InternalAccess::WindowExecution(*window));
+  auto requester = FocusRequester(std::make_shared<detail::FocusRequesterState>(std::move(source)));
+  return UseState(std::move(requester), location);
+}
 
 Runtime& UiWindow::ApplicationRuntime() const {
   if (!application_runtime_)
@@ -1441,12 +1482,14 @@ void UiWindow::Retire() noexcept {
 
 TextInputApplyResult UiWindow::HandleTextInputCommands(const TextInputCommandBatch& batch) {
   ExecutionGuard execution_guard(state_->execution_);
-  return state_->text_->HandleTextInputCommands(batch);
+  return state_->text_->DispatchWithKeyboardRequests([&] { return state_->text_->HandleTextInputCommands(batch); });
 }
 
 bool UiWindow::PerformTextInputAction(TextInputSessionId session_id, TextInputAction action) {
   ExecutionGuard execution_guard(state_->execution_);
-  return state_->text_->PerformTextInputAction(session_id, action);
+  return state_->text_->DispatchWithKeyboardRequests([&] {
+    return state_->text_->PerformTextInputAction(session_id, action);
+  });
 }
 
 TextInputContext
@@ -1468,7 +1511,7 @@ bool UiWindow::CanPerformTextEditingAction(TextEditingAction action) const {
 
 bool UiWindow::PerformTextEditingAction(TextEditingAction action) {
   ExecutionGuard execution_guard(state_->execution_);
-  return state_->text_->PerformTextEditingAction(action);
+  return state_->text_->DispatchWithKeyboardRequests([&] { return state_->text_->PerformTextEditingAction(action); });
 }
 
 std::uint64_t UiWindow::BeginInteraction(detail::MountedNode& node, InteractionEvent::Source source,
@@ -1494,7 +1537,15 @@ void UiWindow::EndInteraction(detail::MountedNode& node, InteractionEvent::Type 
 
 void UiWindow::HandlePointerEvent(const PointerEvent& event) {
   ExecutionGuard execution_guard(state_->execution_);
+  detail::TextInteraction::KeyboardDispatch keyboard_dispatch(*state_->text_);
   state_->pointer_->HandlePointerEvent(event);
+  keyboard_dispatch.Finish();
+}
+
+void UiWindow::RequestKeyboard(bool show) {
+  if (state_->focused_node_identity_) {
+    state_->text_->RequestKeyboardForNode(*state_->focused_node_identity_, show);
+  }
 }
 
 bool UiWindow::HasContextMenuHandler(Point position) const {
@@ -1529,7 +1580,9 @@ void UiWindow::BuildSemantics() {
 
 bool UiWindow::PerformSemanticAction(SemanticNodeId node_id, const SemanticAction& action) {
   ExecutionGuard execution_guard(state_->execution_);
-  return state_->semantics_->PerformSemanticAction(node_id, action);
+  return state_->text_->DispatchWithKeyboardRequests([&] {
+    return state_->semantics_->PerformSemanticAction(node_id, action);
+  });
 }
 
 void UiWindow::QueueLifecycleCommit(const std::shared_ptr<detail::RecomposeScope>& scope) {
@@ -1849,6 +1902,7 @@ const FrameCommit& UiWindow::BuildFrame(FrameInfo frame) {
     return state_->frame_commit_;
   }
   ExecutionGuard execution_guard(state_->execution_);
+  detail::TextInteraction::KeyboardDispatch keyboard_dispatch(*state_->text_);
   HUXERUI_PROFILE_FRAME(*state_->root_environment_);
   HUXERUI_PROFILE_STAGE(profile_stage, Compose);
   detail::DebugMetricsState* const debug_metrics = state_->debug_metrics_.get();
@@ -1911,6 +1965,7 @@ const FrameCommit& UiWindow::BuildFrame(FrameInfo frame) {
         state_->frame_requested_ ? std::optional{state_->frame_request_deadline_} : std::nullopt;
     record_debug_commit();
     state_->building_frame_ = false;
+    keyboard_dispatch.Finish();
     return state_->frame_commit_;
   }
 
@@ -2053,6 +2108,7 @@ const FrameCommit& UiWindow::BuildFrame(FrameInfo frame) {
       state_->frame_requested_ ? std::optional{state_->frame_request_deadline_} : std::nullopt;
   record_debug_commit();
   state_->building_frame_ = false;
+  keyboard_dispatch.Finish();
   return state_->frame_commit_;
 }
 
@@ -2111,6 +2167,19 @@ void UiWindow::RefreshInteractionTree() {
                               : state_->focus_trap_stack_.end();
     if (existing == state_->focus_trap_stack_.end() && focus_identity.has_value()) {
       state_->focus_trap_stack_.push_back({*focus_identity, state_->focused_node_identity_});
+      if (!focus_root->initial_focus_consumed) {
+        focus_root->initial_focus_consumed = true;
+        const auto* snapshot = focus_root->LayoutValue<LayerEntrySnapshotValue>();
+        if (snapshot && snapshot->initial_focus) {
+          const auto& target = snapshot->initial_focus->state_;
+          const auto window = target ? target->source->ui.lock() : nullptr;
+          const auto* candidate = window && window->ui_window == this
+              ? FindNode(*focus_root, target->node_identity) : nullptr;
+          if (candidate && candidate->interaction.enabled && candidate->focusable) {
+            SetFocusedNode(candidate->identity, true);
+          }
+        }
+      }
     } else {
       std::optional<std::uint64_t> restore_identity;
       while (!state_->focus_trap_stack_.empty() &&
@@ -2312,7 +2381,19 @@ bool UiWindow::HandleBack(const BackEvent& incoming) {
   return handled;
 }
 
+bool UiWindow::RequestFocus(std::uint64_t identity) {
+  if (state_->retired_ || state_->closing_ || state_->focus_change_in_progress_ || !state_->mounted_root_) return false;
+  const auto* target = FindNode(*state_->mounted_root_, identity);
+  if (!target || !target->interaction.enabled || !target->focusable) return false;
+  if (const auto* root = ActiveFocusTrapRoot(); root && !ContainsNodeIdentity(*root, identity)) return false;
+  detail::TextInteraction::KeyboardDispatch keyboard_dispatch(*state_->text_);
+  SetFocusedNode(identity, true);
+  keyboard_dispatch.Finish();
+  return !state_->retired_ && !state_->closing_ && state_->focused_node_identity_ == identity;
+}
+
 void UiWindow::SetFocusedNode(std::optional<std::uint64_t> identity, std::optional<bool> focus_visible, bool reverse) {
+  if (state_->focus_change_in_progress_) return;
   if (identity.has_value()) {
     if (!state_->mounted_root_) {
       identity.reset();
@@ -2341,6 +2422,11 @@ void UiWindow::SetFocusedNode(std::optional<std::uint64_t> identity, std::option
     return;
   }
 
+  struct FocusChangeGuard {
+    bool& changing;
+    ~FocusChangeGuard() { changing = false; }
+  } focus_change{state_->focus_change_in_progress_};
+  focus_change.changing = true;
   state_->text_->HideTextSelectionOverlay();
   if (state_->focused_node_identity_.has_value() && state_->mounted_root_) {
     if (detail::MountedNode* previous = FindNode(*state_->mounted_root_, *state_->focused_node_identity_)) {
@@ -2499,6 +2585,9 @@ void UiWindow::BindExtensions(detail::MountedNode& node) {
         RequestFrame();
       }
     });
+    entry.extension->BindKeyboardRequest([this, identity = node.identity](bool show) {
+      state_->text_->RequestKeyboardForNode(identity, show);
+    });
   }
 }
 
@@ -2618,6 +2707,10 @@ Point UiWindow::HandleScrollInput(const ScrollInputEvent& event) {
 
 bool UiWindow::HandleKeyEvent(const KeyEvent& event) {
   ExecutionGuard execution_guard(state_->execution_);
+  return state_->text_->DispatchWithKeyboardRequests([&] { return DispatchKeyEvent(event); });
+}
+
+bool UiWindow::DispatchKeyEvent(const KeyEvent& event) {
   if (!state_->mounted_root_) {
     return false;
   }
@@ -3118,6 +3211,7 @@ void UiWindow::ComposeLayers() {
           .exiting = exiting,
           .semantic_modal_group = entry.semantic_modal_group,
           .retained_focus_identity = entry.retained_focus_identity,
+          .initial_focus = entry.initial_focus,
       });
       // An exiting modal keeps its focus barrier until removal so input cannot fall through while its content fades.
       layer.spec_->trap_focus = entry.options.trap_focus;
@@ -3482,6 +3576,10 @@ bool UiWindow::ReconcileLayerChildren(
 } // namespace huxerui
 
 namespace huxerui::detail {
+
+MountedNode::~MountedNode() {
+  if (focus_target && focus_target->node_identity == identity) focus_target->node_identity = 0;
+}
 
 VirtualMeasureSession::VirtualMeasureSession(UiWindow& ui_window, MountedNode& owner)
     : ui_window_(&ui_window), owner_(&owner), previous_nodes_(std::move(owner.children)),

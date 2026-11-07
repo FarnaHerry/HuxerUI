@@ -61,6 +61,7 @@ public:
   /// @throws std::invalid_argument If the relationship is cyclic.
   /// @throws std::logic_error If the target or owner window has retired.
   void ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal);
+  void RequestKeyboard(bool show);
   [[nodiscard]] bool HandleRequest(WindowCommand command);
   [[nodiscard]] std::function<void()>
   ConnectRequest(WindowCommand command, std::function<bool()> handler);

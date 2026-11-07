@@ -348,6 +348,46 @@ return page.On<ViewEvents::KeyIntercept>([](const KeyEvent& event) {
 Prefer `OnClick` for ordinary control activation because it already unifies pointer, keyboard, and accessibility input.
 Do not recreate Button, Select, Menu, or text-editing key behavior in an application handler.
 
+### Programmatic focus
+
+Create a stable `FocusRequester` with `UseFocusRequester()` during composition and bind it with `.With(FocusTarget{requester})`. `FocusTarget` does not make a View focusable; use a built-in focusable control or add `Focusable{}` to a custom View. Call `RequestFocus()` on the application thread from an event handler or a resumed Task. It synchronously returns `true` when the mounted target accepts logical focus, including when it already owns focus, and makes its focus ring visible. Actual focus changes emit the existing `ViewEvents::FocusChanged` event.
+
+```cpp
+[[huxerui::composable]]
+View SearchForm(State<TextEditingValue> query) {
+  auto search = UseFocusRequester();
+  auto window = UseWindow();
+  return Column {
+    TextField(query)
+        .Label("Search")
+        .InputConfiguration({.keyboard_policy = SoftwareKeyboardPolicy::Manual})
+        .With(FocusTarget{search}),
+    Button("Edit search").OnClick([search, window] {
+      if (search.RequestFocus()) window.ShowKeyboard();
+    }),
+  };
+}
+```
+
+A requester remains associated with its original window and may bind only one mounted View at a time. Compatible recomposition and keyed movement preserve the binding; unmounting disconnects it. Requests return `false` without changing focus when the target is unmounted, disabled, not focusable, outside the active modal scope, or its window has retired. An unrealized virtual item is unmounted for this purpose; requests do not realize, scroll to, or queue focus for a future target. Requests made from a focus-change notification also return `false` so they cannot redirect the transition in progress. Calling during composition, using another window's requester as a target, binding it twice, or calling from another thread is a `std::logic_error`. Logical input focus does not activate an operating-system window or move accessibility focus.
+
+Set `DialogOptions::initial_focus` to choose a Dialog's first target:
+
+```cpp
+[[huxerui::composable]]
+View EditName(State<TextEditingValue> name) {
+  auto field = UseFocusRequester();
+  auto dialogs = UseDialog();
+  return Button("Edit name").OnClick([dialogs, field, name] {
+    dialogs.Show([field, name] {
+      return TextField(name).Label("Name").With(FocusTarget{field});
+    }, {.initial_focus = field});
+  });
+}
+```
+
+The Dialog tries the supplied target once when it mounts, before focusing its first eligible control. An unavailable target falls back to that default without retrying when content later changes. Content updates and closing a nested Dialog preserve or restore current focus instead of reapplying the initial target.
+
 ## Select
 
 `Select` is a compact controlled choice component for a finite, non-empty data set.
@@ -700,6 +740,12 @@ Use `LeadingIcon`, `TrailingIcon`, `LineLimits`, `MaxLength`, `Secure`, `InputCo
 
 `OnChanged` reports the complete requested editing value.
 `OnSubmitted` reports the submitted text when the configured platform action is performed.
+
+### Software keyboard
+
+`TextField` and `ComboBox` request the software keyboard when an editable client starts a session and when the user taps the focused editor again. To choose when it appears, configure the editor with `.InputConfiguration({.keyboard_policy = SoftwareKeyboardPolicy::Manual})`. The editor still receives focus and can place the caret or select text on a tap.
+
+Get the window handle with `UseWindow()` and capture it in an event handler. Call `window.ShowKeyboard()` or `window.HideKeyboard()` on the application thread to request a change for that window's focused editor. Both methods work with either policy. Hiding preserves HuxerUI focus, the editing session, and the selection, subject to any final edits delivered by the input method. With no focused editable client the calls have no effect. Keyboard presentation is best effort, and Web browsers can require the show request to run during a user gesture.
 
 ## Validation and secure input
 

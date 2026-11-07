@@ -320,6 +320,16 @@ void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owne
   state->owner->SetRelationship(*this, owner, modal);
 }
 
+void WindowService::RequestKeyboard(bool show) {
+  if (!ui_window_) return;
+  const auto application = application_.lock();
+  if (!application) return;
+  application->RequireThread();
+  if (!IsOpen()) return;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  ui_window_->RequestKeyboard(show);
+}
+
 bool WindowService::HandleRequest(WindowCommand command) {
   if (!IsOpen()) return true;
   RequestHandler& request = Handler(command);
@@ -545,6 +555,14 @@ std::function<void()> WindowHandle::ConnectLifecycle(std::function<void(WindowLi
 
 void WindowHandle::Hide() const {
   service_->Request(WindowCommand::Hide);
+}
+
+void WindowHandle::ShowKeyboard() const {
+  service_->RequestKeyboard(true);
+}
+
+void WindowHandle::HideKeyboard() const {
+  service_->RequestKeyboard(false);
 }
 
 void WindowHandle::Activate() const {

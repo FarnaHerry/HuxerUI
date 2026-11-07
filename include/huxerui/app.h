@@ -1054,6 +1054,12 @@ private:
                       std::uint64_t press_id, std::optional<Point> position = std::nullopt);
   [[nodiscard]] std::optional<std::uint64_t> ResolvePointerFocusTarget(const std::vector<detail::MountedNode*>& route);
   void RefreshInteractionTree();
+  /// Requests focus only for an eligible mounted target in this window's current modal scope.
+  /// @param identity Mounted node to focus without retaining a pending request.
+  /// @return Whether the target owns focus after notification and text-input synchronization.
+  bool RequestFocus(std::uint64_t identity);
+  void RequestKeyboard(bool show);
+  bool DispatchKeyEvent(const KeyEvent& event);
   bool DispatchKeyboardContextMenu();
   detail::MountedNode* ActiveFocusTrapRoot();
   void SetFocusedNode(std::optional<std::uint64_t> identity, std::optional<bool> focus_visible = std::nullopt,
@@ -1111,6 +1117,7 @@ private:
 
   friend class Runtime;
   friend class LayerController;
+  friend class FocusRequester;
   friend class detail::ApplicationService;
   friend class detail::FileDropReceiver;
   friend class detail::PointerInteraction;
@@ -1120,6 +1127,7 @@ private:
   friend class detail::SemanticTree;
   friend class detail::TextInteraction;
   friend class detail::VirtualMeasureSession;
+  friend class detail::WindowService;
   friend struct detail::InternalAccess;
   Runtime* application_runtime_ = nullptr;
   std::shared_ptr<detail::ExternalTextureFrameRequester> external_texture_frame_requester_;

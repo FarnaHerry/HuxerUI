@@ -1819,7 +1819,7 @@ void detail::PointerInteraction::HandlePointerEvent(const PointerEvent& input_ev
   }
 }
 
-bool detail::PointerInteraction::CommitPendingTouchFocus(PointerSession& session, const PointerEvent& event) {
+bool detail::PointerInteraction::CommitPendingPointerFocus(PointerSession& session, const PointerEvent& event) {
   if (!session.focus_pending) {
     return false;
   }
@@ -1835,6 +1835,15 @@ bool detail::PointerInteraction::CommitPendingTouchFocus(PointerSession& session
     return false;
   }
 
+  if (session.device_kind != PointerDeviceKind::Touch) {
+    if (pending && runtime_state_.focused_node_identity_ == pending &&
+        std::hypot(event.position.x - session.down_position.x, event.position.y - session.down_position.y) <=
+            runtime_state_.gesture_settings_.pointer_slop) {
+      runtime_state_.text_->RequestAutomaticKeyboard(*pending);
+    }
+    return false;
+  }
+
   if (event.type == PointerEventType::Up) {
     runtime_state_.text_->HandleTextSelectionTap(pending);
     const auto current = pointer_sessions_.find(event.pointer_id);
@@ -1846,7 +1855,7 @@ bool detail::PointerInteraction::CommitPendingTouchFocus(PointerSession& session
   const bool refocusing = pending.has_value() && runtime_state_.focused_node_identity_ == pending;
   runtime_state_.owner_.SetFocusedNode(pending, false);
   if (refocusing) {
-    runtime_state_.text_->RequestShowForNode(*pending);
+    runtime_state_.text_->RequestAutomaticKeyboard(*pending);
   }
   return true;
 }
@@ -1916,6 +1925,10 @@ void detail::PointerInteraction::HandlePointerDown(const PointerEvent& event) {
       session.focus_pending = true;
       session.pending_focus_identity = focus_target;
     } else {
+      if (focus_target && runtime_state_.focused_node_identity_ == focus_target && runtime_state_.text_->HasSession()) {
+        session.focus_pending = true;
+        session.pending_focus_identity = focus_target;
+      }
       runtime_state_.owner_.SetFocusedNode(focus_target, false);
     }
   }
@@ -2119,6 +2132,11 @@ void detail::PointerInteraction::HandlePointerMove(const PointerEvent& event, bo
       session.focus_pending = false;
       session.pending_focus_identity.reset();
     }
+  } else if (session.focus_pending &&
+             std::hypot(event.position.x - session.down_position.x, event.position.y - session.down_position.y) >
+                 runtime_state_.gesture_settings_.pointer_slop) {
+    session.focus_pending = false;
+    session.pending_focus_identity.reset();
   }
 
   const auto apply_scroll = [&](ScrollRecognitionState& scroll, float delta) {
@@ -2260,7 +2278,7 @@ void detail::PointerInteraction::HandlePointerUp(const PointerEvent& event) {
     } else {
       HUXERUI_DISCARD(UpdatePointerRecognition(session, *owner, event));
       if (std::holds_alternative<ExtensionRecognitionState>(recognition.state)) {
-        CommitPendingTouchFocus(session, event);
+        CommitPendingPointerFocus(session, event);
         if (!continue_release()) {
           return;
         }
@@ -2286,7 +2304,7 @@ void detail::PointerInteraction::HandlePointerUp(const PointerEvent& event) {
       recognition.active = false;
     }
     if (!session.owner.has_value()) {
-      CommitPendingTouchFocus(session, event);
+      CommitPendingPointerFocus(session, event);
       if (!continue_release()) {
         return;
       }
