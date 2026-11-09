@@ -46,6 +46,14 @@ Check the residual diff and the upstream source, not only the commit list.
 | macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
 | iOS app-target link closure | Upstream `cmake/HuxerUIApp.cmake` walks `INTERFACE_LINK_LIBRARIES` and emits some `$<TARGET_FILE:>` entries | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, alias handling, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
 
+## Submitted upstream
+
+These items are no longer fork-only candidates, but they are not covered until the upstream PR merges.
+
+| Area | Fork evidence | Upstream PR | Submitted |
+|---|---|---|---|
+| Layer anchor transfer across structural replacement | `bd8fb056` | [#163](https://github.com/HuxerUI/HuxerUI/pull/163) | 2026-11-10 |
+
 ## Checked and still fork-only
 
 These items were checked at the baseline and remain absent from upstream.
@@ -53,7 +61,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 
 | Area | Fork evidence | Status at 2026-11-09 |
 |---|---|---|
-| Layer anchor transfer across structural replacement | `bd8fb056` | Fork-only |
 | Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
 | GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only |
