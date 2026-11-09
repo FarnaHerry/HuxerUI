@@ -9,7 +9,7 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 - Fork integration branch: `farna/main`.
 - Last merged upstream commit: `bfdbc8cc` (`feat(io): expose seekable Android fds and guard Web storage`).
 - Fork merge commit: `a559c788`.
-- Last audit date: 2026-11-09.
+- Last audit date: 2026-11-10.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -36,6 +36,9 @@ Check the residual diff and the upstream source, not only the commit list.
 | Linux custom-chrome resize hit area and directional cursor | `f38d5ec0` | Upstream `platform/linux/linux_adapter.cpp` has `HitTestResizeEdge`, `LinuxResizePointerCursor`, and the GTK resize request | Drop the patch. |
 | Android whole-host default focus highlight | `97609cd8` | Upstream `platform/android/huxerui/src/main/java/org/huxerui/HuxerUIView.java` calls `setDefaultFocusHighlightEnabled(false)` on API 26 and later | Drop the patch. |
 | Redundant loose measurement of bounded grow children | `dce2a08b`, `c40a2da2` | Upstream `src/components/containers.cpp` already skips a grow child when `main` is bounded and `(!stretch || tight_cross)` | Drop both patches. |
+| Pager reverse-transition peer retention | `3e16bf4c` (pager hunk) | Upstream `784f99a6` keeps the previous destination visible when reversing an unfinished transition; the residual fork pager diff is touchpad paging only | Drop the shared fix. |
+| Hidden virtual-subtree measurement invalidation | `3e16bf4c` (virtual-layout hunk) | Upstream `9f90e005` retains pending work inside unplaced subtrees; current `PropagateVirtualLayoutInvalidation` matches | Drop the shared fix. |
+| Drag preview grab-offset beyond viewport edges | `3e16bf4c` (drag-preview hunk) | Upstream `711a9eae` uses `LayerPlacementKind::Positioned` for preview placement; current fork has no residual `DragPreviewPlacement` difference | Drop the shared fix. |
 | Public paragraph layout | `554d9a54`, `TextParagraphLayout`, `TextMeasurer::LayoutText` | Upstream `1949e84e` added `TextLayout` and `TextMeasurer::CreateTextLayout`; the fork API and its module export were removed during merge `a559c788` | Do not reintroduce. `TextField::TextStyles` must use `CreatePlatformTextLayout(AttributedText)`. |
 | Runtime multi-window API and platform creation hooks | `d6c13b6c`, `5c6198e8`, `eab74b07`, `0b289005` overlap conceptually | Upstream already declares `ApplicationHandle::OpenWindow`, `Runtime::OpenWindow`, `SupportsMultipleWindows`, and Windows/Linux/macOS `CreateUiWindow` overrides; `examples/multi_window` also exists | Do not propose "add multi-window". Propose only the remaining capabilities and fixes: relationships, windowless startup, utility/floating windows, native window requests, and cross-window drag. |
 
@@ -53,13 +56,14 @@ These items are no longer fork-only candidates, but they are not covered until t
 | Area | Fork evidence | Upstream PR | Submitted |
 |---|---|---|---|
 | Layer anchor transfer across structural replacement | `bd8fb056` | [#163](https://github.com/HuxerUI/HuxerUI/pull/163) | 2026-11-10 |
+| Disabled profiling on mcpp builds | Upstream `main` build failure, not fork work | [#164](https://github.com/HuxerUI/HuxerUI/pull/164) | 2026-11-10 |
 
 ## Checked and still fork-only
 
 These items were checked at the baseline and remain absent from upstream.
 The list is a re-audit shortcut, not a roadmap or a promise to upstream every item.
 
-| Area | Fork evidence | Status at 2026-11-09 |
+| Area | Fork evidence | Status at 2026-11-10 |
 |---|---|---|
 | Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
