@@ -18,7 +18,7 @@ The Windows, macOS, Linux, iOS, Android, and Web picker/reference transports and
 
 ## Non-goals
 
-The file API does not provide a public filesystem subclassing contract, Zip filesystems, mount tables, general URI dispatch, symbolic-link creation, filesystem watching, general permission management, file locking, memory mapping, random-access handles, or a document-provider abstraction.
+The file API does not provide a public filesystem subclassing contract, Zip filesystems, mount tables, general URI dispatch, symbolic-link creation, filesystem watching, general permission management, file locking, memory mapping, or a document-provider abstraction.
 Directory copying does not add multi-directory selection, mixed file/directory selection, recursive deletion of grants, mirroring, moves, metadata preservation, transactions, rollback, resumability, or a progress-controller API.
 
 It also does not persist picker grants across process launches or add clipboard, recent-file, or share-sheet APIs.
@@ -224,7 +224,7 @@ IoResult<std::string> ReadString() const;
 Task<IoResult<std::string>> ReadStringAsync() const;
 ```
 
-Read operations load the complete file into memory.
+`ReadBytes()` and `ReadString()` load the complete file into memory.
 An empty `Bytes` or string value is a successful empty file, which is why reads retain `IoResult<T>`.
 The implementation reports a file that cannot fit in the owned result as `TooLarge` before allocating an invalid buffer.
 
@@ -241,20 +241,28 @@ IoResult<OutputStream> OpenWrite(FileWriteMode mode = FileWriteMode::Truncate) c
 Task<IoResult<AsyncOutputStream>> OpenWriteAsync(FileWriteMode mode = FileWriteMode::Truncate) const;
 ```
 
-The four move-only stream handles separate synchronous and genuinely asynchronous execution explicitly.
+The sequential stream handles separate synchronous and genuinely asynchronous execution explicitly.
 Synchronous `Read()` borrows a caller-owned span and returns zero for EOF; asynchronous `ReadAsync(maximum_bytes)` returns owned bytes and uses an empty value for EOF.
 The caller chooses every read maximum or synchronous copy buffer instead of inheriting a framework-wide chunk size.
 `InputStream::CopyTo()` and `AsyncInputStream::CopyToAsync()` are non-virtual member algorithms and leave both endpoints open.
 Writes accept the complete supplied value on success or return IoError, and output requires an explicit close that is idempotent after success.
 
-Each public stream owns one implementation state rather than a separate state wrapper around a backend.
-An asynchronous state owns its operation reservation, EOF or close status, failure status, cancellation, and concrete transport hooks in the same object.
-The public handle remains separate because it provides move-only ownership while a suspended Task must retain shared state until completion.
+Synchronous sequential streams own an I/O backend and track EOF, close, or failure status on the public handle.
+An asynchronous stream backend owns its operation reservation, EOF or close status, failure status, cancellation, and concrete transport hooks in the same object.
+The public handle provides move-only ownership while a suspended Task can retain the backend until completion.
 Only one operation may be outstanding per asynchronous endpoint; an input and output may be reserved together by `CopyToAsync()`.
 
 Native local async streams use `WorkerSequence` so one open descriptor is never accessed concurrently and blocking calls stay off the Runtime thread.
-File inputs and packaged-resource inputs share one adapter over a synchronous InputStream; the underlying file state only owns synchronous reading and handle release.
+File inputs and packaged-resource inputs share one adapter over a synchronous `InputStream`. The input backend performs synchronous reads and releases its underlying handle.
 This worker adaptation is specific to inherently blocking sources; HTTP, browser, and other natively asynchronous transports do not route through `RunWorker()`.
+
+## Random-access streams
+
+`File::OpenRandomAccess()` opens a local descriptor, and `FileReference::OpenRandomAccess()` acquires a compatible provider descriptor. Both open synchronously on the calling thread without requiring a TaskScope. Each successful open returns the same move-only `RandomAccessStream` interface with synchronous absolute-offset reads and writes, handle-relative size, and explicit close.
+
+Access mode governs operations after opening. Open mode governs creation and truncation. Local creation is exclusive. Truncation checks type, access, and seekability before changing the same opened descriptor. Path-backed references keep their existing grant-relative opening and coordination for the descriptor's lifetime. Android opens the provider descriptor without truncation and verifies it before accepting or truncating it. It rejects descriptors whose providers require reliable Java close signaling. The Web picker backend keeps its asynchronous browser streams and reports unsupported random-access opening.
+
+The stream owns its descriptor and any retained reference or coordination. Operation spans are borrowed only until return. Native offsets and counts are checked before transfer. Reads and size queries can fail without ending the session. Failed writes and failed closes prevent further operations, and descriptor cleanup does not imply rollback or durable storage.
 
 ## Writing and appending
 
@@ -402,15 +410,24 @@ public:
   [[nodiscard]] FileType Type() const noexcept;
   [[nodiscard]] std::optional<File> AsFile() const;
 
+  IoResult<InputStream> OpenRead() const;
+  IoResult<OutputStream> OpenWrite() const;
+  IoResult<RandomAccessStream> OpenRandomAccess(
+      FileAccessMode access = FileAccessMode::ReadOnly, FileOpenMode mode = FileOpenMode::OpenExisting
+  ) const;
+  IoResult<Bytes> ReadBytes() const;
+  IoResult<std::string> ReadString() const;
+  IoResult<std::vector<FileReference>> ListChildren() const;
+  IoResult<FileReference> CreateDirectory(std::string_view name) const;
+
   Task<IoResult<AsyncInputStream>> OpenReadAsync() const;
   Task<IoResult<AsyncOutputStream>> OpenWriteAsync() const;
   Task<IoResult<Bytes>> ReadBytesAsync() const;
   Task<IoResult<std::string>> ReadStringAsync() const;
-  Task<bool> ImportToAsync(File destination, bool overwrite = false) const;
-  Task<bool> ReplaceWithAsync(File source) const;
-
   Task<IoResult<std::vector<FileReference>>> ListChildrenAsync() const;
   Task<IoResult<FileReference>> CreateDirectoryAsync(std::string name) const;
+  Task<bool> ImportToAsync(File destination, bool overwrite = false) const;
+  Task<bool> ReplaceWithAsync(File source) const;
   Task<IoResult<FileReference>> CopyFileFromAsync(File source, std::string name, bool overwrite = false) const;
   Task<IoResult<FileReference>> CopyFileFromAsync(FileReference source, std::string name, bool overwrite = false) const;
   Task<IoResult<DirectoryCopySummary>> CopyDirectoryContentsToAsync(File destination, bool overwrite = false) const;
@@ -427,15 +444,15 @@ Platforms preserve missing metadata rather than synthesizing display names from 
 
 `AsFile()` synchronously returns the backend's stored local path, or `std::nullopt` when no local path is available; it does not perform I/O, copy contents, activate permission, or refresh a moved or deleted entry.
 Windows, macOS, and Linux local references support it, including files, directories, and derived children; path-backed iOS references use the same behavior, while Android document URIs and Web browser handles return no path.
-The decision belongs to the existing reference backend, not a shared platform-name switch: the private state defaults to no path, and the shared local state returns its existing `File` even when a coordination callback is present.
+The reference backend decides whether a path is available. The shared local backend returns its existing `File` even when a coordination callback is present.
 The returned `File` does not retain the grant or temporary-file owner; application code must keep a reference alive for the whole path-based operation or project session when access depends on those resources, including asynchronous work.
 Path-based operations use ordinary system permissions and do not inherit `CanWrite()` restrictions, coordinated access, or handle-relative identity and containment guarantees; the original reference and its I/O contract remain unchanged.
 `AsFile()` is an explicit path interoperability operation, not an existence/access check or a persistent grant; use reference I/O when its authorization or coordination behavior is required.
 
-External references expose asynchronous I/O only because their platform transport may involve a provider process, coordinated access, security-scope activation, or a browser permission check.
-Their input and output streams retain the reference capability independently, read caller-bounded chunks, and require explicit output close.
-The write stream truncates or replaces the selected file; append and random access are not part of the reference-stream contract.
-`ReadStringAsync()` follows the same UTF-8, byte-order-mark, and line-ending contract as `File::ReadStringAsync()`.
+Synchronous reference operations run on the calling thread and require a provider capable of completing the requested operation synchronously. Prefer asynchronous forms when available for the broadest Web compatibility. Browser-selected references report `Unsupported` before I/O and keep their asynchronous browser transport.
+Native synchronous and asynchronous entry points share their provider's acquisition and byte operations. The asynchronous paths retain their worker or provider scheduling and cooperative cancellation. Each stream retains the reference capability independently.
+Sequential input reads caller-bounded chunks. The sequential write stream replaces the selected file and requires explicit output close. Whole-file reads retain the provider's complete-read path so a path-backed reference can coordinate the read once.
+`ReadString()` and `ReadStringAsync()` share UTF-8 validation, byte-order-mark removal, and line-ending preservation with `File`.
 An expired or revoked grant reports `NotFound` or `PermissionDenied` through the existing `IoResult` error model rather than adding a second result type.
 
 `ImportToAsync()` streams the referenced content into a local `File` and requires the destination parent to exist.
@@ -443,16 +460,16 @@ It replaces an existing destination only when `overwrite` is `true`.
 `ReplaceWithAsync()` writes a local file back through the original platform grant and returns `false` when `CanWrite()` is false or the operation fails.
 Neither operation exposes a platform path or silently grants broader access.
 
-Each value retains shared private platform state.
-Copying a value retains the grant, and destruction of the last copy releases process-scoped resources such as Apple security-scope access, Android provider state, or a browser handle.
+Each value retains a shared `FileReferenceBackend`.
+Copying a value retains the grant, and destruction of the last copy releases process-scoped resources such as Apple security-scope access, Android provider handles, or a browser handle.
 The public API does not serialize references or promise that a grant remains valid after application restart.
 
 ### PlatformPayload capability transport
 
 The common platform-language bridge may carry a `FileReference` as a retained `PlatformPayload` capability when a native library needs an Android `Uri`, Apple `NSURL`, or browser `File` while preserving the original grant lifetime.
-This reuses the exact shared reference state and metadata snapshot; it does not create a second file-access abstraction, import contents, or serialize a provider entry key.
+This retains the original reference backend and metadata snapshot without importing the file.
 Android and Web projections do not acquire a local path; the current Apple projection uses the existing path-backed reference to create its `NSURL`.
-`PlatformPayload` equality and envelope deduplication compare the retained backend state, while companion entries preserve the complete `FileReference` value that first occupies a slot.
+`PlatformPayload` equality and envelope deduplication compare backend identity. Each companion entry preserves the complete `FileReference` value that first occupies its slot.
 
 HUXP v1 assigns FileReference value tag `9` and capability kind `2`.
 The binary contains only an envelope-local slot, and `PlatformPayload::Envelope` carries FileReference and ExternalTexture in separate strongly typed companion vectors.
@@ -460,8 +477,8 @@ Decoding rejects empty or duplicate capability entries, missing or wrong-kind sl
 The companion table is in-process transport state and is never a persistence representation.
 
 Android reuses the existing `HuxerUIFileReference` Java class in two non-overlapping modes.
-The state-owned instance has no native handle and continues to perform `ContentResolver` I/O for its C++ `AndroidFileReferenceState` owner.
-A payload wrapper is a separate instance that owns a copied C++ `FileReference`, exposes the existing document `Uri`, and releases that copy through idempotent `close()`; the state-owned object never points back to its owning C++ state.
+`AndroidFileReferenceBackend` owns a Java instance that performs `ContentResolver` I/O.
+A separate Java payload wrapper holds the native handle to a copied C++ `FileReference`, exposes the existing document `Uri`, and releases that copy through idempotent `close()`.
 
 iOS and macOS add only a lightweight `HUXFileReference` declaration to each existing platform registry header.
 The Objective-C object retains the C++ value through ARC and projects its path-backed reference to `fileURL`; it does not introduce an Apple-specific C++ reference type or acquire the security scope again.
@@ -482,15 +499,15 @@ Operations recheck current item state because deletion, replacement, and permiss
 Directory reads fail with `IsDirectory`, and existing Boolean import/replacement operations return `false` without traversing.
 Unsupported item kinds use `FileType::Other` and fail with `Unsupported` rather than being followed or silently skipped.
 
-`ListChildrenAsync()` returns all immediate children or an error, with no sorting, hidden-item filtering, or file reads.
+`ListChildren()` and `ListChildrenAsync()` return all immediate children or an error, with no sorting, hidden-item filtering, or file reads.
 Each child retains its own item identity and shares the selected root's grant owner; parent destruction does not invalidate retained children or active I/O.
 The effective write restriction cannot increase when a child is derived, and selecting the same location again does not upgrade an earlier read-only capability.
 `CanWrite()` on a directory advertises child creation, not blanket authority to replace its existing files.
 
-`CreateDirectoryAsync(name)` creates one direct child or returns the existing directory of that name; another item kind produces `AlreadyExists`.
+`CreateDirectory(name)` and `CreateDirectoryAsync(name)` create one direct child or return the existing directory of that name. Another item kind produces `AlreadyExists`.
 `CopyFileFromAsync(source, name, overwrite)` accepts an ordinary local file or file reference and returns the destination reference only after streamed output is finalized.
-Both require a writable directory receiver and never create intermediate directories implicitly.
-Caller names are valid UTF-8 single segments excluding empty names, `.`, `..`, NUL, and either slash; invalid names throw `std::invalid_argument` before the lazy Task is returned.
+Child creation and copying require a writable directory receiver. The receiver must already exist.
+Caller names are valid UTF-8 single segments excluding empty names, `.`, `..`, NUL, and either slash. Invalid names throw `std::invalid_argument` immediately, including when the operation would return a lazy Task.
 Unrepresentable provider names and destination restrictions are operational errors, not caller exceptions.
 Creation verifies the requested name rather than accepting provider-added extensions, normalization, or duplicate suffixes; cleanup is limited to an item known to have been newly created by that operation.
 
@@ -515,15 +532,15 @@ Potentially related locations without a reliable containment check fail with `Un
 Do not infer independence from display names or URI prefixes, follow identifiable traversal-changing links, or recurse into repeated ancestor identities.
 Descendant operations stay bound to their granted authority using native handles or equivalently constrained provider operations; platform authorities remain the boundary for indirections they do not expose.
 
-Shared code owns validation, traversal, collision policy, counters, diagnostics, and Task integration through the existing private `FileReferenceState` boundary.
+Shared code owns validation, traversal, collision policy, counters, diagnostics, and Task integration through the existing private `FileReferenceBackend` boundary.
 Platforms own enumeration, creation, native identities, authorization, and single-file transfer/finalization; a data block need not cross JNI or resume a shared coroutine merely to unify byte-copy loops.
-The shared write path passes the preceding child lookup to the destination operation; this operation-local result avoids a second provider directory scan, but does not replace final authorization, type, or native exclusive-create checks.
+Directory traversal and single-file copy pass the preceding child lookup to the destination operation. Android reuses that operation-local result to avoid a second provider scan, while standalone directory creation resolves the display name in the same provider operation. Path-backed and browser-backed standalone creation check collisions within their own create operation.
 Backends whose child lookup is an exact display-name listing scan opt into one destination-name index per active copy frame, avoiding repeated scans as output grows.
 The index preserves duplicate-name ambiguity, is updated after successful writes, and is discarded with the frame; later copies enumerate again, and native filename resolution remains authoritative for other backends.
-The destination state returns the written reference, actual byte count, and creation status directly.
-Local directory frames retain their destination state; supported provider-to-local copies use the source's streaming import and then confirm the finalized local reference on the file worker, preserving import and metadata errors.
-Local paths and path-backed grants share one implementation-only final state in `src/io/file.cpp`; Windows and Linux use it directly, while Apple supplies retained access and coordinated-operation callbacks.
-Local destinations use this same state without manufacturing a public reference or adding a filesystem, service, registry, or storage backend.
+The destination backend returns the written reference, actual byte count, and creation status directly.
+Local directory frames retain their destination backend. Supported provider-to-local copies use the source's streaming import and then confirm the finalized local reference on the file worker, preserving import and metadata errors.
+Local paths and path-backed grants share `LocalFileReferenceBackend` in `src/io/file.cpp`. Windows and Linux use it directly, while Apple supplies retained access and coordinated-operation callbacks.
+Directory traversal can construct a local destination backend directly from a `File`.
 A selected file does not require opening or modifying its parent directory; directory-derived references share a root directory anchor and resolve descendants without following traversal-changing links.
 Each native enumeration opens an independent directory description rather than duplicating a shared enumeration cursor.
 Single-file import and directory copying share the same bounded transfer primitive and report its actual byte count; Java and JavaScript keep this primitive within their existing platform bridge.
@@ -676,7 +693,7 @@ Reads, imports, and replacements use coordinated file access off the UI thread, 
 iOS independently maps durable data to Application Support, cache data to Caches, and temporary data to the application temporary directory.
 Its executable directory is read-only and is never used as a replacement for packaged HuxerUI resources.
 Its picker transport presents `UIDocumentPickerViewController`, maps union filters through `UTType`, and retains security-scoped URLs inside `FileReference`.
-Application document activations use the same retained capability for open-in-place URLs. When UIKit marks a delivery as copy-before-use, the application adapter copies it into a private read-only temporary snapshot before returning from the native callback, and the shared `FileReference` state removes that snapshot after its last owner releases it.
+Application document activations use the same retained capability for open-in-place URLs. When UIKit marks a delivery as copy-before-use, the application adapter copies it into a private read-only temporary snapshot before returning from the native callback, and the `FileReference` backend removes that snapshot after its last owner releases it.
 `+[HUXFileReference copyFromFileURL:error:]` exposes that same synchronous copy ownership to platform libraries, including provider callbacks on background queues.
 It preserves available source metadata, returns the underlying access or copy error, and removes partial copies on failure.
 Its read-only reference survives the source callback and creating module; shared references, streams, and pending operations retain the temporary copy independently of native wrappers.
@@ -689,8 +706,9 @@ These private locations require no broad storage permission.
 Its picker transport uses `ACTION_OPEN_DOCUMENT` for single and multiple selection and `ACTION_CREATE_DOCUMENT` for saving without requesting broad storage permission.
 Extensions are mapped through `MimeTypeMap` when possible; an unrecognized extension deliberately widens the advisory filter rather than hiding a valid document.
 The returned `content://` grant remains private to `FileReference`, while display name, size, MIME type, and provider write support populate its public metadata.
-Opening Android reference streams uses the bounded Java worker executor and detaches the provider-authorized descriptor into the C++ stream state.
-Incremental descriptor reads and writes use a per-stream worker sequence, while imports, replacements, and save copies retain their Java-side bounded transfer path.
+Asynchronous Android reference opens use the bounded Java worker executor. The C++ stream owns an ordinary detached fd, or borrows the fd of a retained reliable `ParcelFileDescriptor` so the provider's close and error channel stays active.
+Reliable sequential reads check provider status at EOF. Explicit output close finalizes the Java descriptor, while a failed or abandoned write reports an error to the provider once the worker has finished using it.
+Asynchronous incremental descriptor reads and writes use a per-stream worker sequence, while imports, replacements, and save copies retain their Java-side bounded transfer path.
 Cancellation closes active transfer streams where safe, and local imports atomically replace an existing destination within its parent directory.
 Directory selection uses `ACTION_OPEN_DOCUMENT_TREE`, retains the returned tree authority, and derives children through `DocumentsContract` rather than reconstructing local paths.
 Read-only selection masks write access for every derived reference; writable selection additionally requires `FLAG_DIR_SUPPORTS_CREATE`, while an existing file requires its own write support.
@@ -701,8 +719,8 @@ Copying a selected tree into a local `File` is supported when the destination is
 Incomplete provider listings and virtual documents without an ordinary byte stream are unsupported rather than silently omitted or converted.
 The initial adapter retains process-scoped URI access only and does not call `takePersistableUriPermission()`.
 `HuxerUIFileReference.fromUri(context, uri)` creates a read-only capability from an already readable ordinary `content://` file and queries its metadata synchronously, without requiring a window.
-The Java factory checks read access before JNI constructs the existing provider state and a payload wrapper with a valid owning handle and capability key.
-The state retains the application Context independently of the originating module; wrapper closure never revokes URI access or releases application-owned persistent grants.
+The Java factory checks read access before JNI constructs the provider backend and a payload wrapper with a valid owning handle and capability key.
+The backend retains the application Context independently of the originating module. Persistent URI grants remain under the application's control.
 The caller owns permission policy, and successful creation is not a guarantee against later revocation.
 
 `HuxerUIActivity` installs the Activity result host and forwards results and presentation lifecycle automatically.
@@ -740,7 +758,7 @@ When GTK uses its X11 backend, the current native window is encoded as `x11:<hex
 One unpredictable handle token is used per request, the predicted Request path is subscribed before the method call, and a backend-returned legacy path replaces that subscription when necessary.
 Task cancellation completes the transport operation immediately and closes the portal Request so Runtime-level picker serialization can advance without waiting for a Response that will not arrive after Close.
 Filters map extensions to glob rules and MIME values to MIME rules inside one union filter.
-Successful `file://` results remain private Linux `FileReference` state; metadata reflects the selected file, while reads, incremental streams, imports, replacements, and save copies reuse the shared core worker executor.
+Successful `file://` results use the local `FileReference` backend. Metadata reflects the selected file, while asynchronous reads, incremental streams, imports, replacements, and save copies reuse the shared core worker executor.
 Saving reports success only after the source file has been copied over the portal-confirmed destination.
 Directory mode uses `directory = true` and `multiple = false` only when the FileChooser interface advertises version 3 or later.
 This implementation does not add GTK or Qt fallback dialogs, Wayland parent handles, or persistent grants.

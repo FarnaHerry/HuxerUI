@@ -870,7 +870,7 @@ public:
   }
 
   void RequestFrameAt(double deadline) override {
-    if (const std::optional<double> scheduled = frame_state_.Request(deadline, Now(), window_ != nullptr)) {
+    if (const std::optional<double> scheduled = frame_coordinator_.Request(deadline, Now(), window_ != nullptr)) {
       ScheduleFrame(*scheduled);
     }
   }
@@ -1303,7 +1303,7 @@ private:
   }
 
   void FlushDeferredFrame() {
-    if (const std::optional<double> deadline = frame_state_.TakeDeferred(window_ != nullptr)) {
+    if (const std::optional<double> deadline = frame_coordinator_.TakeDeferred(window_ != nullptr)) {
       ScheduleFrame(*deadline);
     }
   }
@@ -1311,7 +1311,7 @@ private:
   bool InvalidateFullWindow() {
     const bool invalidated = window_ != nullptr && InvalidateRect(window_, nullptr, FALSE) != FALSE;
     if (invalidated) {
-      frame_state_.MarkPaintPending();
+      frame_coordinator_.MarkPaintPending();
     }
     return invalidated;
   }
@@ -1328,13 +1328,13 @@ private:
       invalidated = InvalidateRect(window_, &rect, FALSE) != FALSE || invalidated;
     }
     if (invalidated) {
-      frame_state_.MarkPaintPending();
+      frame_coordinator_.MarkPaintPending();
     }
     return invalidated;
   }
 
   void CommitFrameAndInvalidate() {
-    if (!frame_state_.BeginCommit()) {
+    if (!frame_coordinator_.BeginCommit()) {
       return;
     }
     const FrameCommit& commit = UiWindow::BuildFrame();
@@ -1344,7 +1344,7 @@ private:
     accessibility_.Commit(commit.semantic_frame, has_platform_views ? platform_views_.get() : nullptr);
     if (transparent_surface_) {
       // A layered window has no visible surface until its first publication, so WM_PAINT cannot drive that frame.
-      frame_state_.BeginPaint();
+      frame_coordinator_.BeginPaint();
       RECT client{};
       GetClientRect(window_, &client);
       const auto result = renderer_.Render(window_, dpi_, *committed_frame_, client);
@@ -1352,7 +1352,7 @@ private:
         RequestFrameAt(Now() + 1.0 / 60.0);
       }
       if (commit.next_frame_deadline) RequestFrameAt(*commit.next_frame_deadline);
-      if (const auto deadline = frame_state_.EndPaint(window_ != nullptr)) ScheduleFrame(*deadline);
+      if (const auto deadline = frame_coordinator_.EndPaint(window_ != nullptr)) ScheduleFrame(*deadline);
       return;
     }
     if (composition_changed) {
@@ -1913,8 +1913,9 @@ private:
         RequestFrameAt(Now());
         return 0;
       }
-      frame_state_.BeginPaint();
-      if (committed_frame_ == nullptr || (frame_state_.FrameBuildPending() && !frame_state_.PaintPending())) {
+      frame_coordinator_.BeginPaint();
+      if (committed_frame_ == nullptr ||
+          (frame_coordinator_.FrameBuildPending() && !frame_coordinator_.PaintPending())) {
         CommitFrameAndInvalidate();
       } else {
         UpdateRuntimeViewport();
@@ -1929,14 +1930,14 @@ private:
       if (render_result == Win32RenderResult::Presented && platform_views_) {
         platform_views_->DidPresent();
       }
-      if (const std::optional<double> deadline = frame_state_.EndPaint(window_ != nullptr)) {
+      if (const std::optional<double> deadline = frame_coordinator_.EndPaint(window_ != nullptr)) {
         ScheduleFrame(*deadline);
       }
       return 0;
     }
     case kRenderMessage:
       render_message_posted_ = false;
-      if (frame_state_.FrameBuildPending()) {
+      if (frame_coordinator_.FrameBuildPending()) {
         CommitFrameAndInvalidate();
       }
       return 0;
@@ -1958,7 +1959,7 @@ private:
         KillTimer(window, kFrameTimer);
         timer_armed_ = false;
         timer_deadline_.reset();
-        if (frame_state_.FrameBuildPending()) {
+        if (frame_coordinator_.FrameBuildPending()) {
           CommitFrameAndInvalidate();
         }
         return 0;
@@ -2086,7 +2087,7 @@ private:
   bool first_nc_calc_ = true;
   bool render_message_posted_ = false;
   bool timer_armed_ = false;
-  PlatformFrameState frame_state_;
+  PlatformFrameCoordinator frame_coordinator_;
   MouseTrackingArea mouse_tracking_area_ = MouseTrackingArea::None;
   PointerCursorKind pointer_cursor_kind_ = PointerCursorKind::Default;
   HWND mouse_tracking_window_ = nullptr;

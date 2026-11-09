@@ -51,8 +51,8 @@ public:
 private:
   friend struct Win32RendererTestAccess;
   [[nodiscard]] std::vector<std::uint32_t> ReadPixels();
-  struct State;
-  std::unique_ptr<State> state_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace huxerui::detail

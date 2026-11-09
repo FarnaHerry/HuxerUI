@@ -986,7 +986,7 @@ public:
 
   void RequestFrameAt(double deadline) override {
     if (const std::optional<double> scheduled =
-            frame_state_.Request(deadline, Now(), drawing_area_ != nullptr && running_)) {
+            frame_coordinator_.Request(deadline, Now(), drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*scheduled);
     }
   }
@@ -1331,8 +1331,8 @@ public:
       break;
     case WindowCommand::Hide:
       gtk_widget_set_visible(GTK_WIDGET(window_), FALSE);
-      if (frame_state_.PaintPending()) {
-        if (const auto deadline = frame_state_.EndPaint(drawing_area_ != nullptr && running_)) {
+      if (frame_coordinator_.PaintPending()) {
+        if (const auto deadline = frame_coordinator_.EndPaint(drawing_area_ != nullptr && running_)) {
           ScheduleFrame(*deadline);
         }
       }
@@ -1642,7 +1642,7 @@ private:
     frame_source_ = 0;
     // A ready GLib frame source can run after a close request destroys the drawing widget.
     if (!IsInitialized() || drawing_area_ == nullptr || !running_ ||
-        !GTK_IS_WIDGET(drawing_area_) || !frame_state_.BeginCommit()) {
+        !GTK_IS_WIDGET(drawing_area_) || !frame_coordinator_.BeginCommit()) {
       return;
     }
     // Keep the previous frame's text scale until its snapshot has finished, then rebuild all text geometry together.
@@ -1657,7 +1657,7 @@ private:
         platform_views_->Commit(*committed_frame_);
       }
       if (gtk_widget_is_visible(GTK_WIDGET(drawing_area_))) {
-        frame_state_.MarkPaintPending();
+        frame_coordinator_.MarkPaintPending();
         gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
       }
       if (commit.next_frame_deadline.has_value()) {
@@ -1670,7 +1670,7 @@ private:
   }
 
   void FlushDeferredFrame() {
-    if (const std::optional<double> deadline = frame_state_.TakeDeferred(drawing_area_ != nullptr && running_)) {
+    if (const std::optional<double> deadline = frame_coordinator_.TakeDeferred(drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*deadline);
     }
   }
@@ -1679,7 +1679,7 @@ private:
     if (!IsInitialized() || committed_frame_ == nullptr) {
       return;
     }
-    frame_state_.BeginPaint();
+    frame_coordinator_.BeginPaint();
     try {
       renderer_.SetDeviceScale(static_cast<float>(gtk_widget_get_scale_factor(drawing_area_)));
       renderer_.SetDisplay(gtk_widget_get_display(drawing_area_));
@@ -1689,7 +1689,7 @@ private:
     } catch (...) {
       runtime_->ReportFailure(std::current_exception());
     }
-    if (const std::optional<double> deadline = frame_state_.EndPaint(drawing_area_ != nullptr && running_)) {
+    if (const std::optional<double> deadline = frame_coordinator_.EndPaint(drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*deadline);
     }
   }
@@ -2390,7 +2390,7 @@ private:
   GdkDevice* pointer_device_ = nullptr;
   GdkDrag* native_drag_ = nullptr;
   std::shared_ptr<WindowDrag> native_transfer_;
-  PlatformFrameState frame_state_;
+  PlatformFrameCoordinator frame_coordinator_;
   const RenderFrame* committed_frame_ = nullptr;
   guint frame_source_ = 0;
   bool running_ = false;

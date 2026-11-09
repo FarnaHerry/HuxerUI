@@ -17,7 +17,7 @@
 namespace huxerui {
 
 namespace detail {
-class HttpOperationState;
+class HttpOperation;
 class HttpTransport;
 struct ApplicationRuntimeState;
 } // namespace detail
@@ -200,12 +200,12 @@ public:
   [[nodiscard]] AsyncInputStream& Body();
 
 private:
-  explicit HttpResponseStream(std::shared_ptr<detail::HttpOperationState> state);
+  explicit HttpResponseStream(std::shared_ptr<detail::HttpOperation> operation);
 
-  std::shared_ptr<detail::HttpOperationState> state_;
+  std::shared_ptr<detail::HttpOperation> operation_;
   AsyncInputStream body_;
 
-  friend class detail::HttpOperationState;
+  friend class detail::HttpOperation;
 };
 
 /// A client backed by its originating application's platform networking stack.

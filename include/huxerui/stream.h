@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -52,10 +53,11 @@ class AsyncOutputStream;
 class OutputStream;
 
 namespace detail {
-class AsyncInputStreamState;
-class AsyncOutputStreamState;
-class InputStreamState;
-class OutputStreamState;
+class AsyncInputStreamBackend;
+class AsyncOutputStreamBackend;
+class InputStreamBackend;
+class OutputStreamBackend;
+class RandomAccessStreamImpl;
 struct StreamAccess;
 } // namespace detail
 
@@ -64,7 +66,8 @@ struct StreamAccess;
 /// Read() consumes at most the caller-provided buffer size and returns zero at EOF. A zero-length buffer is rejected
 /// because it cannot distinguish a successful no-op from EOF. Operational failures return IoError; reusing a failed
 /// or moved-from stream throws std::logic_error. Destruction releases the source without additional reads.
-/// Obtain a stream from File::OpenRead() or RawAsset::OpenRead(). Operations run on the calling thread.
+/// Obtain a stream from File::OpenRead(), FileReference::OpenRead(), or RawAsset::OpenRead().
+/// Operations run on the calling thread.
 /// @code{.cpp}
 /// IoResult<Bytes> ReadFirstChunk(InputStream& input) {
 ///   Bytes buffer(4096);
@@ -104,9 +107,9 @@ public:
   IoResult<std::uint64_t> CopyTo(OutputStream& destination, std::span<std::byte> buffer);
 
 private:
-  explicit InputStream(std::shared_ptr<detail::InputStreamState> state);
+  explicit InputStream(std::shared_ptr<detail::InputStreamBackend> backend);
 
-  std::shared_ptr<detail::InputStreamState> state_;
+  std::shared_ptr<detail::InputStreamBackend> backend_;
   bool complete_ = false;
   bool failed_ = false;
 
@@ -118,7 +121,7 @@ private:
 /// Write() accepts the complete span on success or returns IoError. A failure may leave a written prefix and makes
 /// the stream unusable. Close() finalizes buffered output and is idempotent after success. Destroying
 /// a stream that was not closed releases or aborts the destination without promising that buffered bytes are durable.
-/// Obtain a stream from File::OpenWrite(); operations run on the calling thread.
+/// Obtain a stream from File::OpenWrite() or FileReference::OpenWrite(). Operations run on the calling thread.
 /// @code{.cpp}
 /// IoResult<void> WriteAndClose(OutputStream& output, std::span<const std::byte> data) {
 ///   auto written = output.Write(data);
@@ -151,16 +154,71 @@ public:
   IoResult<void> Close();
 
 private:
-  explicit OutputStream(std::shared_ptr<detail::OutputStreamState> state);
+  explicit OutputStream(std::shared_ptr<detail::OutputStreamBackend> backend);
 
   void RequireWritable() const;
   void Release() noexcept;
 
-  std::shared_ptr<detail::OutputStreamState> state_;
+  std::shared_ptr<detail::OutputStreamBackend> backend_;
   bool closed_ = false;
   bool failed_ = false;
 
   friend class InputStream;
+  friend struct detail::StreamAccess;
+};
+
+/// A move-only stream for reading and writing at absolute byte offsets.
+///
+/// Obtain it from File::OpenRandomAccess() or FileReference::OpenRandomAccess(). It stays bound to the opened
+/// resource and retains any required provider grant. Operations are synchronous on the calling thread.
+/// Serialize access to each stream, including closing it or moving it to another thread.
+class RandomAccessStream final {
+public:
+  RandomAccessStream(const RandomAccessStream&) = delete;
+  RandomAccessStream& operator=(const RandomAccessStream&) = delete;
+  RandomAccessStream(RandomAccessStream&&) noexcept;
+  RandomAccessStream& operator=(RandomAccessStream&&) noexcept;
+  ~RandomAccessStream();
+
+  /// Reads at an absolute offset without requiring the source to fill the supplied buffer.
+  /// @param offset Byte offset from the beginning of the opened file.
+  /// @param buffer Nonempty writable range borrowed until return.
+  /// @return The number of valid bytes in the buffer's prefix, or an IoError. A successful zero means EOF at
+  /// this offset. A range outside the backend's offset limits reports TooLarge.
+  /// @throws std::invalid_argument If buffer is empty.
+  /// @throws std::logic_error If the stream is moved from, closed, failed, or write-only.
+  /// Short reads are allowed. Later reads may use any valid offset. A read error leaves the stream usable.
+  IoResult<std::size_t> ReadAt(std::uint64_t offset, std::span<std::byte> buffer);
+
+  /// Writes the complete supplied range at an absolute offset.
+  /// @param offset Byte offset from the beginning of the opened file.
+  /// @param data Bytes borrowed until return. An empty range succeeds without accessing the file.
+  /// @return Success after all bytes have been written, or an IoError. A range outside the backend's offset
+  /// limits reports TooLarge before writing any bytes and leaves the stream usable.
+  /// @throws std::logic_error If the stream is moved from, closed, failed, or read-only.
+  /// A nonempty write beyond EOF extends the file. Reads from the gap return zeros. A backend write failure
+  /// may leave a written prefix and makes the stream unusable, including for Close().
+  IoResult<void> WriteAt(std::uint64_t offset, std::span<const std::byte> data);
+
+  /// Queries the current size of the opened resource, including on a write-only stream.
+  /// @return The size in bytes, std::nullopt if the size is unknown, or an IoError. Zero is a known empty size.
+  /// @throws std::logic_error If the stream is moved from, closed, or failed.
+  /// A size query error leaves the stream usable.
+  IoResult<std::optional<std::uint64_t>> Size() const;
+
+  /// Closes the opened resource and releases its grant on success.
+  /// @return Success or an IoError. Repeated calls after success return success without additional I/O.
+  /// @throws std::logic_error If the stream is moved from or previously failed.
+  /// A failed close cannot be retried. Destruction releases resources without reporting close errors.
+  /// Close() provides no rollback or power-loss durability guarantee.
+  IoResult<void> Close();
+
+private:
+  explicit RandomAccessStream(std::shared_ptr<detail::RandomAccessStreamImpl> impl);
+  detail::RandomAccessStreamImpl& RequireImpl() const;
+
+  std::shared_ptr<detail::RandomAccessStreamImpl> impl_;
+
   friend struct detail::StreamAccess;
 };
 
@@ -217,11 +275,11 @@ public:
   Task<IoResult<std::uint64_t>> CopyToAsync(AsyncOutputStream& destination, std::size_t maximum_read_size);
 
 private:
-  explicit AsyncInputStream(std::shared_ptr<detail::AsyncInputStreamState> state);
+  explicit AsyncInputStream(std::shared_ptr<detail::AsyncInputStreamBackend> backend);
 
   void Release() noexcept;
 
-  std::shared_ptr<detail::AsyncInputStreamState> state_;
+  std::shared_ptr<detail::AsyncInputStreamBackend> backend_;
 
   friend struct detail::StreamAccess;
 };
@@ -270,11 +328,11 @@ public:
   Task<IoResult<void>> CloseAsync();
 
 private:
-  explicit AsyncOutputStream(std::shared_ptr<detail::AsyncOutputStreamState> state);
+  explicit AsyncOutputStream(std::shared_ptr<detail::AsyncOutputStreamBackend> backend);
 
   void Release() noexcept;
 
-  std::shared_ptr<detail::AsyncOutputStreamState> state_;
+  std::shared_ptr<detail::AsyncOutputStreamBackend> backend_;
 
   friend class AsyncInputStream;
   friend struct detail::StreamAccess;

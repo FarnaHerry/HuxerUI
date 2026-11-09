@@ -178,13 +178,6 @@ std::string PublicPath(const fs::path& path) {
   return std::string(reinterpret_cast<const char*>(value.data()), value.size());
 }
 
-IoError OperationError(std::string_view operation, const std::error_code& error) {
-  return {
-      IoErrorCategory(error),
-      "HuxerUI file " + std::string(operation) + " failed: " + error.message(),
-  };
-}
-
 template <class T> IoResult<T> Failure(std::string_view operation, const std::error_code& error) {
   return IoResult<T>(OperationError(operation, error));
 }
@@ -553,9 +546,9 @@ bool Move(std::string_view source, std::string_view destination, bool overwrite)
 // Executes a captured synchronous File operation on the native worker or Web file queue. Captured
 // paths and buffers outlive the caller; results resume the owning TaskExecution, never the worker.
 template <class Result>
-class FileOperationState final : public std::enable_shared_from_this<FileOperationState<Result>> {
+class FileOperation final : public std::enable_shared_from_this<FileOperation<Result>> {
 public:
-  FileOperationState(std::function<Result()> operation, bool persist)
+  FileOperation(std::function<Result()> operation, bool persist)
       : operation_(std::move(operation)), persist_(persist) {}
 
   void Suspend(std::weak_ptr<TaskExecution> execution, std::coroutine_handle<> continuation) {
@@ -564,7 +557,7 @@ public:
       execution_ = std::move(execution);
       continuation_ = continuation;
     }
-    const std::shared_ptr<FileOperationState> self = this->shared_from_this();
+    const std::shared_ptr<FileOperation> self = this->shared_from_this();
 #if defined(__EMSCRIPTEN__)
     EnqueueWebFileOperation([self](std::function<void()> completion) { self->Run(std::move(completion)); });
 #else
@@ -613,7 +606,7 @@ private:
     if (persist_) {
       // Flush even after an operation failure because it may already have changed part of the file.
       // Hold the queue slot through synchronization, independently of whether the Task was canceled.
-      const std::shared_ptr<FileOperationState> self = this->shared_from_this();
+      const std::shared_ptr<FileOperation> self = this->shared_from_this();
       auto pending = std::make_shared<std::optional<Result>>(std::move(result));
       try {
         PersistWebFileSystem([self, pending, exception, completion](bool persisted) mutable {
@@ -679,7 +672,7 @@ private:
 template <class Result> class FileOperationAwaiter final {
 public:
   FileOperationAwaiter(std::function<Result()> operation, bool persist)
-      : state_(std::make_shared<FileOperationState<Result>>(std::move(operation), persist)) {}
+      : operation_(std::make_shared<FileOperation<Result>>(std::move(operation), persist)) {}
 
   FileOperationAwaiter(const FileOperationAwaiter&) = delete;
   FileOperationAwaiter& operator=(const FileOperationAwaiter&) = delete;
@@ -687,8 +680,8 @@ public:
   FileOperationAwaiter& operator=(FileOperationAwaiter&&) noexcept = default;
 
   ~FileOperationAwaiter() {
-    if (state_) {
-      state_->Cancel();
+    if (operation_) {
+      operation_->Cancel();
     }
   }
 
@@ -697,24 +690,24 @@ public:
   }
 
   void await_suspend(std::coroutine_handle<typename Task<Result>::promise_type> continuation) {
-    state_->Suspend(TaskExecutionFor(continuation), continuation);
+    operation_->Suspend(TaskExecutionFor(continuation), continuation);
   }
 
   Result await_resume() {
-    return state_->TakeResult();
+    return operation_->TakeResult();
   }
 
 private:
-  std::shared_ptr<FileOperationState<Result>> state_;
+  std::shared_ptr<FileOperation<Result>> operation_;
 };
 
 template <class Result> Task<Result> RunFileOperation(std::function<Result()> operation, bool persist = false) {
   co_return co_await FileOperationAwaiter<Result>(std::move(operation), persist);
 }
 
-class FileInputStreamState final : public InputStreamState {
+class FileInputStreamBackend final : public InputStreamBackend {
 public:
-  explicit FileInputStreamState(const fs::path& path) : stream_(path, std::ios::binary) {}
+  explicit FileInputStreamBackend(const fs::path& path) : stream_(path, std::ios::binary) {}
 
   [[nodiscard]] bool IsOpen() const noexcept {
     return stream_.is_open();
@@ -743,11 +736,11 @@ private:
   std::ifstream stream_;
 };
 
-class FileOutputStreamState final : public OutputStreamState,
-                                    public AsyncOutputStreamState,
-                                    public std::enable_shared_from_this<FileOutputStreamState> {
+class FileOutputStreamBackend final : public OutputStreamBackend,
+                                      public AsyncOutputStreamBackend,
+                                      public std::enable_shared_from_this<FileOutputStreamBackend> {
 public:
-  FileOutputStreamState(const fs::path& path, FileWriteMode mode, bool persist)
+  FileOutputStreamBackend(const fs::path& path, FileWriteMode mode, bool persist)
       : stream_(path,
                 std::ios::binary | std::ios::out | (mode == FileWriteMode::Append ? std::ios::app : std::ios::trunc)),
         persist_(persist) {}
@@ -779,7 +772,7 @@ public:
     return IoResult<void>::Success();
   }
 
-  // Pending work retains this state; destruction closes only after the last native operation returns.
+  // Pending work retains this backend; destruction closes only after the last native operation returns.
   void Abort() noexcept override {}
 
   Task<IoResult<void>> WriteAsync(Bytes data) override {
@@ -837,40 +830,40 @@ IoResult<InputStream> OpenFileInput(std::string_view path) {
   }
 
   errno = 0;
-  auto state = std::make_shared<FileInputStreamState>(PlatformPath(path));
-  if (!state->IsOpen()) {
+  auto backend = std::make_shared<FileInputStreamBackend>(PlatformPath(path));
+  if (!backend->IsOpen()) {
     return Failure<InputStream>("open for reading", StreamError());
   }
-  return IoResult<InputStream>(StreamAccess::MakeInputStream(std::move(state)));
+  return IoResult<InputStream>(StreamAccess::MakeInputStream(std::move(backend)));
 }
 
-IoResult<std::shared_ptr<FileOutputStreamState>>
-OpenFileOutputState(std::string_view path, FileWriteMode mode, bool allow_persistent) {
+IoResult<std::shared_ptr<FileOutputStreamBackend>>
+OpenFileOutputBackend(std::string_view path, FileWriteMode mode, bool allow_persistent) {
   if (!allow_persistent && !CanMutate(path)) {
-    return Failure<std::shared_ptr<FileOutputStreamState>>(
+    return Failure<std::shared_ptr<FileOutputStreamBackend>>(
         IoErrorCode::Unsupported, "HuxerUI persistent Web files require an async output stream");
   }
 
   std::error_code status_error;
   const fs::file_status status = fs::status(PlatformPath(path), status_error);
   if (status_error && status_error != std::errc::no_such_file_or_directory) {
-    return Failure<std::shared_ptr<FileOutputStreamState>>("open for writing", status_error);
+    return Failure<std::shared_ptr<FileOutputStreamBackend>>("open for writing", status_error);
   }
   if (!status_error && fs::is_directory(status)) {
-    return Failure<std::shared_ptr<FileOutputStreamState>>(IoErrorCode::IsDirectory,
+    return Failure<std::shared_ptr<FileOutputStreamBackend>>(IoErrorCode::IsDirectory,
                                                            "HuxerUI cannot open a directory for writing");
   }
   if (!status_error && fs::exists(status) && !fs::is_regular_file(status)) {
-    return Failure<std::shared_ptr<FileOutputStreamState>>(IoErrorCode::Unsupported,
+    return Failure<std::shared_ptr<FileOutputStreamBackend>>(IoErrorCode::Unsupported,
                                                            "HuxerUI cannot stream this file type");
   }
 
   errno = 0;
-  auto state = std::make_shared<FileOutputStreamState>(PlatformPath(path), mode, RequiresPersistence(path));
-  if (!state->IsOpen()) {
-    return Failure<std::shared_ptr<FileOutputStreamState>>("open for writing", StreamError());
+  auto backend = std::make_shared<FileOutputStreamBackend>(PlatformPath(path), mode, RequiresPersistence(path));
+  if (!backend->IsOpen()) {
+    return Failure<std::shared_ptr<FileOutputStreamBackend>>("open for writing", StreamError());
   }
-  return IoResult<std::shared_ptr<FileOutputStreamState>>(std::move(state));
+  return IoResult<std::shared_ptr<FileOutputStreamBackend>>(std::move(backend));
 }
 
 IoResult<AsyncInputStream> OpenFileAsyncInput(std::string_view path) {
@@ -882,7 +875,7 @@ IoResult<AsyncInputStream> OpenFileAsyncInput(std::string_view path) {
 }
 
 IoResult<OutputStream> OpenFileOutput(std::string_view path, FileWriteMode mode) {
-  IoResult<std::shared_ptr<FileOutputStreamState>> opened = OpenFileOutputState(path, mode, false);
+  IoResult<std::shared_ptr<FileOutputStreamBackend>> opened = OpenFileOutputBackend(path, mode, false);
   if (!opened.Succeeded()) {
     return IoResult<OutputStream>(std::move(opened).Error());
   }
@@ -890,7 +883,7 @@ IoResult<OutputStream> OpenFileOutput(std::string_view path, FileWriteMode mode)
 }
 
 IoResult<AsyncOutputStream> OpenFileAsyncOutput(std::string_view path, FileWriteMode mode) {
-  IoResult<std::shared_ptr<FileOutputStreamState>> opened = OpenFileOutputState(path, mode, true);
+  IoResult<std::shared_ptr<FileOutputStreamBackend>> opened = OpenFileOutputBackend(path, mode, true);
   if (!opened.Succeeded()) {
     return IoResult<AsyncOutputStream>(std::move(opened).Error());
   }
@@ -924,13 +917,12 @@ void EnqueueFileOperation(std::function<void()> operation) {
 }
 #endif
 
-namespace {
-
-class ReferenceFailure final {
-public:
-  explicit ReferenceFailure(IoErrorCode value) : code(value) {}
-  IoErrorCode code;
-};
+IoError OperationError(std::string_view operation, const std::error_code& error) {
+  return {
+      IoErrorCategory(error),
+      "HuxerUI file " + std::string(operation) + " failed: " + error.message(),
+  };
+}
 
 void CheckReference(bool condition, IoErrorCode code) {
   if (!condition) {
@@ -944,6 +936,90 @@ void CheckLocalIo(bool succeeded) {
   }
 }
 
+ReferenceDescriptor::ReferenceDescriptor(int value) : value_(value) {}
+
+ReferenceDescriptor::~ReferenceDescriptor() {
+  Close();
+}
+
+ReferenceDescriptor::ReferenceDescriptor(ReferenceDescriptor&& other) noexcept
+    : value_(other.Release()) {}
+
+ReferenceDescriptor& ReferenceDescriptor::operator=(ReferenceDescriptor&& other) noexcept {
+  if (this != &other) {
+    Close();
+    value_ = other.Release();
+  }
+  return *this;
+}
+
+int ReferenceDescriptor::Get() const {
+  return value_;
+}
+
+int ReferenceDescriptor::Release() {
+  return std::exchange(value_, -1);
+}
+
+bool ReferenceDescriptor::Close() {
+  if (value_ < 0) {
+    return true;
+  }
+#if defined(_WIN32)
+  return _close(std::exchange(value_, -1)) == 0;
+#else
+  return close(std::exchange(value_, -1)) == 0;
+#endif
+}
+
+namespace {
+
+#if defined(_WIN32)
+void CheckReferenceIo(bool succeeded) {
+  if (!succeeded) {
+    throw ReferenceFailure(IoErrorCategory(std::error_code(GetLastError(), std::system_category())));
+  }
+}
+
+BY_HANDLE_FILE_INFORMATION ReferenceInformation(HANDLE handle) {
+  BY_HANDLE_FILE_INFORMATION info{};
+  CheckReferenceIo(GetFileInformationByHandle(handle, &info));
+  return info;
+}
+#else
+#if defined(__ANDROID__) && !defined(__LP64__)
+using DescriptorInfo = struct stat64;
+#else
+using DescriptorInfo = struct stat;
+#endif
+
+DescriptorInfo GetDescriptorInfo(int descriptor) {
+  DescriptorInfo info{};
+#if defined(__ANDROID__) && !defined(__LP64__)
+  CheckLocalIo(fstat64(descriptor, &info) == 0);
+#else
+  CheckLocalIo(fstat(descriptor, &info) == 0);
+#endif
+  return info;
+}
+#endif
+
+const std::atomic<bool> never_canceled{false};
+
+template <class T, class Operation>
+IoResult<T> LocalReferenceResult(Operation operation) {
+  constexpr auto failure = "HuxerUI external file operation failed";
+  try {
+    return IoResult<T>(operation());
+  } catch (const ReferenceFailure& error) {
+    return Failure<T>(error.code, failure);
+  } catch (const std::system_error& error) {
+    return Failure<T>(IoErrorCategory(error.code()), failure);
+  } catch (...) {
+    return Failure<T>(IoErrorCode::Io, failure);
+  }
+}
+
 // Reference operations cooperate with cancellation between filesystem calls. The shared callback
 // bridge still owns late-delivery suppression; an uninterruptible native call may finish after cancel.
 template <class T, class Operation>
@@ -952,17 +1028,10 @@ std::function<void()> RunLocalReference(Operation operation, FileReferenceComple
   auto canceled = std::make_shared<std::atomic<bool>>(false);
   auto work = [operation = std::move(operation), completion = std::move(completion), canceled,
                persist](std::function<void()> done) mutable {
-    IoResult<T> result(IoError{IoErrorCode::Io, "HuxerUI external file operation failed"});
-    try {
-      if (!canceled->load()) {
-        result = IoResult<T>(operation(*canceled));
-      }
-    } catch (const ReferenceFailure& error) {
-      result = IoResult<T>(IoError{error.code, "HuxerUI external file operation failed"});
-    } catch (const std::system_error& error) {
-      result = IoResult<T>(IoError{IoErrorCategory(error.code()), "HuxerUI external file operation failed"});
-    } catch (...) {
-    }
+    auto result = LocalReferenceResult<T>([&] {
+      CheckReference(!canceled->load(), IoErrorCode::Io);
+      return operation(*canceled);
+    });
 #if defined(__EMSCRIPTEN__)
     if (persist) {
       PersistWebFileSystem([result = std::move(result), completion = std::move(completion),
@@ -989,183 +1058,135 @@ std::function<void()> RunLocalReference(Operation operation, FileReferenceComple
   return [canceled] { canceled->store(true); };
 }
 
-class ReferenceDescriptor final {
-public:
-  explicit ReferenceDescriptor(int value = -1) : value_(value) {}
-  ~ReferenceDescriptor() {
-    Close();
-  }
-  ReferenceDescriptor(const ReferenceDescriptor&) = delete;
-  ReferenceDescriptor& operator=(const ReferenceDescriptor&) = delete;
-  ReferenceDescriptor(ReferenceDescriptor&& other) noexcept : value_(std::exchange(other.value_, -1)) {}
-  ReferenceDescriptor& operator=(ReferenceDescriptor&& other) noexcept {
-    if (this != &other) {
-      Close();
-      value_ = std::exchange(other.value_, -1);
-    }
-    return *this;
-  }
-  [[nodiscard]] int Get() const {
-    return value_;
-  }
-  [[nodiscard]] int Release() {
-    return std::exchange(value_, -1);
-  }
-  bool Close() {
-    if (value_ < 0) {
-      return true;
-    }
+std::ptrdiff_t ReadReferenceDescriptor(int descriptor, std::span<std::byte> buffer) {
+  std::ptrdiff_t count;
+  do {
+    errno = 0;
 #if defined(_WIN32)
-    return _close(std::exchange(value_, -1)) == 0;
+    count = _read(descriptor, buffer.data(),
+                  static_cast<unsigned int>(std::min<std::size_t>(buffer.size(), std::numeric_limits<int>::max())));
 #else
-    return close(std::exchange(value_, -1)) == 0;
+    count = ::read(descriptor, buffer.data(),
+                   std::min<std::size_t>(buffer.size(), std::numeric_limits<ssize_t>::max()));
 #endif
+  } while (count < 0 && errno == EINTR);
+  return count;
+}
+
+class ReferenceInputStreamBackend final : public InputStreamBackend {
+public:
+  ReferenceInputStreamBackend(ReferenceDescriptor input, ReferenceStreamCoordination coordinate)
+      : coordinate_(std::move(coordinate)), input_(std::move(input)) {}
+
+  IoResult<std::size_t> Read(std::span<std::byte> buffer) override {
+    IoResult<std::size_t> result(IoError{IoErrorCode::Io, "HuxerUI coordinated stream read did not run"});
+    try {
+      coordinate_([&] {
+        const auto count = ReadReferenceDescriptor(input_.Get(), buffer);
+        result = count < 0 ? IoResult<std::size_t>(OperationError("stream read", StreamError()))
+                           : IoResult<std::size_t>(static_cast<std::size_t>(count));
+      });
+    } catch (const std::system_error& failure) {
+      return IoResult<std::size_t>(OperationError("stream read", failure.code()));
+    }
+    return result;
+  }
+
+  void Release() noexcept override {
+    input_.Close();
+    coordinate_ = {};
   }
 
 private:
-  int value_;
+  ReferenceStreamCoordination coordinate_;
+  ReferenceDescriptor input_;
 };
 
-using ReferenceStreamCoordination = std::function<void(const std::function<void()>&)>;
-
-class ReferenceInputStreamState final : public AsyncInputStreamState {
+class ReferenceOutputStreamBackend final : public OutputStreamBackend,
+                                           public AsyncOutputStreamBackend,
+                                           public std::enable_shared_from_this<ReferenceOutputStreamBackend> {
 public:
-  ReferenceInputStreamState(std::shared_ptr<ReferenceDescriptor> input, ReferenceStreamCoordination coordinate)
-      : input_(std::move(input)), coordinate_(std::move(coordinate)) {}
+  ReferenceOutputStreamBackend(ReferenceDescriptor output, ReferenceStreamCoordination coordinate, bool persist)
+      : coordinate_(std::move(coordinate)), output_(std::move(output)), persist_(persist) {}
 
-  Task<IoResult<Bytes>> ReadAsync(std::size_t maximum_bytes) override {
-    auto read = [input = input_, coordinate = coordinate_, maximum_bytes]() -> IoResult<Bytes> {
-      Bytes data(maximum_bytes);
-      std::size_t size = 0;
-      std::optional<IoError> error;
-      try {
-        coordinate([&] {
-          while (true) {
-            errno = 0;
+  IoResult<void> Write(std::span<const std::byte> data) override {
+    auto result = IoResult<void>::Success();
+    try {
+      coordinate_([&] {
+        auto remaining = data;
+        while (!remaining.empty()) {
+          errno = 0;
 #if defined(_WIN32)
-            const int count = _read(input->Get(), data.data(),
-                                    static_cast<unsigned int>(std::min<std::size_t>(
-                                        maximum_bytes, std::numeric_limits<unsigned int>::max())));
+          const int count = _write(output_.Get(), remaining.data(),
+                                   static_cast<unsigned int>(std::min<std::size_t>(
+                                       remaining.size(), std::numeric_limits<unsigned int>::max())));
 #else
-            const ssize_t count = ::read(
-                input->Get(), data.data(),
-                std::min<std::size_t>(maximum_bytes, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())));
+          const ssize_t count = ::write(
+              output_.Get(), remaining.data(),
+              std::min<std::size_t>(remaining.size(), static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())));
 #endif
-            if (count < 0 && errno == EINTR) {
-              continue;
-            }
-            if (count < 0) {
-              error = OperationError("stream read", StreamError());
-              return;
-            }
-            size = static_cast<std::size_t>(count);
+          if (count < 0 && errno == EINTR) {
+            continue;
+          }
+          if (count <= 0) {
+            result = IoResult<void>(OperationError("stream write", StreamError()));
             return;
           }
-        });
-      } catch (const std::system_error& failure) {
-        return IoResult<Bytes>(OperationError("stream read", failure.code()));
-      }
-      if (error) {
-        return IoResult<Bytes>(std::move(*error));
-      }
-      data.resize(size);
-      return IoResult<Bytes>(std::move(data));
-    };
-#if defined(__EMSCRIPTEN__)
-    co_return co_await RunFileOperation<IoResult<Bytes>>(std::move(read));
-#else
-    co_return co_await operations_.Run([read = std::move(read)](std::stop_token stop_token) mutable {
-      return stop_token.stop_requested() ? IoResult<Bytes>(Bytes{}) : read();
-    });
-#endif
+          remaining = remaining.subspan(static_cast<std::size_t>(count));
+        }
+      });
+    } catch (const std::system_error& failure) {
+      return IoResult<void>(OperationError("stream write", failure.code()));
+    }
+    return result;
   }
 
-  void Cancel() noexcept override {}
-
-private:
-  std::shared_ptr<ReferenceDescriptor> input_;
-  ReferenceStreamCoordination coordinate_;
-#if !defined(__EMSCRIPTEN__)
-  WorkerSequence operations_;
-#endif
-};
-
-class ReferenceOutputStreamState final : public AsyncOutputStreamState {
-public:
-  ReferenceOutputStreamState(std::shared_ptr<ReferenceDescriptor> output, ReferenceStreamCoordination coordinate,
-                             bool persist)
-      : output_(std::move(output)), coordinate_(std::move(coordinate)), persist_(persist) {}
+  IoResult<void> Close() override {
+    auto result = IoResult<void>::Success();
+    try {
+      coordinate_([&] {
+        errno = 0;
+        if (!output_.Close()) {
+          result = IoResult<void>(OperationError("stream close", StreamError()));
+        }
+      });
+    } catch (const std::system_error& failure) {
+      return IoResult<void>(OperationError("stream close", failure.code()));
+    }
+    return result;
+  }
 
   Task<IoResult<void>> WriteAsync(Bytes data) override {
-    auto write = [output = output_, coordinate = coordinate_, data = std::move(data)]() mutable {
-      auto result = IoResult<void>::Success();
-      try {
-        coordinate([&] {
-          std::span<const std::byte> remaining(data);
-          while (!remaining.empty()) {
-            errno = 0;
-#if defined(_WIN32)
-            const int count = _write(output->Get(), remaining.data(),
-                                     static_cast<unsigned int>(std::min<std::size_t>(
-                                         remaining.size(), std::numeric_limits<unsigned int>::max())));
-#else
-            const ssize_t count = ::write(
-                output->Get(), remaining.data(),
-                std::min<std::size_t>(remaining.size(), static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())));
-#endif
-            if (count < 0 && errno == EINTR) {
-              continue;
-            }
-            if (count <= 0) {
-              result = IoResult<void>(OperationError("stream write", StreamError()));
-              return;
-            }
-            remaining = remaining.subspan(static_cast<std::size_t>(count));
-          }
-        });
-      } catch (const std::system_error& failure) {
-        return IoResult<void>(OperationError("stream write", failure.code()));
-      }
-      return result;
-    };
 #if defined(__EMSCRIPTEN__)
-    co_return co_await RunFileOperation<IoResult<void>>(std::move(write));
-#else
-    co_return co_await operations_.Run([write = std::move(write)](std::stop_token stop_token) mutable {
-      return stop_token.stop_requested() ? IoResult<void>::Success() : write();
+    co_return co_await RunFileOperation<IoResult<void>>([self = shared_from_this(), data = std::move(data)] {
+      return self->Write(data);
     });
+#else
+    co_return co_await operations_.Run(
+        [self = shared_from_this()](std::stop_token stop_token, Bytes value) {
+          return stop_token.stop_requested() ? IoResult<void>::Success() : self->Write(value);
+        },
+        std::move(data));
 #endif
   }
 
   Task<IoResult<void>> CloseAsync() override {
-    auto close = [output = output_, coordinate = coordinate_] {
-      auto result = IoResult<void>::Success();
-      try {
-        coordinate([&] {
-          errno = 0;
-          if (!output->Close()) {
-            result = IoResult<void>(OperationError("stream close", StreamError()));
-          }
-        });
-      } catch (const std::system_error& failure) {
-        return IoResult<void>(OperationError("stream close", failure.code()));
-      }
-      return result;
-    };
 #if defined(__EMSCRIPTEN__)
-    co_return co_await RunFileOperation<IoResult<void>>(std::move(close), persist_);
+    co_return co_await RunFileOperation<IoResult<void>>(
+        [self = shared_from_this()] { return self->Close(); }, persist_);
 #else
-    co_return co_await operations_.Run([close = std::move(close)](std::stop_token stop_token) mutable {
-      return stop_token.stop_requested() ? IoResult<void>::Success() : close();
+    co_return co_await operations_.Run([self = shared_from_this()](std::stop_token stop_token) {
+      return stop_token.stop_requested() ? IoResult<void>::Success() : self->Close();
     });
 #endif
   }
 
+  // In-flight work retains the backend and releases the descriptor after the native operation returns.
   void Abort() noexcept override {}
 
 private:
-  std::shared_ptr<ReferenceDescriptor> output_;
   ReferenceStreamCoordination coordinate_;
+  ReferenceDescriptor output_;
   [[maybe_unused]] bool persist_ = false;
 #if !defined(__EMSCRIPTEN__)
   WorkerSequence operations_;
@@ -1247,12 +1268,6 @@ bool ReferenceIsLink(HANDLE handle, DWORD attributes) {
          IsReparseTagNameSurrogate(tag.ReparseTag);
 }
 
-void CheckReferenceIo(bool succeeded) {
-  if (!succeeded) {
-    throw ReferenceFailure(IoErrorCategory(std::error_code(GetLastError(), std::system_category())));
-  }
-}
-
 void CheckReferenceStatus(NTSTATUS status) {
   if (status >= 0) {
     return;
@@ -1282,12 +1297,6 @@ public:
 private:
   HANDLE value_;
 };
-
-BY_HANDLE_FILE_INFORMATION ReferenceInformation(HANDLE handle) {
-  BY_HANDLE_FILE_INFORMATION info{};
-  CheckReferenceIo(GetFileInformationByHandle(handle, &info));
-  return info;
-}
 
 void CheckReferenceDirectory(HANDLE handle) {
   const auto info = ReferenceInformation(handle);
@@ -1338,17 +1347,20 @@ ReferenceHandle ReopenReference(HANDLE handle, ACCESS_MASK access) {
   return OpenReference(handle, L"", access);
 }
 
-int ReferenceFileDescriptor(ReferenceHandle handle, bool writing) {
-  const auto info = ReferenceInformation(handle.Get());
-  CheckReference(!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                     !ReferenceIsLink(handle.Get(), info.dwFileAttributes),
-                 IoErrorCode::Unsupported);
-  const int descriptor =
-      _open_osfhandle(reinterpret_cast<intptr_t>(handle.Get()), _O_BINARY | (writing ? _O_WRONLY : _O_RDONLY));
+int AdoptFileDescriptor(ReferenceHandle handle, int access) {
+  const int descriptor = _open_osfhandle(reinterpret_cast<intptr_t>(handle.Get()), _O_BINARY | access);
   CheckLocalIo(descriptor >= 0);
   // The CRT descriptor now owns the native handle.
   HUXERUI_DISCARD(handle.Release());
   return descriptor;
+}
+
+int ReferenceFileDescriptor(ReferenceHandle handle, int access) {
+  const auto info = ReferenceInformation(handle.Get());
+  CheckReference(!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                     !ReferenceIsLink(handle.Get(), info.dwFileAttributes),
+                 IoErrorCode::Unsupported);
+  return AdoptFileDescriptor(std::move(handle), access);
 }
 
 // Names are used only for metadata and root-containment checks, never to reopen, rename, or delete.
@@ -1394,22 +1406,116 @@ void RenameReference(HANDLE file, HANDLE parent, std::wstring_view name) {
   IO_STATUS_BLOCK io{};
   CheckReferenceStatus(set_information(file, &io, info, static_cast<ULONG>(size), rename_information));
 }
+
+int DescriptorAccess(FileAccessMode access) {
+  return access == FileAccessMode::ReadOnly ? _O_RDONLY
+         : access == FileAccessMode::WriteOnly ? _O_WRONLY : _O_RDWR;
+}
+
+DWORD NativeAccess(FileAccessMode access) {
+  return (access == FileAccessMode::WriteOnly ? 0 : GENERIC_READ) |
+         (access == FileAccessMode::ReadOnly ? 0 : GENERIC_WRITE);
+}
+#else
+int DescriptorAccess(FileAccessMode access) {
+  return access == FileAccessMode::ReadOnly ? O_RDONLY
+         : access == FileAccessMode::WriteOnly ? O_WRONLY : O_RDWR;
+}
 #endif
 
+void TruncateDescriptor(int descriptor) {
+#if defined(_WIN32)
+  const auto error = _chsize_s(descriptor, 0);
+  if (error != 0) {
+    throw std::system_error(error, std::generic_category());
+  }
+#elif defined(__ANDROID__) && !defined(__LP64__)
+  CheckLocalIo(ftruncate64(descriptor, 0) == 0);
+#else
+  CheckLocalIo(ftruncate(descriptor, 0) == 0);
+#endif
+}
+
 } // namespace
+
+ReferenceDescriptor OpenRandomAccessFileDescriptor(std::string_view path, FileAccessMode access, FileOpenMode mode) {
+  const auto native_path = PlatformPath(path);
+#if defined(_WIN32)
+  ReferenceHandle handle(CreateFileW(
+      native_path.c_str(), NativeAccess(access) | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      mode == FileOpenMode::CreateNew ? CREATE_NEW : OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  CheckReferenceIo(handle.Get() != INVALID_HANDLE_VALUE);
+  return ReferenceDescriptor(AdoptFileDescriptor(std::move(handle), DescriptorAccess(access)));
+#else
+  const int creation = mode == FileOpenMode::CreateNew ? O_CREAT | O_EXCL : 0;
+  // A FIFO must return from open so validation can reject it without waiting for another endpoint.
+  const int flags = DescriptorAccess(access) | creation | O_CLOEXEC | O_NONBLOCK;
+  ReferenceDescriptor descriptor(open(native_path.c_str(), flags, 0666));
+  CheckLocalIo(descriptor.Get() >= 0);
+  return descriptor;
+#endif
+}
+
+void PrepareRandomAccessDescriptor(int descriptor, FileAccessMode access, FileOpenMode mode) {
+  // A provider may supply a sequential endpoint or weaker access than requested. Validate the
+  // acquired descriptor before making any destructive change to it.
+#if defined(_WIN32)
+  HUXERUI_UNUSED(access);
+  const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(descriptor));
+  CheckReference(GetFileType(handle) == FILE_TYPE_DISK, IoErrorCode::Unsupported);
+  CheckReference(!(ReferenceInformation(handle).dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY), IoErrorCode::IsDirectory);
+#else
+  const auto info = GetDescriptorInfo(descriptor);
+  CheckReference(!S_ISDIR(info.st_mode), IoErrorCode::IsDirectory);
+  CheckReference(S_ISREG(info.st_mode), IoErrorCode::Unsupported);
+  const int flags = fcntl(descriptor, F_GETFL);
+  CheckLocalIo(flags >= 0);
+  const int actual_access = flags & O_ACCMODE;
+  CheckReference(access == FileAccessMode::WriteOnly || actual_access != O_WRONLY, IoErrorCode::PermissionDenied);
+  CheckReference(access == FileAccessMode::ReadOnly || actual_access != O_RDONLY, IoErrorCode::PermissionDenied);
+  // Some systems make pwrite append on an O_APPEND descriptor regardless of the requested offset.
+  CheckReference(access == FileAccessMode::ReadOnly || !(flags & O_APPEND), IoErrorCode::Unsupported);
+  // Providers can return a descriptor whose reported type does not establish seekability.
+#if defined(__ANDROID__) && !defined(__LP64__)
+  CheckReference(lseek64(descriptor, 0, SEEK_CUR) >= 0, IoErrorCode::Unsupported);
+#else
+  CheckReference(lseek(descriptor, 0, SEEK_CUR) >= 0, IoErrorCode::Unsupported);
+#endif
+#endif
+  if (mode == FileOpenMode::TruncateExisting) {
+    TruncateDescriptor(descriptor);
+  }
+}
+
+std::uint64_t DescriptorSize(int descriptor) {
+#if defined(_WIN32)
+  LARGE_INTEGER size{};
+  CheckReferenceIo(GetFileSizeEx(reinterpret_cast<HANDLE>(_get_osfhandle(descriptor)), &size));
+  return static_cast<std::uint64_t>(size.QuadPart);
+#else
+  return static_cast<std::uint64_t>(GetDescriptorInfo(descriptor).st_size);
+#endif
+}
 
 // Path-backed grants and application-local copy destinations share this implementation. Apple access
 // owners are retained by coordination_; directory children share anchor_ and the original write limit.
 // AsFile exposes only the stored path; reference I/O still uses coordination and grant-relative access.
-class LocalFileReferenceState final : public FileReferenceState,
-                                      public std::enable_shared_from_this<LocalFileReferenceState> {
+class LocalFileReferenceBackend final : public FileReferenceBackend,
+                                        public std::enable_shared_from_this<LocalFileReferenceBackend> {
 public:
-  LocalFileReferenceState(File file, bool writable, FileReferenceCoordination coordination = {});
-  ~LocalFileReferenceState() override;
+  LocalFileReferenceBackend(File file, bool writable, FileReferenceCoordination coordination = {});
+  ~LocalFileReferenceBackend() override;
   [[nodiscard]] FileReference Reference(std::optional<std::string> content_type = {});
   [[nodiscard]] FileReferenceMetadata Metadata(std::string* entry_key = nullptr, int parent_descriptor = -1) const;
   [[nodiscard]] std::string EntryKey() const override;
   [[nodiscard]] std::optional<File> AsFile() const override;
+  IoResult<InputStream> OpenReadSync() override;
+  IoResult<OutputStream> OpenWriteSync() override;
+  IoResult<RandomAccessStream> OpenRandomAccessSync(FileAccessMode access, FileOpenMode mode) override;
+  IoResult<Bytes> ReadBytesSync() override;
+  IoResult<std::vector<FileReference>> ListChildrenSync() override;
+  IoResult<FileReference> CreateDirectorySync(std::string_view name) override;
   std::function<void()> OpenRead(FileReferenceInputStreamCompletion completion) override;
   std::function<void()> OpenWrite(FileReferenceOutputStreamCompletion completion) override;
   std::function<void()> ReadBytes(FileReferenceBytesCompletion completion) override;
@@ -1419,7 +1525,7 @@ public:
   std::function<void()> ListChildren(FileReferenceCompletion<std::vector<FileReference>> completion) override;
   std::function<void()> FindChild(std::string name,
                                   FileReferenceCompletion<std::optional<FileReference>> completion) override;
-  std::function<void()> CreateDirectory(std::string name, std::optional<FileReference>,
+  std::function<void()> CreateDirectory(std::string name,
                                         FileReferenceCompletion<FileReferenceWriteResult> completion) override;
   std::function<void()> CopyFileFrom(FileReferenceSource source, std::string name, bool overwrite,
                                      std::optional<FileReference> existing,
@@ -1428,10 +1534,18 @@ public:
                                              FileReferenceCompletion<bool> completion) override;
 
 private:
-  friend Task<IoResult<std::shared_ptr<FileReferenceState>>> MakeLocalDirectoryState(File directory);
-  LocalFileReferenceState(const LocalFileReferenceState& parent, std::string name, int parent_descriptor);
-  [[nodiscard]] std::shared_ptr<LocalFileReferenceState> ChildState(std::string name, int parent_descriptor = -1);
+  friend Task<IoResult<std::shared_ptr<FileReferenceBackend>>> MakeLocalDirectoryBackend(File directory);
+  LocalFileReferenceBackend(const LocalFileReferenceBackend& parent, std::string name, int parent_descriptor);
+  [[nodiscard]] std::shared_ptr<LocalFileReferenceBackend> ChildBackend(std::string name, int parent_descriptor = -1);
   void Coordinate(const File& item, bool writing, const std::function<void()>& operation);
+
+  [[nodiscard]] InputStream OpenInput(const std::atomic<bool>& canceled);
+  [[nodiscard]] std::shared_ptr<ReferenceOutputStreamBackend> OpenOutput(const std::atomic<bool>& canceled);
+  [[nodiscard]] std::vector<FileReference> ReadChildren(const std::atomic<bool>& canceled);
+  [[nodiscard]] FileReferenceWriteResult CreateChildDirectory(const std::string& name,
+                                                              const std::atomic<bool>& canceled);
+  [[nodiscard]] Bytes ReadAll(const std::atomic<bool>& canceled);
+  [[nodiscard]] ReferenceStreamCoordination StreamCoordination(bool writing);
 
   struct Anchor;
   File file_;
@@ -1446,12 +1560,12 @@ private:
 #else
   [[nodiscard]] int OpenDirectory() const;
 #endif
-  [[nodiscard]] int OpenFile(bool writing = false) const;
-  [[nodiscard]] FileReferenceWriteResult CopyFromLocal(LocalFileReferenceState& source, const std::string& name,
+  [[nodiscard]] int OpenFile(FileAccessMode access = FileAccessMode::ReadOnly) const;
+  [[nodiscard]] FileReferenceWriteResult CopyFromLocal(LocalFileReferenceBackend& source, const std::string& name,
                                                        bool overwrite, const std::atomic<bool>& canceled);
 };
 
-struct LocalFileReferenceState::Anchor {
+struct LocalFileReferenceBackend::Anchor {
 #if defined(_WIN32)
   explicit Anchor(const File& file)
       : handle(CreateFileW(PlatformPath(file.Path()).c_str(), FILE_READ_ATTRIBUTES,
@@ -1471,7 +1585,7 @@ struct LocalFileReferenceState::Anchor {
 #endif
 };
 
-LocalFileReferenceState::LocalFileReferenceState(File file, bool writable, FileReferenceCoordination coordination)
+LocalFileReferenceBackend::LocalFileReferenceBackend(File file, bool writable, FileReferenceCoordination coordination)
     : file_(std::move(file)), coordination_(std::move(coordination)), writable_(writable) {
   const fs::path canonical = fs::canonical(PlatformPath(file_.Path()));
   file_ = File(PublicPath(canonical));
@@ -1491,68 +1605,101 @@ LocalFileReferenceState::LocalFileReferenceState(File file, bool writable, FileR
   metadata_ = Metadata(&entry_key_);
 }
 
-LocalFileReferenceState::LocalFileReferenceState(const LocalFileReferenceState& parent, std::string name,
-                                                 int parent_descriptor)
+LocalFileReferenceBackend::LocalFileReferenceBackend(const LocalFileReferenceBackend& parent, std::string name,
+                                                     int parent_descriptor)
     : file_(parent.file_.Child(name)), coordination_(parent.coordination_), writable_(parent.writable_),
       anchor_(parent.anchor_), relative_(parent.relative_.empty() ? name : parent.relative_ + "/" + name) {
   metadata_ = Metadata(&entry_key_, parent_descriptor);
 }
 
-LocalFileReferenceState::~LocalFileReferenceState() = default;
-std::string LocalFileReferenceState::EntryKey() const {
+LocalFileReferenceBackend::~LocalFileReferenceBackend() = default;
+std::string LocalFileReferenceBackend::EntryKey() const {
   return entry_key_;
 }
-std::optional<File> LocalFileReferenceState::AsFile() const {
+std::optional<File> LocalFileReferenceBackend::AsFile() const {
   return file_;
 }
-std::function<void()> LocalFileReferenceState::OpenRead(FileReferenceInputStreamCompletion completion) {
-  return RunLocalReference<std::shared_ptr<AsyncInputStreamState>>(
+ReferenceStreamCoordination LocalFileReferenceBackend::StreamCoordination(bool writing) {
+  return [self = shared_from_this(), writing](const std::function<void()>& operation) {
+    self->Coordinate(self->file_, writing, operation);
+  };
+}
+
+InputStream LocalFileReferenceBackend::OpenInput(const std::atomic<bool>& canceled) {
+  std::shared_ptr<InputStreamBackend> stream;
+  Coordinate(file_, false, [&] {
+    const auto type = Metadata().type;
+    CheckReference(type == FileType::File, type == FileType::Directory ? IoErrorCode::IsDirectory
+                                                                      : IoErrorCode::Unsupported);
+    CheckReference(!canceled.load(), IoErrorCode::Io);
+    ReferenceDescriptor input(OpenFile());
+    stream = std::make_shared<ReferenceInputStreamBackend>(std::move(input), StreamCoordination(false));
+  });
+  CheckReference(stream != nullptr, IoErrorCode::Io);
+  return StreamAccess::MakeInputStream(std::move(stream));
+}
+
+std::shared_ptr<ReferenceOutputStreamBackend> LocalFileReferenceBackend::OpenOutput(const std::atomic<bool>& canceled) {
+  std::shared_ptr<ReferenceOutputStreamBackend> stream;
+  Coordinate(file_, true, [&] {
+    const auto type = Metadata().type;
+    CheckReference(type == FileType::File, type == FileType::Directory ? IoErrorCode::IsDirectory
+                                                                      : IoErrorCode::Unsupported);
+    CheckReference(writable_, IoErrorCode::PermissionDenied);
+    CheckReference(!canceled.load(), IoErrorCode::Io);
+    ReferenceDescriptor output(OpenFile(FileAccessMode::WriteOnly));
+    TruncateDescriptor(output.Get());
+    stream = std::make_shared<ReferenceOutputStreamBackend>(
+        std::move(output), StreamCoordination(true), RequiresPersistence(file_.Path()));
+  });
+  CheckReference(stream != nullptr, IoErrorCode::Io);
+  return stream;
+}
+
+IoResult<InputStream> LocalFileReferenceBackend::OpenReadSync() {
+  return LocalReferenceResult<InputStream>([&] { return OpenInput(never_canceled); });
+}
+
+IoResult<OutputStream> LocalFileReferenceBackend::OpenWriteSync() {
+  if (RequiresPersistence(file_.Path())) {
+    return Failure<OutputStream>(IoErrorCode::Unsupported,
+                                 "HuxerUI persistent Web files require asynchronous finalization");
+  }
+  return LocalReferenceResult<OutputStream>([&] {
+    return StreamAccess::MakeOutputStream(OpenOutput(never_canceled));
+  });
+}
+
+IoResult<RandomAccessStream> LocalFileReferenceBackend::OpenRandomAccessSync(FileAccessMode access, FileOpenMode mode) {
+  return LocalReferenceResult<RandomAccessStream>([&] {
+    const bool writing = access != FileAccessMode::ReadOnly;
+    CheckReference(!writing || !RequiresPersistence(file_.Path()), IoErrorCode::Unsupported);
+    std::shared_ptr<RandomAccessStreamImpl> stream;
+    Coordinate(file_, writing, [&] {
+      CheckReference(!writing || writable_, IoErrorCode::PermissionDenied);
+      ReferenceDescriptor descriptor(OpenFile(access));
+      stream = MakeRandomAccessStreamImpl(std::move(descriptor), access, mode, StreamCoordination(writing));
+    });
+    CheckReference(stream != nullptr, IoErrorCode::Io);
+    return StreamAccess::MakeRandomAccessStream(std::move(stream));
+  });
+}
+
+std::function<void()> LocalFileReferenceBackend::OpenRead(FileReferenceInputStreamCompletion completion) {
+  return RunLocalReference<std::shared_ptr<AsyncInputStreamBackend>>(
       [self = shared_from_this()](const auto& canceled) {
-        std::shared_ptr<AsyncInputStreamState> stream;
-        self->Coordinate(self->file_, false, [&] {
-          const auto metadata = self->Metadata();
-          CheckReference(metadata.type == FileType::File,
-                         metadata.type == FileType::Directory ? IoErrorCode::IsDirectory : IoErrorCode::Unsupported);
-          CheckReference(!canceled.load(), IoErrorCode::Io);
-          auto input = std::make_shared<ReferenceDescriptor>(self->OpenFile());
-          auto coordinate = [self](const std::function<void()>& operation) {
-            self->Coordinate(self->file_, false, operation);
-          };
-          stream = std::make_shared<ReferenceInputStreamState>(std::move(input), std::move(coordinate));
-        });
-        CheckReference(stream != nullptr, IoErrorCode::Io);
-        return stream;
+        return MakeWorkerAsyncInputBackend(self->OpenInput(canceled));
       },
       std::move(completion));
 }
-std::function<void()> LocalFileReferenceState::OpenWrite(FileReferenceOutputStreamCompletion completion) {
-  return RunLocalReference<std::shared_ptr<AsyncOutputStreamState>>(
-      [self = shared_from_this()](const auto& canceled) {
-        std::shared_ptr<AsyncOutputStreamState> stream;
-        self->Coordinate(self->file_, true, [&] {
-          const auto metadata = self->Metadata();
-          CheckReference(metadata.type == FileType::File,
-                         metadata.type == FileType::Directory ? IoErrorCode::IsDirectory : IoErrorCode::Unsupported);
-          CheckReference(self->writable_, IoErrorCode::PermissionDenied);
-          CheckReference(!canceled.load(), IoErrorCode::Io);
-          auto output = std::make_shared<ReferenceDescriptor>(self->OpenFile(true));
-#if defined(_WIN32)
-          CheckLocalIo(_chsize_s(output->Get(), 0) == 0);
-#else
-          CheckLocalIo(ftruncate(output->Get(), 0) == 0);
-#endif
-          auto coordinate = [self](const std::function<void()>& operation) {
-            self->Coordinate(self->file_, true, operation);
-          };
-          stream = std::make_shared<ReferenceOutputStreamState>(std::move(output), std::move(coordinate),
-                                                                RequiresPersistence(self->file_.Path()));
-        });
-        CheckReference(stream != nullptr, IoErrorCode::Io);
-        return stream;
-      },
+
+std::function<void()> LocalFileReferenceBackend::OpenWrite(FileReferenceOutputStreamCompletion completion) {
+  return RunLocalReference<std::shared_ptr<AsyncOutputStreamBackend>>(
+      [self = shared_from_this()](const auto& canceled) { return self->OpenOutput(canceled); },
       std::move(completion));
 }
-void LocalFileReferenceState::Coordinate(const File& item, bool writing, const std::function<void()>& operation) {
+
+void LocalFileReferenceBackend::Coordinate(const File& item, bool writing, const std::function<void()>& operation) {
   if (coordination_) {
     coordination_(writing ? nullptr : &item, writing ? &item : nullptr, operation);
   } else {
@@ -1561,7 +1708,7 @@ void LocalFileReferenceState::Coordinate(const File& item, bool writing, const s
 }
 
 #if defined(_WIN32)
-ReferenceHandle LocalFileReferenceState::OpenNative(ACCESS_MASK access) const {
+ReferenceHandle LocalFileReferenceBackend::OpenNative(ACCESS_MASK access) const {
   ReferenceHandle current = ReopenReference(anchor_->handle.Get(),
       relative_.empty() ? access : FILE_READ_ATTRIBUTES | FILE_TRAVERSE);
   const fs::path relative = PlatformPath(relative_);
@@ -1573,7 +1720,7 @@ ReferenceHandle LocalFileReferenceState::OpenNative(ACCESS_MASK access) const {
   return current;
 }
 #else
-int LocalFileReferenceState::OpenDirectory() const {
+int LocalFileReferenceBackend::OpenDirectory() const {
   // Open a fresh directory description rather than dup() the anchor: duplicated descriptors share
   // an enumeration offset and would make repeated or concurrent listings consume each other's cursor.
   ReferenceDescriptor current(openat(anchor_->descriptor.Get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
@@ -1592,9 +1739,9 @@ int LocalFileReferenceState::OpenDirectory() const {
 }
 #endif
 
-int LocalFileReferenceState::OpenFile(bool writing) const {
+int LocalFileReferenceBackend::OpenFile(FileAccessMode access) const {
 #if defined(_WIN32)
-  return ReferenceFileDescriptor(OpenNative(writing ? GENERIC_WRITE : GENERIC_READ), writing);
+  return ReferenceFileDescriptor(OpenNative(NativeAccess(access)), DescriptorAccess(access));
 #else
   CheckReference(!relative_.empty(), IoErrorCode::IsDirectory);
   ReferenceDescriptor parent(anchor_ ? dup(anchor_->descriptor.Get()) : -1);
@@ -1608,19 +1755,16 @@ int LocalFileReferenceState::OpenFile(bool writing) const {
       parent = std::move(next);
     }
   }
-  const int result = openat(anchor_ ? parent.Get() : AT_FDCWD, anchor_ ? relative.filename().c_str() : relative.c_str(),
-                            (writing ? O_WRONLY : O_RDONLY) | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
-  CheckReference(result >= 0, errno == ELOOP ? IoErrorCode::Unsupported : IoErrorCategory(StreamError()));
-  struct stat info {};
-  if (fstat(result, &info) != 0 || !S_ISREG(info.st_mode)) {
-    close(result);
-    throw ReferenceFailure(IoErrorCode::Unsupported);
-  }
-  return result;
+  ReferenceDescriptor descriptor(openat(anchor_ ? parent.Get() : AT_FDCWD,
+                                       anchor_ ? relative.filename().c_str() : relative.c_str(),
+                                       DescriptorAccess(access) | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+  CheckReference(descriptor.Get() >= 0, errno == ELOOP ? IoErrorCode::Unsupported : IoErrorCategory(StreamError()));
+  CheckReference(S_ISREG(GetDescriptorInfo(descriptor.Get()).st_mode), IoErrorCode::Unsupported);
+  return descriptor.Release();
 #endif
 }
 
-FileReferenceMetadata LocalFileReferenceState::Metadata(std::string* entry_key, int parent_descriptor) const {
+FileReferenceMetadata LocalFileReferenceBackend::Metadata(std::string* entry_key, int parent_descriptor) const {
   FileReferenceMetadata result{.name = file_.Name()};
   if (result.name.empty()) {
     result.name = "/";
@@ -1705,92 +1849,100 @@ FileReferenceMetadata LocalFileReferenceState::Metadata(std::string* entry_key, 
   return result;
 }
 
-FileReference LocalFileReferenceState::Reference(std::optional<std::string> content_type) {
+FileReference LocalFileReferenceBackend::Reference(std::optional<std::string> content_type) {
   auto metadata = metadata_;
   if (metadata.type == FileType::File) {
     metadata.content_type = std::move(content_type);
   }
   return MakeFileReference(std::move(metadata), shared_from_this());
 }
-std::shared_ptr<LocalFileReferenceState> LocalFileReferenceState::ChildState(std::string name, int parent_descriptor) {
+std::shared_ptr<LocalFileReferenceBackend>
+LocalFileReferenceBackend::ChildBackend(std::string name, int parent_descriptor) {
   CheckReferenceChildName(name);
-  return std::shared_ptr<LocalFileReferenceState>(
-      new LocalFileReferenceState(*this, std::move(name), parent_descriptor));
+  return std::shared_ptr<LocalFileReferenceBackend>(
+      new LocalFileReferenceBackend(*this, std::move(name), parent_descriptor));
+}
+
+std::vector<FileReference> LocalFileReferenceBackend::ReadChildren(const std::atomic<bool>& canceled) {
+  std::vector<FileReference> children;
+  Coordinate(file_, false, [&] {
+    CheckReference(Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
+#if defined(_WIN32)
+    ReferenceHandle directory = OpenNative(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES);
+    CheckReferenceDirectory(directory.Get());
+    alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
+    while (true) {
+      CheckReference(!canceled.load(), IoErrorCode::Io);
+      if (!GetFileInformationByHandleEx(directory.Get(), FileIdBothDirectoryInfo, buffer.data(),
+                                        static_cast<DWORD>(buffer.size()))) {
+        if (GetLastError() == ERROR_NO_MORE_FILES) { break; }
+        CheckReferenceIo(false);
+      }
+      std::size_t offset = 0;
+      while (true) {
+        CheckReference(!canceled.load(), IoErrorCode::Io);
+        constexpr std::size_t header_size = offsetof(FILE_ID_BOTH_DIR_INFO, FileName);
+        CheckReference(offset <= buffer.size() - header_size, IoErrorCode::Io);
+        const auto* entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(buffer.data() + offset);
+        CheckReference(entry->FileNameLength % sizeof(wchar_t) == 0 &&
+                           entry->FileNameLength <= buffer.size() - offset - header_size,
+                       IoErrorCode::Io);
+        const std::wstring_view native_name(entry->FileName, entry->FileNameLength / sizeof(wchar_t));
+        if (native_name != L"." && native_name != L"..") {
+          const std::string name = PublicPath(fs::path(native_name));
+          CheckReferenceChildName(name);
+          children.push_back(ChildBackend(name)->Reference());
+        }
+        if (entry->NextEntryOffset == 0) { break; }
+        CheckReference(entry->NextEntryOffset >= header_size + entry->FileNameLength &&
+                           entry->NextEntryOffset % alignof(FILE_ID_BOTH_DIR_INFO) == 0 &&
+                           entry->NextEntryOffset <= buffer.size() - offset,
+                       IoErrorCode::Io);
+        offset += entry->NextEntryOffset;
+      }
+    }
+#else
+    const int descriptor = OpenDirectory();
+    DIR* raw = fdopendir(descriptor);
+    if (!raw) {
+      close(descriptor);
+      CheckLocalIo(false);
+    }
+    std::unique_ptr<DIR, decltype(&closedir)> directory(raw, closedir);
+    while (true) {
+      CheckReference(!canceled.load(), IoErrorCode::Io);
+      errno = 0;
+      const dirent* entry = readdir(directory.get());
+      if (!entry) {
+        CheckLocalIo(errno == 0);
+        break;
+      }
+      const std::string name(entry->d_name);
+      if (name == "." || name == "..") {
+        continue;
+      }
+      CheckReferenceChildName(name);
+      children.push_back(ChildBackend(name, dirfd(directory.get()))->Reference());
+    }
+#endif
+  });
+  return children;
+}
+
+IoResult<std::vector<FileReference>> LocalFileReferenceBackend::ListChildrenSync() {
+  return LocalReferenceResult<std::vector<FileReference>>([&] { return ReadChildren(never_canceled); });
 }
 
 std::function<void()>
-LocalFileReferenceState::ListChildren(FileReferenceCompletion<std::vector<FileReference>> completion) {
+LocalFileReferenceBackend::ListChildren(FileReferenceCompletion<std::vector<FileReference>> completion) {
   return RunLocalReference<std::vector<FileReference>>(
-      [self = shared_from_this()](const auto& canceled) {
-        std::vector<FileReference> children;
-        self->Coordinate(self->file_, false, [&] {
-          CheckReference(self->Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
-#if defined(_WIN32)
-          ReferenceHandle directory = self->OpenNative(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES);
-          CheckReferenceDirectory(directory.Get());
-          alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
-          while (true) {
-            CheckReference(!canceled.load(), IoErrorCode::Io);
-            if (!GetFileInformationByHandleEx(directory.Get(), FileIdBothDirectoryInfo, buffer.data(),
-                                              static_cast<DWORD>(buffer.size()))) {
-              if (GetLastError() == ERROR_NO_MORE_FILES) { break; }
-              CheckReferenceIo(false);
-            }
-            std::size_t offset = 0;
-            while (true) {
-              CheckReference(!canceled.load(), IoErrorCode::Io);
-              constexpr std::size_t header_size = offsetof(FILE_ID_BOTH_DIR_INFO, FileName);
-              CheckReference(offset <= buffer.size() - header_size, IoErrorCode::Io);
-              const auto* entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(buffer.data() + offset);
-              CheckReference(entry->FileNameLength % sizeof(wchar_t) == 0 &&
-                                 entry->FileNameLength <= buffer.size() - offset - header_size,
-                             IoErrorCode::Io);
-              const std::wstring_view native_name(entry->FileName, entry->FileNameLength / sizeof(wchar_t));
-              if (native_name != L"." && native_name != L"..") {
-                const std::string name = PublicPath(fs::path(native_name));
-                CheckReferenceChildName(name);
-                children.push_back(self->ChildState(name)->Reference());
-              }
-              if (entry->NextEntryOffset == 0) { break; }
-              CheckReference(entry->NextEntryOffset >= header_size + entry->FileNameLength &&
-                                 entry->NextEntryOffset % alignof(FILE_ID_BOTH_DIR_INFO) == 0 &&
-                                 entry->NextEntryOffset <= buffer.size() - offset,
-                             IoErrorCode::Io);
-              offset += entry->NextEntryOffset;
-            }
-          }
-#else
-      const int descriptor = self->OpenDirectory();
-      DIR* raw = fdopendir(descriptor);
-      if (!raw) {
-        close(descriptor);
-        CheckLocalIo(false);
-      }
-      std::unique_ptr<DIR, decltype(&closedir)> directory(raw, closedir);
-      while (true) {
-        CheckReference(!canceled.load(), IoErrorCode::Io);
-        errno = 0;
-        const dirent* entry = readdir(directory.get());
-        if (!entry) {
-          CheckLocalIo(errno == 0);
-          break;
-        }
-        const std::string name(entry->d_name);
-        if (name == "." || name == "..") {
-          continue;
-        }
-        CheckReferenceChildName(name);
-        children.push_back(self->ChildState(name, dirfd(directory.get()))->Reference());
-      }
-#endif
-        });
-        return children;
-      },
+      [self = shared_from_this()](const auto& canceled) { return self->ReadChildren(canceled); },
       std::move(completion));
 }
 
 std::function<void()>
-LocalFileReferenceState::FindChild(std::string name, FileReferenceCompletion<std::optional<FileReference>> completion) {
+LocalFileReferenceBackend::FindChild(std::string name,
+                                     FileReferenceCompletion<std::optional<FileReference>> completion) {
   return RunLocalReference<std::optional<FileReference>>(
       [self = shared_from_this(), name = std::move(name)](const auto&) {
         std::optional<FileReference> result;
@@ -1798,7 +1950,7 @@ LocalFileReferenceState::FindChild(std::string name, FileReferenceCompletion<std
           CheckReferenceChildName(name);
           CheckReference(self->Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
           try {
-            result = self->ChildState(name)->Reference();
+            result = self->ChildBackend(name)->Reference();
           } catch (const ReferenceFailure& error) {
             if (error.code != IoErrorCode::NotFound) {
               throw;
@@ -1810,59 +1962,74 @@ LocalFileReferenceState::FindChild(std::string name, FileReferenceCompletion<std
       std::move(completion));
 }
 
+FileReferenceWriteResult LocalFileReferenceBackend::CreateChildDirectory(const std::string& name,
+                                                                         const std::atomic<bool>& canceled) {
+  std::optional<FileReferenceWriteResult> result;
+  Coordinate(file_, true, [&] {
+    CheckReference(Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
+    CheckReference(writable_, IoErrorCode::PermissionDenied);
+    CheckReferenceChildName(name);
+    CheckReference(!canceled.load(), IoErrorCode::Io);
+    bool created = false;
+#if defined(_WIN32)
+    ReferenceHandle directory = OpenNative(FILE_READ_ATTRIBUTES | FILE_TRAVERSE);
+    try {
+      auto child = OpenReferenceChild(directory.Get(), PlatformPath(name).native(), FILE_READ_ATTRIBUTES,
+                                       FILE_OPEN_IF, FILE_DIRECTORY_FILE, &created);
+      CheckReferenceDirectory(child.Get());
+    } catch (const ReferenceFailure& error) {
+      throw ReferenceFailure(error.code == IoErrorCode::NotDirectory ? IoErrorCode::AlreadyExists : error.code);
+    }
+#else
+    ReferenceDescriptor directory(OpenDirectory());
+    created = mkdirat(directory.Get(), name.c_str(), 0777) == 0;
+    if (!created && errno != EEXIST) { CheckLocalIo(false); }
+#endif
+    FileReference reference = ChildBackend(name)->Reference();
+    CheckReference(reference.Type() == FileType::Directory, IoErrorCode::AlreadyExists);
+    CheckReference(reference.Name() == name, IoErrorCode::Unsupported);
+    result.emplace(std::move(reference), 0, created);
+  });
+  CheckReference(result.has_value(), IoErrorCode::Io);
+  return std::move(*result);
+}
+
+IoResult<FileReference> LocalFileReferenceBackend::CreateDirectorySync(std::string_view name) {
+  if (RequiresPersistence(file_.Path())) {
+    return Failure<FileReference>(IoErrorCode::Unsupported,
+                                  "HuxerUI persistent Web files require asynchronous finalization");
+  }
+  return LocalReferenceResult<FileReference>([&] {
+    return CreateChildDirectory(std::string(name), never_canceled).reference;
+  });
+}
+
 std::function<void()>
-LocalFileReferenceState::CreateDirectory(std::string name, std::optional<FileReference>,
-                                         FileReferenceCompletion<FileReferenceWriteResult> completion) {
+LocalFileReferenceBackend::CreateDirectory(std::string name,
+                                           FileReferenceCompletion<FileReferenceWriteResult> completion) {
   return RunLocalReference<FileReferenceWriteResult>(
       [self = shared_from_this(), name = std::move(name)](const auto& canceled) {
-        std::optional<FileReferenceWriteResult> result;
-        self->Coordinate(self->file_, true, [&] {
-          CheckReference(self->Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
-          CheckReference(self->writable_, IoErrorCode::PermissionDenied);
-          CheckReferenceChildName(name);
-          CheckReference(!canceled.load(), IoErrorCode::Io);
-          bool created = false;
-#if defined(_WIN32)
-          ReferenceHandle directory = self->OpenNative(FILE_READ_ATTRIBUTES | FILE_TRAVERSE);
-          try {
-            auto child = OpenReferenceChild(directory.Get(), PlatformPath(name).native(), FILE_READ_ATTRIBUTES,
-                                             FILE_OPEN_IF, FILE_DIRECTORY_FILE, &created);
-            CheckReferenceDirectory(child.Get());
-          } catch (const ReferenceFailure& error) {
-            throw ReferenceFailure(error.code == IoErrorCode::NotDirectory ? IoErrorCode::AlreadyExists : error.code);
-          }
-#else
-      ReferenceDescriptor directory(self->OpenDirectory());
-      created = mkdirat(directory.Get(), name.c_str(), 0777) == 0;
-      if (!created && errno != EEXIST) { CheckLocalIo(false); }
-#endif
-          FileReference reference = self->ChildState(name)->Reference();
-          CheckReference(reference.Type() == FileType::Directory, IoErrorCode::AlreadyExists);
-          CheckReference(reference.Name() == name, IoErrorCode::Unsupported);
-          result.emplace(std::move(reference), 0, created);
-        });
-        CheckReference(result.has_value(), IoErrorCode::Io);
-        return std::move(*result);
+        return self->CreateChildDirectory(name, canceled);
       },
       std::move(completion), RequiresPersistence(file_.Path()));
 }
 
-std::function<void()> LocalFileReferenceState::CheckCopyDestination(FileReferenceSource destination,
-                                                                    FileReferenceCompletion<bool> completion) {
+std::function<void()> LocalFileReferenceBackend::CheckCopyDestination(FileReferenceSource destination,
+                                                                      FileReferenceCompletion<bool> completion) {
   return RunLocalReference<bool>(
       [self = shared_from_this(), destination = std::move(destination)](const auto&) {
         std::optional<File> target;
-        std::shared_ptr<LocalFileReferenceState> local;
+        std::shared_ptr<LocalFileReferenceBackend> local;
         if (const auto* file = std::get_if<File>(&destination)) {
           target = *file;
-        } else if ((local = std::dynamic_pointer_cast<LocalFileReferenceState>(std::get<1>(destination)))) {
+        } else if ((local = std::dynamic_pointer_cast<LocalFileReferenceBackend>(std::get<1>(destination)))) {
           target = local->file_;
           CheckReference(local->Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
         }
         CheckReference(target.has_value(), IoErrorCode::Unsupported);
         CheckReference(self->Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
 #if defined(_WIN32)
-        if (!local) { local = std::make_shared<LocalFileReferenceState>(*target, false); }
+        if (!local) { local = std::make_shared<LocalFileReferenceBackend>(*target, false); }
         ReferenceHandle source_handle = self->OpenNative();
         ReferenceHandle target_handle = local->OpenNative();
         CheckReferenceDirectory(source_handle.Get());
@@ -1907,9 +2074,9 @@ std::function<void()> LocalFileReferenceState::CheckCopyDestination(FileReferenc
       std::move(completion));
 }
 
-FileReferenceWriteResult LocalFileReferenceState::CopyFromLocal(LocalFileReferenceState& source,
-                                                                const std::string& name, bool overwrite,
-                                                                const std::atomic<bool>& canceled) {
+FileReferenceWriteResult LocalFileReferenceBackend::CopyFromLocal(LocalFileReferenceBackend& source,
+                                                                  const std::string& name, bool overwrite,
+                                                                  const std::atomic<bool>& canceled) {
   CheckReference(writable_, IoErrorCode::PermissionDenied);
   CheckReferenceChildName(name);
   CheckReference(Metadata().type == FileType::Directory, IoErrorCode::NotDirectory);
@@ -1918,9 +2085,9 @@ FileReferenceWriteResult LocalFileReferenceState::CopyFromLocal(LocalFileReferen
                  source_metadata.type == FileType::Directory ? IoErrorCode::IsDirectory : IoErrorCode::Unsupported);
   std::uint64_t bytes = 0;
   bool existed = false;
-  std::shared_ptr<LocalFileReferenceState> existing;
+  std::shared_ptr<LocalFileReferenceBackend> existing;
   try {
-    existing = ChildState(name);
+    existing = ChildBackend(name);
     existed = true;
   } catch (const ReferenceFailure& error) {
     if (error.code != IoErrorCode::NotFound) {
@@ -1950,7 +2117,7 @@ FileReferenceWriteResult LocalFileReferenceState::CopyFromLocal(LocalFileReferen
       HANDLE duplicate = INVALID_HANDLE_VALUE;
       CheckReferenceIo(DuplicateHandle(GetCurrentProcess(), file.Get(), GetCurrentProcess(), &duplicate,
                                         0, FALSE, DUPLICATE_SAME_ACCESS));
-      ReferenceDescriptor output(ReferenceFileDescriptor(ReferenceHandle(duplicate), true));
+      ReferenceDescriptor output(ReferenceFileDescriptor(ReferenceHandle(duplicate), _O_WRONLY));
       bytes = TransferReference(input.Get(), output.Get(), canceled);
       CheckLocalIo(output.Close());
       CheckReference(!canceled.load(), IoErrorCode::Io);
@@ -1997,17 +2164,17 @@ FileReferenceWriteResult LocalFileReferenceState::CopyFromLocal(LocalFileReferen
   } else {
     transfer();
   }
-  auto reference = ChildState(name)->Reference();
+  auto reference = ChildBackend(name)->Reference();
   CheckReference(reference.Name() == name, IoErrorCode::Unsupported);
   return {std::move(reference), bytes, !existed};
 }
 
 std::function<void()>
-LocalFileReferenceState::CopyFileFrom(FileReferenceSource source, std::string name, bool overwrite,
-                                      std::optional<FileReference> existing,
-                                      FileReferenceCompletion<FileReferenceWriteResult> completion) {
-  if (const auto* input = std::get_if<std::shared_ptr<FileReferenceState>>(&source);
-      input && !std::dynamic_pointer_cast<LocalFileReferenceState>(*input)) {
+LocalFileReferenceBackend::CopyFileFrom(FileReferenceSource source, std::string name, bool overwrite,
+                                        std::optional<FileReference> existing,
+                                        FileReferenceCompletion<FileReferenceWriteResult> completion) {
+  if (const auto* input = std::get_if<std::shared_ptr<FileReferenceBackend>>(&source);
+      input && !std::dynamic_pointer_cast<LocalFileReferenceBackend>(*input)) {
 #if defined(_WIN32)
     // Windows references use native file objects. A path-only provider import cannot preserve this
     // destination's retained authority, so never fall back to handing it a reconstructed grant path.
@@ -2051,7 +2218,7 @@ LocalFileReferenceState::CopyFileFrom(FileReferenceSource source, std::string na
                 CheckReference(!canceled->load(), IoErrorCode::Io);
                 std::optional<FileReferenceWriteResult> result;
                 self->Coordinate(self->file_, false, [&] {
-                  auto reference = self->ChildState(name)->Reference();
+                  auto reference = self->ChildBackend(name)->Reference();
                   CheckReference(reference.Type() == FileType::File && reference.Name() == name,
                                  IoErrorCode::Unsupported);
                   result.emplace(std::move(reference), bytes, created);
@@ -2075,14 +2242,14 @@ LocalFileReferenceState::CopyFileFrom(FileReferenceSource source, std::string na
   }
   return RunLocalReference<FileReferenceWriteResult>(
       [self = shared_from_this(), source = std::move(source), name = std::move(name), overwrite](const auto& canceled) {
-        std::shared_ptr<LocalFileReferenceState> input;
+        std::shared_ptr<LocalFileReferenceBackend> input;
         if (const auto* file = std::get_if<File>(&source)) {
           const auto status = fs::symlink_status(PlatformPath(file->Path()));
           CheckReference(fs::is_regular_file(status),
                          fs::is_directory(status) ? IoErrorCode::IsDirectory : IoErrorCode::Unsupported);
-          input = std::make_shared<LocalFileReferenceState>(*file, false);
+          input = std::make_shared<LocalFileReferenceBackend>(*file, false);
         } else {
-          input = std::dynamic_pointer_cast<LocalFileReferenceState>(std::get<1>(source));
+          input = std::dynamic_pointer_cast<LocalFileReferenceBackend>(std::get<1>(source));
         }
         CheckReference(input != nullptr, IoErrorCode::Unsupported);
         return self->CopyFromLocal(*input, name, overwrite, canceled);
@@ -2090,62 +2257,60 @@ LocalFileReferenceState::CopyFileFrom(FileReferenceSource source, std::string na
       std::move(completion), RequiresPersistence(file_.Path()));
 }
 
-std::function<void()> LocalFileReferenceState::ImportTo(File destination, bool overwrite,
-                                                        FileReferenceCompletion<std::uint64_t> completion) {
+std::function<void()> LocalFileReferenceBackend::ImportTo(File destination, bool overwrite,
+                                                          FileReferenceCompletion<std::uint64_t> completion) {
   const bool persist = RequiresPersistence(destination.Path());
   return RunLocalReference<std::uint64_t>(
       [self = shared_from_this(), destination = std::move(destination), overwrite](const auto& canceled) {
         CheckReference(destination.Parent().has_value(), IoErrorCode::IsDirectory);
-        auto parent = std::make_shared<LocalFileReferenceState>(*destination.Parent(), true);
+        auto parent = std::make_shared<LocalFileReferenceBackend>(*destination.Parent(), true);
         return parent->CopyFromLocal(*self, destination.Name(), overwrite, canceled).bytes_copied;
       },
       std::move(completion), persist);
 }
 
-std::function<void()> LocalFileReferenceState::ReadBytes(FileReferenceBytesCompletion completion) {
-  return RunLocalReference<Bytes>(
-      [self = shared_from_this()](const auto& canceled) {
-        Bytes result;
-        self->Coordinate(self->file_, false, [&] {
-          const auto metadata = self->Metadata();
-          CheckReference(metadata.type == FileType::File,
-                         metadata.type == FileType::Directory ? IoErrorCode::IsDirectory : IoErrorCode::Unsupported);
-          ReferenceDescriptor input(self->OpenFile());
-          std::array<std::byte, 64 * 1024> buffer;
-          while (!canceled.load()) {
-#if defined(_WIN32)
-            const int count = _read(input.Get(), buffer.data(), static_cast<unsigned int>(buffer.size()));
-#else
-        const ssize_t count = read(input.Get(), buffer.data(), buffer.size());
-#endif
-            if (count < 0 && errno == EINTR) {
-              continue;
-            }
-            CheckLocalIo(count >= 0);
-            if (!count) {
-              return;
-            }
-            CheckReference(static_cast<std::size_t>(count) <= result.max_size() - result.size(), IoErrorCode::TooLarge);
-            result.insert(result.end(), buffer.begin(), buffer.begin() + count);
-          }
-          throw ReferenceFailure(IoErrorCode::Io);
-        });
-        return result;
-      },
-      std::move(completion));
+Bytes LocalFileReferenceBackend::ReadAll(const std::atomic<bool>& canceled) {
+  Bytes result;
+  Coordinate(file_, false, [&] {
+    const auto type = Metadata().type;
+    CheckReference(type == FileType::File, type == FileType::Directory ? IoErrorCode::IsDirectory
+                                                                      : IoErrorCode::Unsupported);
+    ReferenceDescriptor input(OpenFile());
+    std::array<std::byte, 64 * 1024> buffer;
+    while (!canceled.load()) {
+      const auto count = ReadReferenceDescriptor(input.Get(), buffer);
+      CheckLocalIo(count >= 0);
+      if (count == 0) {
+        return;
+      }
+      CheckReference(static_cast<std::size_t>(count) <= result.max_size() - result.size(), IoErrorCode::TooLarge);
+      result.insert(result.end(), buffer.begin(), buffer.begin() + count);
+    }
+    throw ReferenceFailure(IoErrorCode::Io);
+  });
+  return result;
 }
 
-std::function<void()> LocalFileReferenceState::ReplaceWith(File source, FileReferenceBoolCompletion completion) {
+IoResult<Bytes> LocalFileReferenceBackend::ReadBytesSync() {
+  return LocalReferenceResult<Bytes>([&] { return ReadAll(never_canceled); });
+}
+
+std::function<void()> LocalFileReferenceBackend::ReadBytes(FileReferenceBytesCompletion completion) {
+  return RunLocalReference<Bytes>(
+      [self = shared_from_this()](const auto& canceled) { return self->ReadAll(canceled); }, std::move(completion));
+}
+
+std::function<void()> LocalFileReferenceBackend::ReplaceWith(File source, FileReferenceBoolCompletion completion) {
   return RunLocalReference<bool>(
       [self = shared_from_this(), source = std::move(source)](const auto& canceled) {
         CheckReference(self->writable_, IoErrorCode::PermissionDenied);
         CheckReference(self->Metadata().type == FileType::File, IoErrorCode::IsDirectory);
-        auto input = std::make_shared<LocalFileReferenceState>(source, false);
+        auto input = std::make_shared<LocalFileReferenceBackend>(source, false);
         CheckReference(input->EntryKey() != self->EntryKey(), IoErrorCode::Unsupported);
         const auto transfer = [&] {
           CheckReference(!canceled.load(), IoErrorCode::Io);
           ReferenceDescriptor reader(input->OpenFile());
-          ReferenceDescriptor writer(self->OpenFile(true));
+          ReferenceDescriptor writer(self->OpenFile(FileAccessMode::WriteOnly));
           // Write through the selected file's authority, without requiring parent-directory creation
           // or rename permission. This is in-place replacement: failure can leave truncated/partial data.
 #if defined(_WIN32)
@@ -2172,8 +2337,8 @@ FileReference MakeLocalFileReference(File file, bool writable, std::optional<std
                                      FileReferenceCoordination coordination) {
   std::optional<FileReference> reference;
   auto create = [&] {
-    auto state = std::make_shared<LocalFileReferenceState>(file, writable, coordination);
-    reference = state->Reference(std::move(content_type));
+    auto backend = std::make_shared<LocalFileReferenceBackend>(file, writable, coordination);
+    reference = backend->Reference(std::move(content_type));
   };
   if (coordination) {
     coordination(&file, nullptr, create);
@@ -2184,13 +2349,13 @@ FileReference MakeLocalFileReference(File file, bool writable, std::optional<std
   return std::move(*reference);
 }
 
-Task<IoResult<std::shared_ptr<FileReferenceState>>> MakeLocalDirectoryState(File directory) {
-  using Result = IoResult<std::shared_ptr<FileReferenceState>>;
+Task<IoResult<std::shared_ptr<FileReferenceBackend>>> MakeLocalDirectoryBackend(File directory) {
+  using Result = IoResult<std::shared_ptr<FileReferenceBackend>>;
   return RunFileOperation<Result>([directory = std::move(directory)] {
     try {
-      auto state = std::make_shared<LocalFileReferenceState>(directory, true);
-      CheckReference(state->metadata_.type == FileType::Directory, IoErrorCode::NotDirectory);
-      return Result(std::move(state));
+      auto backend = std::make_shared<LocalFileReferenceBackend>(directory, true);
+      CheckReference(backend->metadata_.type == FileType::Directory, IoErrorCode::NotDirectory);
+      return Result(std::move(backend));
     } catch (const ReferenceFailure& error) {
       return Result(IoError{error.code, "HuxerUI directory access failed"});
     } catch (const std::system_error& error) {

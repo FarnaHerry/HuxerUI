@@ -507,7 +507,7 @@ private:
   std::vector<TextOffset> caret_offsets_;
 };
 
-struct Win32Renderer::State {
+struct Win32Renderer::Impl {
   struct ClipState {
     bool uses_layer = false;
     ComPtr<ID2D1Layer> layer;
@@ -3202,21 +3202,21 @@ struct Win32Renderer::State {
 #endif
 };
 
-Win32Renderer::Win32Renderer() : state_(std::make_unique<State>()) {}
+Win32Renderer::Win32Renderer() : impl_(std::make_unique<Impl>()) {}
 
 Win32Renderer::~Win32Renderer() = default;
 
 std::vector<std::uint32_t> Win32Renderer::ReadPixels() {
-  if (!state_->scene_target_) {
+  if (!impl_->scene_target_) {
     return {};
   }
-  const D2D1_SIZE_U size = state_->scene_target_->GetPixelSize();
+  const D2D1_SIZE_U size = impl_->scene_target_->GetPixelSize();
   const auto properties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-                                                  state_->scene_target_->GetPixelFormat());
+                                                  impl_->scene_target_->GetPixelFormat());
   ComPtr<ID2D1Bitmap1> readback;
-  ThrowIfFailed(state_->device_context_->CreateBitmap(size, nullptr, 0, &properties, readback.GetAddressOf()),
+  ThrowIfFailed(impl_->device_context_->CreateBitmap(size, nullptr, 0, &properties, readback.GetAddressOf()),
                 "HuxerUI could not create the Windows readback bitmap");
-  ThrowIfFailed(readback->CopyFromBitmap(nullptr, state_->scene_target_.Get(), nullptr),
+  ThrowIfFailed(readback->CopyFromBitmap(nullptr, impl_->scene_target_.Get(), nullptr),
                 "HuxerUI could not read the Windows retained scene");
   std::vector<std::uint32_t> pixels(static_cast<std::size_t>(size.width) * size.height);
   D2D1_MAPPED_RECT mapped{};
@@ -3231,75 +3231,75 @@ std::vector<std::uint32_t> Win32Renderer::ReadPixels() {
 }
 
 void Win32Renderer::Initialize() {
-  state_->InitializeFactories();
+  impl_->InitializeFactories();
 }
 
 void Win32Renderer::SetTransparentSurface(bool transparent) {
-  if (state_->transparent_surface_ == transparent) return;
-  state_->DiscardDeviceResources();
-  state_->transparent_surface_ = transparent;
+  if (impl_->transparent_surface_ == transparent) return;
+  impl_->DiscardDeviceResources();
+  impl_->transparent_surface_ = transparent;
 }
 
 void Win32Renderer::Discard() noexcept {
-  state_->DiscardDeviceResources();
-  state_->pixel_textures_.clear();
-  state_->d3d11_textures_.clear();
-  state_->platform_composition_ = false;
-  state_->transparent_surface_ = false;
-  state_->paragraphs_.clear();
-  state_->paragraph_bytes_ = 0;
-  state_->text_runs_.clear();
-  state_->font_metrics_.clear();
-  state_->wic_factory_.Reset();
-  state_->custom_fonts_.clear();
-  state_->write_factory_.Reset();
-  state_->d2d_factory_.Reset();
+  impl_->DiscardDeviceResources();
+  impl_->pixel_textures_.clear();
+  impl_->d3d11_textures_.clear();
+  impl_->platform_composition_ = false;
+  impl_->transparent_surface_ = false;
+  impl_->paragraphs_.clear();
+  impl_->paragraph_bytes_ = 0;
+  impl_->text_runs_.clear();
+  impl_->font_metrics_.clear();
+  impl_->wic_factory_.Reset();
+  impl_->custom_fonts_.clear();
+  impl_->write_factory_.Reset();
+  impl_->d2d_factory_.Reset();
 #if defined(HUXERUI_WINDOWS_7_COMPAT)
-  if (state_->dcomp_library_ != nullptr) {
-    FreeLibrary(state_->dcomp_library_);
-    state_->dcomp_library_ = nullptr;
+  if (impl_->dcomp_library_ != nullptr) {
+    FreeLibrary(impl_->dcomp_library_);
+    impl_->dcomp_library_ = nullptr;
   }
 #endif
-  state_->window_ = nullptr;
+  impl_->window_ = nullptr;
 }
 
 void Win32Renderer::ResetDeviceResources() noexcept {
-  state_->DiscardDeviceResources();
+  impl_->DiscardDeviceResources();
 }
 
 void Win32Renderer::Resize(HWND window, float dpi) {
-  state_->window_ = window;
-  state_->dpi_ = dpi;
-  state_->ResizeRenderTarget();
+  impl_->window_ = window;
+  impl_->dpi_ = dpi;
+  impl_->ResizeRenderTarget();
 }
 
 void Win32Renderer::DpiChanged(HWND window, float dpi) {
-  state_->window_ = window;
-  state_->dpi_ = dpi;
-  if (state_->device_context_) {
-    state_->device_context_->SetDpi(dpi, dpi);
+  impl_->window_ = window;
+  impl_->dpi_ = dpi;
+  if (impl_->device_context_) {
+    impl_->device_context_->SetDpi(dpi, dpi);
   }
-  if (state_->shadow_context_) {
-    state_->shadow_context_->SetDpi(dpi, dpi);
-    state_->shadow_masks_.clear();
-    state_->path_shadow_masks_.clear();
-    state_->path_shadow_elements_ = 0;
+  if (impl_->shadow_context_) {
+    impl_->shadow_context_->SetDpi(dpi, dpi);
+    impl_->shadow_masks_.clear();
+    impl_->path_shadow_masks_.clear();
+    impl_->path_shadow_elements_ = 0;
   }
-  state_->DiscardSizeDependentResources();
-  state_->force_full_repaint_ = true;
+  impl_->DiscardSizeDependentResources();
+  impl_->force_full_repaint_ = true;
 }
 
 bool Win32Renderer::EnablePlatformComposition(HWND window) {
-  return state_->EnablePlatformComposition(window);
+  return impl_->EnablePlatformComposition(window);
 }
 
 FontMetrics Win32Renderer::Metrics(const Font& font) {
-  return state_->Metrics(font);
+  return impl_->Metrics(font);
 }
 
 TextRunMetrics
 Win32Renderer::MeasureRun(std::string_view text, const TextStyle& style, const TextShapingOptions& options) {
-  return state_->MeasureRun(text, style, options);
+  return impl_->MeasureRun(text, style, options);
 }
 
 TextLayoutMetrics Win32Renderer::MeasureText(std::string_view text, const TextStyle& style, float max_width,
@@ -3309,18 +3309,18 @@ TextLayoutMetrics Win32Renderer::MeasureText(std::string_view text, const TextSt
 
 TextLayoutMetrics Win32Renderer::MeasureText(const AttributedText& text, const TextStyle& style, float max_width,
     const TextLayoutOptions& options) {
-  return state_->MeasureText(text, style, max_width, options);
+  return impl_->MeasureText(text, style, max_width, options);
 }
 
 std::unique_ptr<TextLayout> Win32Renderer::CreateTextLayout(const AttributedText& text, const TextStyle& style,
     float max_width, const TextLayoutOptions& options) {
-  return state_->CreateTextLayout(text, style, max_width, options);
+  return impl_->CreateTextLayout(text, style, max_width, options);
 }
 
 Win32RenderResult Win32Renderer::Render(HWND window, float dpi, const RenderFrame& frame, const RECT& paint_rect) {
-  state_->window_ = window;
-  state_->dpi_ = dpi;
-  return state_->Render(frame, paint_rect);
+  impl_->window_ = window;
+  impl_->dpi_ = dpi;
+  return impl_->Render(frame, paint_rect);
 }
 
 } // namespace huxerui::detail

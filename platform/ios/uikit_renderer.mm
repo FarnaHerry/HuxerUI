@@ -704,7 +704,7 @@ void ClipCurrentPath(CGContextRef context, PathFillRule fill_rule) {
 
 } // namespace
 
-struct UIKitRenderer::State {
+struct UIKitRenderer::Impl {
   bool backdrop_frame = false;
   std::size_t backdrop_group_bytes = 0;
 
@@ -725,7 +725,7 @@ struct UIKitRenderer::State {
     __strong CIContext* context = nil;
   };
 
-  State() : external_texture_context([CIContext contextWithOptions:nil]) {}
+  Impl() : external_texture_context([CIContext contextWithOptions:nil]) {}
 
   struct FontHash {
     std::size_t operator()(const Font& font) const noexcept {
@@ -1455,12 +1455,12 @@ private:
   float horizontal_offset_ = 0.0F;
 };
 
-UIKitRenderer::UIKitRenderer() : state_(std::make_unique<State>()) {}
+UIKitRenderer::UIKitRenderer() : impl_(std::make_unique<Impl>()) {}
 
 UIKitRenderer::~UIKitRenderer() = default;
 
 FontMetrics UIKitRenderer::Metrics(const Font& font) {
-  return state_->FontFor(font).metrics;
+  return impl_->FontFor(font).metrics;
 }
 
 TextRunMetrics
@@ -1468,7 +1468,7 @@ UIKitRenderer::MeasureRun(std::string_view text, const TextStyle& style, const T
   if (text.find_first_of("\r\n") != std::string_view::npos) {
     throw std::invalid_argument("HuxerUI text runs must not contain line breaks");
   }
-  return state_->RunFor(text, style, options).metrics;
+  return impl_->RunFor(text, style, options).metrics;
 }
 
 TextLayoutMetrics UIKitRenderer::MeasureText(std::string_view text, const TextStyle& style, float max_width,
@@ -1538,13 +1538,13 @@ void UIKitRenderer::RenderSceneNode(const RenderNode& node, CGContextRef context
   const bool translucent = opacity < 1.0F;
   CFRef<CGContextRef> isolated_group;
   CGContextRef group_parent_context = nullptr;
-  if (translucent && state_->backdrop_frame) {
+  if (translucent && impl_->backdrop_frame) {
     const std::size_t bytes = CGBitmapContextGetBytesPerRow(context) * CGBitmapContextGetHeight(context);
-    if (bytes > maximum_backdrop_group_bytes - state_->backdrop_group_bytes) {
+    if (bytes > maximum_backdrop_group_bytes - impl_->backdrop_group_bytes) {
       throw std::runtime_error("HuxerUI Apple backdrop groups exceed their memory budget");
     }
     isolated_group = CreateBackdropBitmap(CGBitmapContextGetWidth(context), CGBitmapContextGetHeight(context));
-    state_->backdrop_group_bytes += bytes;
+    impl_->backdrop_group_bytes += bytes;
     CGContextConcatCTM(isolated_group.Get(), CGContextGetCTM(context));
     group_parent_context = context;
     context = isolated_group.Get();
@@ -1582,7 +1582,7 @@ void UIKitRenderer::RenderSceneNode(const RenderNode& node, CGContextRef context
     context = group_parent_context;
     DrawBackdropDeviceImage(context, image.Get(), opacity, kCGBlendModeNormal);
     CGContextFlush(context);
-    state_->backdrop_group_bytes -= CGBitmapContextGetBytesPerRow(isolated_group.Get()) *
+    impl_->backdrop_group_bytes -= CGBitmapContextGetBytesPerRow(isolated_group.Get()) *
                                    CGBitmapContextGetHeight(isolated_group.Get());
   } else if (translucent) {
     CGContextEndTransparencyLayer(context);
@@ -1701,8 +1701,8 @@ void UIKitRenderer::RenderCommand(CGContextRef context, const DrawTextCommand& c
   if (command.rect.width <= 0.0F || command.rect.height <= 0.0F) {
     return;
   }
-  const auto retained = state_->ParagraphFor(command);
-  const State::CachedParagraph& paragraph = *retained;
+  const auto retained = impl_->ParagraphFor(command);
+  const Impl::CachedParagraph& paragraph = *retained;
   const float remaining_height = std::max(0.0F, command.rect.height - paragraph.content_height);
   float vertical_offset = 0.0F;
   if (command.options.vertical_align == TextVerticalAlign::Center) {
@@ -1731,7 +1731,7 @@ void UIKitRenderer::RenderCommand(CGContextRef context, const DrawTextRunsComman
     if (run.text.empty() || run.style.foreground.alpha <= 0.0F) {
       continue;
     }
-    const State::CachedRun& cached = state_->RunFor(run.text, run.style, run.shaping);
+    const Impl::CachedRun& cached = impl_->RunFor(run.text, run.style, run.shaping);
     CGContextSaveGState(context);
     CGContextTranslateCTM(context, 0.0, run.baseline_origin.y);
     CGContextScaleCTM(context, 1.0, -1.0);
@@ -1746,7 +1746,7 @@ void UIKitRenderer::RenderCommand(CGContextRef context, const DrawTextRunsComman
 void UIKitRenderer::RenderCommand(CGContextRef context, const DrawImageCommand& command) {
   DrawCGImage(
       context,
-      state_->ImageFor(command.image),
+      impl_->ImageFor(command.image),
       command.image.IntrinsicSize(),
       command.source,
       command.destination,
@@ -1758,7 +1758,7 @@ void UIKitRenderer::RenderCommand(CGContextRef context, const DrawImageCommand& 
 void UIKitRenderer::RenderCommand(CGContextRef context, const DrawExternalTextureCommand& command) {
   DrawCGImage(
       context,
-      state_->ImageFor(command.texture),
+      impl_->ImageFor(command.texture),
       command.texture->IntrinsicSize(),
       command.source,
       command.destination,
@@ -2042,19 +2042,19 @@ void UIKitRenderer::DrawBackdropFrame(CGContextRef context, CGRect viewport, con
     SetFillColor(bitmap.Get(), Color::Rgb(247, 248, 250));
     CGContextFillRect(bitmap.Get(), CGRectMake(bitmap_rect.x, bitmap_rect.y, bitmap_rect.width, bitmap_rect.height));
   }
-  state_->backdrop_frame = true;
-  state_->backdrop_group_bytes = CGBitmapContextGetBytesPerRow(bitmap.Get()) * height;
+  impl_->backdrop_frame = true;
+  impl_->backdrop_group_bytes = CGBitmapContextGetBytesPerRow(bitmap.Get()) * height;
   try {
     if (frame.scene.root != nullptr) {
       RenderSceneNode(*frame.scene.root, bitmap.Get(), range);
     }
   } catch (...) {
-    state_->backdrop_frame = false;
-    state_->backdrop_group_bytes = 0;
+    impl_->backdrop_frame = false;
+    impl_->backdrop_group_bytes = 0;
     throw;
   }
-  state_->backdrop_frame = false;
-  state_->backdrop_group_bytes = 0;
+  impl_->backdrop_frame = false;
+  impl_->backdrop_group_bytes = 0;
   CFRef<CGImageRef> image(CGBitmapContextCreateImage(bitmap.Get()));
   if (image.Get() == nullptr) {
     throw std::runtime_error("HuxerUI could not snapshot the Apple backdrop frame");
@@ -2073,7 +2073,7 @@ void UIKitRenderer::DrawSlice(
     bool draw_background,
     CGRect viewport
 ) {
-  state_->PruneExternalTextures();
+  impl_->PruneExternalTextures();
   if (frame != nullptr) {
     ValidateBackdropSceneSlice(frame->scene, first_command, command_count);
   }
