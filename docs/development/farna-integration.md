@@ -6,6 +6,12 @@ The dedicated local maintenance clone is `/home/farna/dev/cpp/mcpp/HuxerUI-fork`
 Repository-wide maintenance rules live in [AGENTS.md](../../AGENTS.md).
 Before treating a fork commit as an upstream contribution, check the [Upstream Coverage Registry](upstream-coverage.md); it records behavior already present in `upstream/main` and items confirmed to remain fork-only.
 
+## Upstream anchor direction
+
+Upstream will unify `FocusTarget` and presentation anchors through `ViewHandle`, so anchor lifetime will be owned by that handle instead of per-node mount identity.
+The fork's `bd8fb056` layer-anchor transfer fix should not be proposed separately; PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged.
+Keep the fork fix until the upstream `ViewHandle` work lands, then remove it and rerun popup/menu replacement coverage against the unified handle.
+
 ## Initial inventory
 
 The upstream baseline is `0c5126235d43c2b703166bcc00781b850f2d1c39`. The starting acgu HEAD is

@@ -49,13 +49,13 @@ Check the residual diff and the upstream source, not only the commit list.
 | macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
 | iOS app-target link closure | Upstream `cmake/HuxerUIApp.cmake` walks `INTERFACE_LINK_LIBRARIES` and emits some `$<TARGET_FILE:>` entries | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, alias handling, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
 
-## Submitted upstream
+## Superseded upstream
 
-These items are no longer fork-only candidates, but they are not covered until the upstream PR merges.
+These items should not be resubmitted because an upstream design change owns the problem.
 
-| Area | Fork evidence | Upstream PR | Submitted |
+| Area | Fork evidence | Upstream direction | Action |
 |---|---|---|---|
-| Layer anchor transfer across structural replacement | `bd8fb056` | [#163](https://github.com/HuxerUI/HuxerUI/pull/163) | 2026-11-10 |
+| Layer anchor transfer across structural replacement | `bd8fb056` | Upstream will unify `FocusTarget` and presentation anchors through `ViewHandle`; anchor lifetime will be owned by that handle instead of per-node mount identity. PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged. | Do not resubmit. Keep the fork fix until the `ViewHandle` change lands, then remove it and rerun the popup/menu replacement coverage. |
 
 ## Checked and still fork-only
 
