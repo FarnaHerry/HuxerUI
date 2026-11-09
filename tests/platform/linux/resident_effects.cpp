@@ -700,7 +700,7 @@ TEST_CASE("LinuxResidentNativeSnapshotReportsCompletedExportTiming", "[backdrop]
     native.push_back(MakeNativeBackdropSource(display, linux::GlTexture::Origin::TopLeft,
                                             linux::GlTexture::Alpha::Premultiplied, phase, 1280, 720));
     auto wrapper = std::make_shared<linux::GdkTexture>(Size{1280, 720});
-    wrapper->Publish(detail::GetGlFrame(*native.back())->Texture());
+    wrapper->Publish(native.back()->AcquireFrame()->Texture());
     opaque.push_back(std::move(wrapper));
   }
   std::array<std::vector<double>, 2> timings;

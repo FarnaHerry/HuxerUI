@@ -36,6 +36,7 @@ User guides describe the current public SDK, development guides cover this repos
 
 [Design Documents](design/README.md) indexes the internal contracts by subsystem.
 [Backdrop Effects and Glass](design/backdrop-effects.md) specifies background sampling, optical materials, and compositing boundaries.
+[Build System Integration (Draft)](design/build-system-integration.md) proposes common CLI intent, build options, generated results, and acceptance requirements for build-system integrations.
 [Scrolling](design/scrolling.md) defines input normalization, nested consumption, offset ownership, momentum, and overscroll.
 [External File Drop](design/file-drop.md) defines host file reception, hover lifecycle, and asynchronous reference delivery.
 [Date and Time Pickers](design/date-time-pickers.md) defines localized chrono-based calendar and clock controls.

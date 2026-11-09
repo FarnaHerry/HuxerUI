@@ -7,9 +7,11 @@
 
 #include "graphics/backdrop_gl_internal.h"
 
-namespace huxerui::detail {
+namespace huxerui::linux {
+class GdkFrame;
+} // namespace huxerui::linux
 
-class LinuxGdkTextureFrame;
+namespace huxerui::detail {
 
 using LinuxBackdropGlStats = BackdropGlStats;
 
@@ -41,7 +43,7 @@ public:
   void CompositeRaster(const std::uint8_t* bgra, std::size_t stride, Rect bounds);
   // Copies an integral one-to-one crop from a compatible immutable GL snapshot without CPU pixel transfer.
   // The caller admits unscaled, unclipped commands with unit opacity; straight-alpha sources fall back.
-  [[nodiscard]] bool CompositeSnapshot(const LinuxGdkTextureFrame& frame, Rect source, Rect destination);
+  [[nodiscard]] bool CompositeSnapshot(const linux::GdkFrame& frame, Rect source, Rect destination);
   void PushGroup();
   void PopGroup(const std::uint8_t* mask_bgra, std::size_t mask_stride, float opacity, bool mask_changed = true);
 

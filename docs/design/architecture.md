@@ -1494,8 +1494,12 @@ Visibility is a private weak subscription from each UiWindow, not a single appli
 The same texture may be displayed by several UiWindows; unmounting one removes only that UiWindow's subscription.
 
 Frame acquisition and synchronization remain platform-specific because a safe common return type cannot represent `CVPixelBuffer`, `IOSurface`, `AHardwareBuffer`, `SurfaceTexture`, DXGI resources, DMA-BUF, `VideoFrame`, and future native handles.
-The shared command retains only the abstract identity and immutable drawing data, while each renderer casts to its matching concrete platform type and uses that type's private mailbox interface.
-Each backend chooses a platform-specific direct-import path when its renderer and producer share a compatible graphics API and otherwise uses a bounded platform-owned conversion path.
+The shared command retains the texture identity and immutable drawing data, while the renderer casts to its matching platform texture and takes the latest frame at draw time.
+The concrete GPU, Core Video, and WebCodecs textures expose the same `AcquireFrame()` used by the renderer to external consumers.
+The mailbox hands out independently retained frames, or independent `VideoFrame` clones on Web, so replacing or finishing the source does not invalidate a frame already acquired.
+For thread-safe mailboxes, publication and acquisition exchange ownership under the frame lock and GPU work runs outside that lock.
+A consumer retains the frame or its imported resource through GPU use and writes processing results to its own output.
+Each backend chooses a direct import or a GPU copy into compatible resources and reports unsupported imports.
 The API promises no copy through shared UiWindow code; it does not claim universal zero-copy on CoreGraphics, Android Canvas, or a GSK renderer that must convert an incompatible GDK texture.
 The Apple implementations accept `CVPixelBufferRef` and use Core Image conversion compatible with their existing renderers.
 The Android API 23 path keeps Canvas as the primary renderer and draws retained `Bitmap` frames directly.
@@ -1503,6 +1507,8 @@ The Android API 23 path keeps Canvas as the primary renderer and draws retained 
 Without an acquire fence the call waits for producer GL work; after `PublishCurrent()` returns, the source texture storage is no longer retained and may be reused or deleted.
 `SurfaceStreamTexture` creates a producer-facing `Surface`, latches its SurfaceTexture on the private EGL thread, applies the SurfaceTexture transform, and converts each ready OES image once into the same immutable internal representation.
 Revision advances only after that import completes, so UiWindow never observes a revision whose frame is not drawable.
+Both Android GPU mailboxes retain the same `GlFrame` type. Its `ImportCurrent()` creates one `EGLImage` lazily on the compositor worker and uses it to create independent 2D texture objects in compatible caller contexts on the same display.
+The consumer owns the imported texture name and its sampling parameters, and retains the shared pixels as read-only input.
 Each GPU draw occurrence owns an internal non-interactive TextureView output while it remains in the committed scene.
 The Android renderer encounters that ordinary `DrawExternalTextureCommand` during Canvas replay, renders its selected source rectangle into the TextureView surface, and invokes `drawChild()` under the current Canvas transform, clip, and save-layer stack.
 This platform-private child does not become a PlatformView, public View, accessibility node, or shared RenderComposition layer.
@@ -1510,7 +1516,8 @@ Frames containing GPU texture children move the base Canvas slice from `onDraw()
 Direct `AHardwareBuffer` import remains future work.
 The Linux `PixelTexture` implementation copies borrowed straight-alpha RGBA8888 or BGRA8888 rows into premultiplied storage and wraps each acquired frame in a `GdkMemoryTexture` for GTK Snapshot composition.
 `linux::GlTexture::PublishCurrent()` validates level-zero `GL_RGBA8` storage in the current producer `GdkGLContext`, then completes a GPU copy into a new immutable texture managed through a private HuxerUI context in the same GL share group.
-HuxerUI constructs the `GdkGLTexture`, attaches the completion fence, retains origin and alpha metadata, and deletes the copied GL texture and fence after the final GDK reference is released.
+HuxerUI constructs the `GdkGLTexture` with its completion fence and retains the same GL resource owner in GDK and the acquired `GdkFrame`, so either can keep the copied texture alive.
+A `GlTexture` consumer can borrow the frame's texture name only in a compatible current `GdkGLContext` and must retain the frame through GPU use.
 The synchronous copy commits before revision publication, restores the producer context before returning, and allows the producer to update or delete its mutable source immediately.
 The Linux `GdkTexture` implementation remains the advanced path that retains one already immutable GDK frame in its latest-wins mailbox, so producers may publish `GdkDmabufTexture` or another GDK-owned texture without HuxerUI downloading pixels.
 The custom GTK widget snapshots ordinary PaintCommands as ordered Cairo nodes and ExternalTexture commands as ordered GDK texture nodes under the same transform, clip, path-fill, opacity, content, child, and foreground structure.
@@ -1524,6 +1531,7 @@ The producer may reuse or release its source after publication returns, but it m
 The renderer opens the snapshot on its own same-adapter D3D11 device and creates a Direct2D bitmap from that DXGI surface without a renderer-local texture copy or CPU readback.
 Every renderer precollects the snapshots used by a frame, acquires their keyed mutexes in stable resource order, submits all Direct2D reads with `EndDraw()`, and releases the mutexes in one cleanup path.
 A zero-timeout contention result abandons that render attempt and schedules a retry instead of blocking the UI thread; abandoned synchronization and adapter mismatch fail explicitly.
+`D3D11Frame::TryCopyTo()` uses the same open and synchronization protocol to submit one copy into a consumer-owned texture, so processing can proceed on that destination after releasing the shared frame's mutex.
 Renderer-local device resource recreation discards only the opened resource, mutex, and Direct2D wrapper, then reopens the retained snapshot while its producer device remains valid.
 A removed producer device invalidates snapshots owned by that device, so the application must publish a replacement from a valid device before another render.
 The modern NT-handle path is unavailable in Windows 7 compatibility builds.
@@ -2033,7 +2041,7 @@ Hooks run in declaration order within their own lists. Runtime owns application 
 
 HuxerUI installs its built-in Toast, SnackBar, Tooltip, Dialog, BottomSheet, Popup, and Menu services for each UiWindow. Applications use command-oriented services through their typed `UseXxx()` handles, while Tooltip remains an ordinary retained modifier; window hooks remain the extension mechanism for third-party per-window services and global components. When `AppOptions::show_debug_overlay` is enabled, UiWindow installs the built-in DebugOverlay after window hooks so its System entry remains above other global layers. The option defaults to enabled in Debug builds and disabled in Release builds.
 
-Detailed performance diagnostics are a private source-build capability controlled by `HUXERUI_ENABLE_PROFILING`, which defaults to on for source builds and is explicitly disabled for SDK packaging.
+Detailed performance diagnostics are a private source-build capability controlled by `HUXERUI_ENABLE_PROFILING`, which defaults to off for source builds and must remain disabled for SDK packaging.
 When compiled in, detailed capture is enabled by default, and a window-owned recorder captures its frames; a library-owned thread-local pointer routes nested instrumentation during that frame and restores the previous recorder across nested calls.
 The optional `HUXERUI_PROFILE` selects `overview`, `detailed`, or `off`; an unset or empty value uses `detailed`.
 The optional `HUXERUI_PROFILE_DIRECTORY` overrides the default working-directory `traces/` location resolved at Runtime creation without changing the recording mode.

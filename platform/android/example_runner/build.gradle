@@ -71,7 +71,9 @@ android {
                 arguments "-DANDROID_STL=${huxeruiStl}",
                         "-DHUXERUI_ROOT_DIR=${huxeruiRoot.absolutePath}",
                         "-DHUXERUI_EXAMPLE=${huxeruiExample}",
-                        "-DHUXERUI_ENABLE_PROFILING=${providers.gradleProperty('huxeruiExampleProfiling').orElse('ON').get()}"
+                        "-DHUXERUI_ENABLE_PROFILING=${providers.gradleProperty('huxeruiExampleProfiling').orElse('ON').get()}",
+                        "-DHUXERUI_OPTIMIZATION=${providers.gradleProperty('huxeruiOptimization').orElse('default').get()}",
+                        "-DHUXERUI_ENABLE_LTO=${providers.gradleProperty('huxeruiLto').orElse('OFF').get()}"
             }
         }
 
@@ -82,6 +84,7 @@ android {
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.debug
             minifyEnabled = false
             proguardFiles getDefaultProguardFile(
                     "proguard-android-optimize.txt"),

@@ -218,13 +218,17 @@ void LinuxBackdropGl::CompositeRaster(const std::uint8_t* bgra, std::size_t stri
   resources_->engine.CompositeRaster(bgra, stride, bounds);
 }
 
-bool LinuxBackdropGl::CompositeSnapshot(const LinuxGdkTextureFrame& frame, Rect source, Rect destination) {
-  const LinuxGlSnapshot& snapshot = frame.GlSnapshot();
-  if (resources_ == nullptr || snapshot.context == nullptr || !snapshot.premultiplied ||
-      gdk_gl_context_is_shared(context_, snapshot.context) == FALSE) {
+bool LinuxBackdropGl::CompositeSnapshot(const linux::GdkFrame& frame, Rect source, Rect destination) {
+  if (resources_ == nullptr || gdk_texture_get_format(frame.Texture()) != GDK_MEMORY_R8G8B8A8_PREMULTIPLIED) {
     return false;
   }
   CurrentContextScope current(context_);
+  std::uint32_t snapshot_texture = 0;
+  try {
+    snapshot_texture = frame.GlTextureNameCurrent();
+  } catch (const std::exception&) {
+    return false;
+  }
   const int width = static_cast<int>(source.width);
   const int height = static_cast<int>(source.height);
   if (resources_->external_width != width || resources_->external_height != height) {
@@ -237,7 +241,7 @@ bool LinuxBackdropGl::CompositeSnapshot(const LinuxGdkTextureFrame& frame, Rect 
   }
   if (resources_->external_framebuffers[0] == 0) glGenFramebuffers(2, resources_->external_framebuffers);
   glBindFramebuffer(GL_READ_FRAMEBUFFER, resources_->external_framebuffers[0]);
-  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapshot.texture, 0);
+  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapshot_texture, 0);
   RequireFramebuffer(GL_READ_FRAMEBUFFER);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resources_->external_framebuffers[1]);
   glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, resources_->external_texture, 0);

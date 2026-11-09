@@ -863,13 +863,13 @@ struct LinuxRenderer::State {
   SnapshotTexture AcquireSnapshotTexture(const std::shared_ptr<ExternalTexture>& texture) {
     const std::shared_ptr<linux::GdkTexture> gdk_texture = std::dynamic_pointer_cast<linux::GdkTexture>(texture);
     if (gdk_texture) {
-      const std::shared_ptr<const LinuxGdkTextureFrame> frame = GetGdkTextureFrame(*gdk_texture);
+      const std::shared_ptr<const linux::GdkFrame> frame = gdk_texture->AcquireFrame();
       return {frame ? GDK_TEXTURE(g_object_ref(frame->Texture())) : nullptr, false};
     }
 
     const std::shared_ptr<linux::GlTexture> gl_texture = std::dynamic_pointer_cast<linux::GlTexture>(texture);
     if (gl_texture) {
-      const std::shared_ptr<const LinuxGdkTextureFrame> frame = GetGlFrame(*gl_texture);
+      const std::shared_ptr<const linux::GdkFrame> frame = gl_texture->AcquireFrame();
       return {
           frame ? GDK_TEXTURE(g_object_ref(frame->Texture())) : nullptr,
           frame && frame->TextureOrigin() == linux::GlTexture::Origin::BottomLeft,
@@ -2217,7 +2217,7 @@ private:
     if (!gpu_frame_ || clip_depth_ != 0 || command.opacity != 1.0F) return false;
     const auto texture = std::dynamic_pointer_cast<linux::GlTexture>(command.texture);
     if (!texture) return false;
-    const auto frame = GetGlFrame(*texture);
+    const std::shared_ptr<const linux::GdkFrame> frame = texture->AcquireFrame();
     if (!frame) return false;
     const int pixel_width = gdk_texture_get_width(frame->Texture());
     const int pixel_height = gdk_texture_get_height(frame->Texture());
