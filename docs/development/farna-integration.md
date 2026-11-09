@@ -4,6 +4,7 @@
 acgu's framework checkout on 2026-10-06, without switching or modifying that application's working tree.
 The dedicated local maintenance clone is `/home/farna/dev/cpp/mcpp/HuxerUI-fork`.
 Repository-wide maintenance rules live in [AGENTS.md](../../AGENTS.md).
+Before treating a fork commit as an upstream contribution, check the [Upstream Coverage Registry](upstream-coverage.md); it records behavior already present in `upstream/main` and items confirmed to remain fork-only.
 
 ## Initial inventory
 
