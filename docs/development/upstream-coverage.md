@@ -56,7 +56,6 @@ These items are no longer fork-only candidates, but they are not covered until t
 | Area | Fork evidence | Upstream PR | Submitted |
 |---|---|---|---|
 | Layer anchor transfer across structural replacement | `bd8fb056` | [#163](https://github.com/HuxerUI/HuxerUI/pull/163) | 2026-11-10 |
-| Disabled profiling on mcpp builds | Upstream `main` build failure, not fork work | [#164](https://github.com/HuxerUI/HuxerUI/pull/164) | 2026-11-10 |
 
 ## Checked and still fork-only
 
