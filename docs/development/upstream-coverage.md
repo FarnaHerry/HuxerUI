@@ -49,6 +49,14 @@ Check the residual diff and the upstream source, not only the commit list.
 | macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
 | iOS app-target link closure | Upstream `cmake/HuxerUIApp.cmake` walks `INTERFACE_LINK_LIBRARIES` and emits some `$<TARGET_FILE:>` entries | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, alias handling, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
 
+## Submitted upstream
+
+These items are no longer fork-only candidates, but they are not covered until the upstream PR merges.
+
+| Area | Fork evidence | Upstream PR | Submitted |
+|---|---|---|---|
+| patchelf 0.19 minimum for runtime deployment | `738fe88b` | [#165](https://github.com/HuxerUI/HuxerUI/pull/165) | 2026-11-10 |
+
 ## Superseded upstream
 
 These items should not be resubmitted because an upstream design change owns the problem.
@@ -84,7 +92,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice |
-| patchelf 0.19 minimum for runtime deployment | `738fe88b` | Fork-only fix |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
 | Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only build fix |
