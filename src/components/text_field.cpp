@@ -42,9 +42,9 @@ bool IsSingleUtf8CodePoint(std::string_view text) noexcept {
   return text.size() == length;
 }
 
-class SecureTextLayout final : public detail::TextLayout {
+class SecureTextLayout final : public detail::TextLayoutBackend {
 public:
-  SecureTextLayout(std::unique_ptr<detail::TextLayout> visual_layout, std::vector<TextOffset> boundaries)
+  SecureTextLayout(std::unique_ptr<detail::TextLayoutBackend> visual_layout, std::vector<TextOffset> boundaries)
       : visual_layout_(std::move(visual_layout)), boundaries_(std::move(boundaries)) {}
 
   Size Measure() const override {
@@ -99,12 +99,12 @@ private:
     return index - 1;
   }
 
-  std::unique_ptr<detail::TextLayout> visual_layout_;
+  std::unique_ptr<detail::TextLayoutBackend> visual_layout_;
   std::vector<TextOffset> boundaries_;
 };
 
 struct PreparedTextLayout {
-  std::unique_ptr<detail::TextLayout> text_layout;
+  std::unique_ptr<detail::TextLayoutBackend> text_layout;
   AttributedText display_text;
 };
 
@@ -112,7 +112,7 @@ bool ParagraphLayoutOptionsEqual(const TextLayoutOptions& left, const TextLayout
   return left.shaping == right.shaping && left.align == right.align && left.wrap == right.wrap;
 }
 
-std::vector<TextOffset> CollectGraphemeBoundaries(detail::TextLayout& layout, std::string_view text) {
+std::vector<TextOffset> CollectGraphemeBoundaries(detail::TextLayoutBackend& layout, std::string_view text) {
   const TextOffset length = detail::Utf16Length(text).value_or(0);
   std::vector<TextOffset> boundaries{0};
   while (boundaries.back() < length) {
@@ -137,12 +137,12 @@ PreparedTextLayout PrepareTextFieldLayout(
   if (!secure) {
     const auto attributed = AttributedText::FromRanges(std::string(text), text_styles);
     return {
-        ui_window.CreateTextLayout(attributed, style, max_width, options),
+        ui_window.CreatePlatformTextLayout(attributed, style, max_width, options),
         attributed,
     };
   }
 
-  std::unique_ptr<detail::TextLayout> source = ui_window.CreateTextLayout(text, style, max_width, options);
+  auto source = ui_window.CreatePlatformTextLayout(text, style, max_width, options);
   if (!source) {
     return {};
   }
@@ -154,7 +154,7 @@ PreparedTextLayout PrepareTextFieldLayout(
   for (std::size_t index = 1; index < boundaries.size(); ++index) {
     display_text.append(bullet);
   }
-  std::unique_ptr<detail::TextLayout> visual = ui_window.CreateTextLayout(display_text, style, max_width, options);
+  auto visual = ui_window.CreatePlatformTextLayout(display_text, style, max_width, options);
   if (!visual) {
     return {};
   }
@@ -1501,9 +1501,9 @@ private:
           .shaping = text_layout_options_.shaping,
           .wrap = TextWrap::NoWrap,
       };
-      label_layout_ = ui_window.CreateTextLayout(label_, style_.label_style, text_layout_width_, label_options);
+      label_layout_ = ui_window.CreatePlatformTextLayout(label_, style_.label_style, text_layout_width_, label_options);
       floating_label_layout_ =
-          ui_window.CreateTextLayout(label_, style_.floating_label_style, text_layout_width_, label_options);
+          ui_window.CreatePlatformTextLayout(label_, style_.floating_label_style, text_layout_width_, label_options);
       laid_out_label_ = label_;
       if (!label_layout_ || !floating_label_layout_) {
         throw std::logic_error("HuxerUI platform does not provide TextField label layout");
@@ -1514,7 +1514,8 @@ private:
       laid_out_placeholder_.clear();
     } else if (!placeholder_layout_ || laid_out_placeholder_ != placeholder_) {
       placeholder_layout_ =
-          ui_window.CreateTextLayout(placeholder_, style_.placeholder_style, text_layout_width_, text_layout_options_);
+          ui_window.CreatePlatformTextLayout(
+              placeholder_, style_.placeholder_style, text_layout_width_, text_layout_options_);
       laid_out_placeholder_ = placeholder_;
       if (!placeholder_layout_) {
         throw std::logic_error("HuxerUI platform does not provide editable text layout");
@@ -1524,7 +1525,7 @@ private:
       validation_layout_.reset();
       laid_out_validation_message_.clear();
     } else if (!validation_layout_ || laid_out_validation_message_ != validation_.message) {
-      validation_layout_ = ui_window.CreateTextLayout(
+      validation_layout_ = ui_window.CreatePlatformTextLayout(
           validation_.message,
           style_.validation_text_style,
           validation_text_layout_width_,
@@ -1845,7 +1846,7 @@ private:
     if (!ui_window_) {
       throw std::logic_error("HuxerUI TextField cannot resolve text boundaries before layout");
     }
-    std::unique_ptr<detail::TextLayout> layout = ui_window_->CreateTextLayout(
+    std::unique_ptr<detail::TextLayoutBackend> layout = ui_window_->CreatePlatformTextLayout(
         text,
         style_.text_style,
         std::numeric_limits<float>::infinity(),
@@ -2439,11 +2440,11 @@ private:
   std::optional<detail::ResolvedImageAsset> trailing_icon_;
   std::optional<std::string> trailing_icon_semantic_label_;
   IconButtonStyle trailing_icon_action_style_;
-  std::unique_ptr<detail::TextLayout> text_layout_;
-  std::unique_ptr<detail::TextLayout> label_layout_;
-  std::unique_ptr<detail::TextLayout> floating_label_layout_;
-  std::unique_ptr<detail::TextLayout> placeholder_layout_;
-  std::unique_ptr<detail::TextLayout> validation_layout_;
+  std::unique_ptr<detail::TextLayoutBackend> text_layout_;
+  std::unique_ptr<detail::TextLayoutBackend> label_layout_;
+  std::unique_ptr<detail::TextLayoutBackend> floating_label_layout_;
+  std::unique_ptr<detail::TextLayoutBackend> placeholder_layout_;
+  std::unique_ptr<detail::TextLayoutBackend> validation_layout_;
   std::optional<TextOffset> pointer_anchor_;
   std::optional<TextPosition> pending_touch_selection_;
   std::optional<Point> pending_touch_origin_;

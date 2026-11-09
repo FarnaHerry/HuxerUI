@@ -29,23 +29,6 @@ struct Win32RendererTestAccess {
 namespace huxerui::test {
 namespace {
 
-class NativeParagraphPlatform final : public TestPlatform {
-public:
-  explicit NativeParagraphPlatform(detail::Win32Renderer& renderer) : renderer_(renderer) {}
-
-  std::unique_ptr<detail::TextLayout> CreateTextLayout(const AttributedText& text, const TextStyle& style, float width,
-      const TextLayoutOptions& options) override {
-    return renderer_.CreateTextLayout(text, style, width, options);
-  }
-
-private:
-  detail::Win32Renderer& renderer_;
-};
-
-} // namespace
-
-namespace {
-
 struct RendererComScope {
   RendererComScope() {
     REQUIRE(SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)));
@@ -294,8 +277,6 @@ TEST_CASE("Win32AttributedParagraphSharesNativeMeasurementAndSelectionMetrics") 
   REQUIRE(SUCCEEDED(com_result));
   detail::Win32Renderer renderer;
   renderer.Initialize();
-  NativeParagraphPlatform platform(renderer);
-  UiWindow window([]() -> View { return Spacer(); }, platform);
   const TextStyle style{Font::System(14.0F), Color::Black()};
   const AttributedText text{
     TextSpan("small "),
@@ -304,32 +285,31 @@ TEST_CASE("Win32AttributedParagraphSharesNativeMeasurementAndSelectionMetrics") 
   };
   const auto metrics = renderer.MeasureText(text, style, 240.0F, {});
   const auto plain = renderer.MeasureText(text.PlainText(), style, 240.0F, {});
-  const auto layout = platform.LayoutText(text, style, 240.0F);
+  const auto layout = renderer.CreatePlatformTextLayout(text, style, 240.0F, {});
   REQUIRE(metrics.size.height > plain.size.height);
-  REQUIRE(layout.Measure().height == metrics.size.height);
-  const auto ranges = layout.RangeRects({6, 11});
+  REQUIRE(layout->Measure().height == metrics.size.height);
+  const auto ranges = layout->RangeRects({6, 11});
   REQUIRE_FALSE(ranges.empty());
   REQUIRE(ranges.front().width > 70.0F);
-  const auto caret = layout.CaretRect({8, TextAffinity::Downstream});
-  REQUIRE(layout.HitTest({caret.x, caret.y + caret.height * 0.5F}).offset == 8);
+  const auto caret = layout->CaretRect(8, TextAffinity::Downstream);
+  REQUIRE(layout->HitTest({caret.x, caret.y + caret.height * 0.5F}).offset == 8);
   const auto wrapped = renderer.MeasureText(text, style, 85.0F, {.wrap = TextWrap::Word});
   REQUIRE(wrapped.line_count > metrics.line_count);
-  REQUIRE(platform.LayoutText(text, style, 85.0F).Measure().height == wrapped.size.height);
-  const auto combining = platform.LayoutText(
+  const auto combining = renderer.CreatePlatformTextLayout(
       AttributedText::FromRanges("a\u0301b", {{{1, 2}, {.foreground = Color::White()}}}), style, 200.0F, {});
-  REQUIRE(combining.NextCaretOffset(0) == 2);
-  REQUIRE(combining.PreviousCaretOffset(2) == 0);
-  const auto styled_combining = renderer.CreateTextLayout(
+  REQUIRE(combining->NextCaretOffset(0) == 2);
+  REQUIRE(combining->PreviousCaretOffset(2) == 0);
+  const auto styled_combining = renderer.CreatePlatformTextLayout(
       AttributedText::FromRanges("a\u0301b", {{{1, 2}, {.font_size = 24.0F}}}), style, 200.0F, {});
   REQUIRE(styled_combining->NextCaretOffset(0) == 2);
   REQUIRE(styled_combining->PreviousCaretOffset(2) == 0);
-  const auto emoji = renderer.CreateTextLayout(
+  const auto emoji = renderer.CreatePlatformTextLayout(
       AttributedText::FromRanges("\U0001F469\u200D\U0001F4BB!", {{{2, 3}, {.font_size = 24.0F}}}), style, 200.0F, {});
   REQUIRE(emoji->NextCaretOffset(0) == 5);
   REQUIRE(emoji->PreviousCaretOffset(5) == 0);
-  const auto bidi = platform.LayoutText(AttributedText("abc \u05D0\u05D1\u05D2 xyz"), style, 240.0F);
-  REQUIRE(bidi.CaretRect({4, TextAffinity::Upstream}).x != bidi.CaretRect({4, TextAffinity::Downstream}).x);
-  REQUIRE(bidi.RangeRects({2, 5}).size() >= 2);
+  const auto bidi = renderer.CreatePlatformTextLayout(AttributedText("abc \u05D0\u05D1\u05D2 xyz"), style, 240.0F, {});
+  REQUIRE(bidi->CaretRect(4, TextAffinity::Upstream).x != bidi->CaretRect(4, TextAffinity::Downstream).x);
+  REQUIRE(bidi->RangeRects({2, 5}).size() >= 2);
   renderer.Discard();
   CoUninitialize();
 }
@@ -491,11 +471,11 @@ TEST_CASE("Win32CustomFontsKeepExactFaceAndLoaderLifetimeAcrossRendererDiscard")
   REQUIRE(renderer.MeasureRun("AA", regular, {}).advance == Catch::Approx(20.0F));
   REQUIRE(renderer.MeasureRun("AA", {font.WithWeight(FontWeight::Bold), Color::Black()}, {}).advance == Catch::Approx(32.0F));
   const auto rich = AttributedText::FromRanges("AA", {{{1, 2}, {.font_weight = FontWeight::Bold}}});
-  auto layout = renderer.CreateTextLayout(rich, regular, 200.0F, {.wrap = TextWrap::NoWrap});
+  auto layout = renderer.CreatePlatformTextLayout(rich, regular, 200.0F, {.wrap = TextWrap::NoWrap});
   REQUIRE(layout->CaretRect(2, TextAffinity::Upstream).x == Catch::Approx(26.0F));
   const auto system = Font::System(20.0F);
   const auto mixed = AttributedText::FromRanges("AA", {{{1, 2}, {.font = system}}});
-  const auto mixed_layout = renderer.CreateTextLayout(mixed, regular, 200.0F, {.wrap = TextWrap::NoWrap});
+  const auto mixed_layout = renderer.CreatePlatformTextLayout(mixed, regular, 200.0F, {.wrap = TextWrap::NoWrap});
   const float system_advance = renderer.MeasureRun("A", {system, Color::Black()}, {}).advance;
   REQUIRE(mixed_layout->CaretRect(2, TextAffinity::Upstream).x == Catch::Approx(10.0F + system_advance));
   renderer.Discard();

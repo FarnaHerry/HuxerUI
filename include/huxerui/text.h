@@ -19,7 +19,9 @@
 namespace huxerui {
 
 class File;
+class PaintContext;
 class RawResource;
+class UiWindow;
 
 namespace detail {
 struct InternalAccess;
@@ -463,7 +465,6 @@ public:
 
 private:
   friend struct detail::InternalAccess;
-  friend class TextParagraphLayout;
   struct Storage;
   explicit AttributedText(std::shared_ptr<const Storage> storage);
   std::shared_ptr<const Storage> storage_;
@@ -648,31 +649,74 @@ struct TextLayoutMetrics {
   bool operator==(const TextLayoutMetrics&) const = default;
 };
 
-/// An owned native paragraph layout created by TextMeasurer::LayoutText().
+/// Source range and geometry of one visual line in a TextLayout.
+struct TextLineMetrics {
+  /// Half-open UTF-16 range in the source text, including trailing spaces and excluding the hard line break.
+  TextRange range;
+  /// Unclipped logical line bounds relative to the paragraph origin.
+  Rect bounds;
+  /// Distance from the top of the paragraph to the line's baseline, in logical units.
+  float baseline = 0.0F;
+};
+
+/// An immutable, copyable paragraph layout created by TextMeasurer::CreateTextLayout().
 ///
-/// Copies share the layout. Query it on the originating UiWindow's thread while the window is active.
-/// Coordinates are paragraph-local logical units before external placement or clipping.
-/// Offsets are UTF-16 scalar boundaries. Invalid positions, ranges, or nonfinite points throw std::invalid_argument.
-class TextParagraphLayout final {
+/// Use the layout on its creating UI thread. Points and rectangles use logical units relative to the paragraph's
+/// top-left origin. Obtain a new layout when its inputs or the resolved font metrics change.
+///
+/// Queries taking offsets require UTF-16 positions from zero through the source length. An out-of-bounds
+/// offset or one inside a surrogate pair throws std::invalid_argument. LineIndex() and CaretRect() use affinity
+/// to resolve the caret boundary for an offset inside a grapheme.
+class TextLayout final {
 public:
-  /// Returns the measured layout extent.
-  [[nodiscard]] Size Measure() const;
-  /// Maps a local point to an insertion position with visual affinity.
-  [[nodiscard]] TextPosition HitTest(Point point) const;
-  /// Returns the caret rectangle at the selected side of a logical boundary.
-  [[nodiscard]] Rect CaretRect(TextPosition position) const;
-  /// Returns the visual fragments of an ordered range, which may be disjoint at wraps or bidi boundaries.
-  [[nodiscard]] std::vector<Rect> RangeRects(TextRange range) const;
-  /// Moves to the preceding grapheme boundary in logical order, stopping at the paragraph start.
-  [[nodiscard]] TextOffset PreviousCaretOffset(TextOffset offset) const;
-  /// Moves to the following grapheme boundary in logical order, stopping at the paragraph end.
-  [[nodiscard]] TextOffset NextCaretOffset(TextOffset offset) const;
+  /// @return The measured paragraph size, first and last baseline offsets, and visual line count.
+  TextLayoutMetrics Metrics() const;
+
+  /// Returns visual lines in top-to-bottom order.
+  /// @return A span valid while a TextLayout owning the same snapshot is alive.
+  std::span<const TextLineMetrics> Lines() const;
+
+  /// Finds the visual line for a caret position.
+  /// @param position Source offset and affinity. At a soft wrap, affinity selects the preceding or following line.
+  /// @return A zero-based index into Lines().
+  std::size_t LineIndex(TextPosition position) const;
+
+  /// Finds the insertion position for a point, including points outside the paragraph.
+  /// @param point Point in paragraph-local logical coordinates.
+  /// @return The nearest caret boundary with its visual affinity.
+  /// @throws std::invalid_argument If either coordinate is non-finite.
+  TextPosition HitTest(Point point) const;
+
+  /// Resolves the visual caret for a source position.
+  /// @param position Source offset and affinity for resolving the visual caret.
+  /// @return The unclipped caret rectangle in paragraph-local logical coordinates.
+  Rect CaretRect(TextPosition position) const;
+
+  /// Computes the visual fragments covered by a source range.
+  /// @param range Ordered, half-open UTF-16 range in the source text.
+  /// @return Unclipped paragraph-local rectangles, or an empty vector for a collapsed range.
+  /// A range can yield several rectangles across lines or directional runs.
+  /// @throws std::invalid_argument If the range is reversed or has an invalid endpoint.
+  std::vector<Rect> RangeRects(TextRange range) const;
+
+  /// Finds the previous caret boundary in logical text order.
+  /// @param offset Source UTF-16 offset.
+  /// @return The preceding caret offset, or zero at the start of the text.
+  TextOffset PreviousCaretOffset(TextOffset offset) const;
+
+  /// Finds the next caret boundary in logical text order.
+  /// @param offset Source UTF-16 offset.
+  /// @return The following caret offset, or the source length at the end of the text.
+  TextOffset NextCaretOffset(TextOffset offset) const;
 
 private:
+  struct Data;
+  explicit TextLayout(std::shared_ptr<const Data> data);
+  TextPosition SnapCaret(TextPosition position) const;
+
+  std::shared_ptr<const Data> data_;
   friend class UiWindow;
-  TextParagraphLayout(AttributedText text, std::shared_ptr<const detail::TextLayout> layout);
-  AttributedText text_;
-  std::shared_ptr<const detail::TextLayout> layout_;
+  friend class PaintContext;
 };
 
 /// Identifies a link requested by pointer, keyboard, or accessibility activation.
@@ -697,10 +741,12 @@ struct TextEvents {
   struct LinkActivated : Event<void(const TextLinkActivation&)> {};
 };
 
-/// Synchronous platform text measurement and paragraph layout shared by components and custom drawing.
+/// Synchronous text measurement and paragraph layout for components and custom drawing.
 ///
-/// Calls run on the UiWindow's host thread. Retain returned values, not the service reference, beyond the
-/// current composition, layout, or geometry-preparation operation. Platform font engines may differ in metrics.
+/// Calls run on the UiWindow's host thread. Borrow the service for the current composition, layout, or
+/// geometry-preparation operation. Returned metrics and layouts can outlive the call.
+///
+/// Platform font engines may produce different metrics.
 /// Web's Canvas backend does not promise mixed bidirectional or cross-run shaping equivalent to non-Web backends.
 /// Measurement reads only the supplied shaping options, not the active Environment.
 class TextMeasurer {
@@ -710,14 +756,14 @@ public:
   /// Resolves font-level distances without measuring a string.
   /// @param font Platform-neutral font request.
   /// @return Metrics in logical units for the resolved font.
-  [[nodiscard]] virtual FontMetrics Metrics(const Font& font) = 0;
+  virtual FontMetrics Metrics(const Font& font) = 0;
   /// Shapes one exact run without paragraph wrapping; the caller owns line breaking and baseline placement.
   /// @param text Valid UTF-8 containing no line breaks.
   /// @param style Complete font, foreground, and decoration style.
   /// @param options Explicit direction and locale hints.
   /// @return Advance and conservative painted bounds relative to baseline (0, 0), plus font metrics.
-  [[nodiscard]] virtual TextRunMetrics
-  MeasureRun(std::string_view text, const TextStyle& style, const TextShapingOptions& options = {}) = 0;
+  virtual TextRunMetrics MeasureRun(
+      std::string_view text, const TextStyle& style, const TextShapingOptions& options = {}) = 0;
   /// Measures a complete attributed paragraph, including explicit breaks and optional automatic wrapping.
   /// @param text Immutable paragraph with UTF-16 character ranges.
   /// @param style Base style inherited by character attributes that are not overridden.
@@ -725,7 +771,7 @@ public:
   /// @param options Paragraph shaping, alignment, and wrapping; vertical alignment does not affect intrinsic size.
   /// @return Paragraph size, first and last baselines, and line count.
   /// A finite width constrains the reported width even with NoWrap; it does not shorten the source text.
-  [[nodiscard]] virtual TextLayoutMetrics MeasureText(const AttributedText& text, const TextStyle& style,
+  virtual TextLayoutMetrics MeasureText(const AttributedText& text, const TextStyle& style,
       float max_width = std::numeric_limits<float>::infinity(), const TextLayoutOptions& options = {}) = 0;
 
   /// Measures plain text through the same paragraph path as AttributedText.
@@ -735,25 +781,30 @@ public:
   /// @param options Paragraph shaping, alignment, and wrapping options.
   /// @return Paragraph size, baseline offsets, and line count.
   /// @throws std::invalid_argument If text is not valid UTF-8.
-  [[nodiscard]] TextLayoutMetrics MeasureText(std::string_view text, const TextStyle& style,
+  TextLayoutMetrics MeasureText(std::string_view text, const TextStyle& style,
       float max_width = std::numeric_limits<float>::infinity(), const TextLayoutOptions& options = {}) {
     return MeasureText(AttributedText(std::string(text)), style, max_width, options);
   }
 
-  /// Shapes a paragraph for hit testing, caret movement, and range geometry.
-  /// Use equivalent text, base style, width, and options when drawing. Apply vertical placement at the call site.
-  /// @param max_width Nonnegative width in logical units, or positive infinity for unconstrained layout.
-  /// @throws std::invalid_argument If the width is invalid.
-  /// @throws std::logic_error If native layout is unavailable.
-  [[nodiscard]] virtual TextParagraphLayout LayoutText(const AttributedText& text, const TextStyle& style,
-      float max_width = std::numeric_limits<float>::infinity(), const TextLayoutOptions& options = {});
+  /// Lays out an attributed paragraph for drawing and interaction.
+  /// @param text Source text with optional style and link ranges.
+  /// @param style Base style for portions without an explicit override.
+  /// @param width Finite positive layout width in logical units.
+  /// @param options Paragraph shaping, horizontal alignment, and wrapping. The layout uses a top origin
+  /// regardless of vertical_align. Pass the effective shaping locale to use an inherited locale.
+  /// @return An immutable layout. Empty text and a trailing hard break each produce an empty visual line.
+  /// @throws std::invalid_argument If width is non-finite or non-positive.
+  /// @throws std::logic_error If a live paragraph layout service is unavailable.
+  /// @see PaintContext::DrawText(Point, const TextLayout&)
+  virtual TextLayout CreateTextLayout(
+      const AttributedText& text, const TextStyle& style, float width, const TextLayoutOptions& options = {});
 };
 
 /// Borrows the current UiWindow's text measurer for the active composition.
 ///
 /// Use this from an application root, composable component, or a custom hook called by one.
-/// Retain metrics or a layout snapshot for later queries on the host thread.
-/// @return The active host's synchronous text-measurement and layout service.
+/// Borrow the service during the active composition. You can retain the resulting metrics and layouts.
+/// @return The active host's synchronous text-measurement service.
 /// @throws std::logic_error If no active service is available or the service is disconnected.
 /// @code
 /// TextLayoutMetrics UseLabelMetrics(std::string_view label) {

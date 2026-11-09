@@ -11,7 +11,7 @@
 
 namespace huxerui::detail {
 
-class TextLayout;
+class TextLayoutBackend;
 
 struct LinuxBackdropStats {
   std::size_t plane_count = 0;
@@ -53,12 +53,12 @@ public:
   MeasureRun(std::string_view text, const TextStyle& style, const TextShapingOptions& options);
   [[nodiscard]] TextLayoutMetrics
   MeasureText(std::string_view text, const TextStyle& style, float max_width, const TextLayoutOptions& options = {});
-  [[nodiscard]] std::unique_ptr<TextLayout> CreateTextLayout(std::string_view text, const TextStyle& style,
-      float max_width, const TextLayoutOptions& options = {});
+  std::unique_ptr<TextLayoutBackend> CreatePlatformTextLayout(
+      std::string_view text, const TextStyle& style, float max_width, const TextLayoutOptions& options = {});
   [[nodiscard]] TextLayoutMetrics
   MeasureText(const AttributedText& text, const TextStyle& style, float max_width, const TextLayoutOptions& options);
-  [[nodiscard]] std::unique_ptr<TextLayout> CreateTextLayout(const AttributedText& text, const TextStyle& style,
-      float max_width, const TextLayoutOptions& options);
+  std::unique_ptr<TextLayoutBackend> CreatePlatformTextLayout(
+      const AttributedText& text, const TextStyle& style, float max_width, const TextLayoutOptions& options);
 
   void Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame);
   void SnapshotSlice(GtkSnapshot* snapshot, const RenderFrame& frame, std::size_t first_command,

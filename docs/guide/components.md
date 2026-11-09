@@ -90,11 +90,13 @@ Controlled text, selection, and focus survive that update.
 On Web and Linux, `UseTextMeasurer()` subscribes composition to font readiness and text DPI changes respectively; remeasure during recomposition to update geometry derived from its results.
 Previously returned measurements remain snapshots and do not update themselves.
 
-### Native paragraph geometry
+### Custom text layout
 
-Custom text components can call `UseTextMeasurer().LayoutText(paragraph, style, width, options)` to retain a `TextParagraphLayout` for hit testing, caret movement, and range rectangles. Query it on the originating window's thread while the window is active. Rebuild it when the paragraph, style, layout inputs, or observed text metrics change.
+Use `UseTextMeasurer().CreateTextLayout(text, style, width, options)` when drawing and interaction need the same paragraph geometry. Keep the resulting `TextLayout` on the UI thread and recreate it during composition or `NodeExtension::PrepareGeometry()` when its inputs change. Pass the effective shaping locale explicitly when the editor should inherit it.
 
-Pass the same paragraph, base style, width, and options when drawing. Geometry uses paragraph-local logical units before vertical placement or clipping. Use `HitTest()` to get a UTF-16 position with affinity, `CaretRect()` for its caret, and `RangeRects()` for the visual fragments of a selection. Grapheme navigation is available through `PreviousCaretOffset()` and `NextCaretOffset()`.
+`Lines()`, `HitTest()`, `CaretRect()`, and `RangeRects()` use coordinates relative to the paragraph origin and UTF-16 text offsets. `LineIndex()` uses caret affinity at soft wraps, and `PreviousCaretOffset()` and `NextCaretOffset()` step through logical caret boundaries. Pass the layout to `PaintContext::DrawText(origin, layout)` and use the same origin to translate pointer and selection geometry.
+
+The [custom editor example](../../examples/custom_editor/main.cpp) lays out rich paragraphs around a drawn block using public APIs. Its scrollable toolbar includes character styles, a size menu, text color and highlight palettes, rounded inline code backgrounds, and a clear formatting action. It applies styles to selections across paragraphs, shares undo and redo across text and formatting edits, and uses a single `TextInputClient` session for the whole document.
 
 ### Selection and virtualized text
 

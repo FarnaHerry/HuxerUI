@@ -530,7 +530,7 @@ std::vector<TextOffset> BrowserGraphemeBoundaries(std::string_view text, std::st
 
 } // namespace
 
-class WebTextLayout final : public TextLayout {
+class WebTextLayout final : public TextLayoutBackend {
 public:
   struct CaretStop {
     TextOffset offset = 0;
@@ -655,6 +655,15 @@ public:
 
   [[nodiscard]] const std::vector<Line>& Lines() const noexcept {
     return lines_;
+  }
+
+  std::vector<TextLineMetrics> LineMetrics() const override {
+    std::vector<TextLineMetrics> result;
+    result.reserve(lines_.size());
+    for (const Line& line : lines_) {
+      result.push_back({{line.start, line.end}, {LineOffset(line), line.top, line.width, line.height}, line.baseline});
+    }
+    return result;
   }
 
   [[nodiscard]] const TextLayoutMetrics& Metrics() const noexcept {
@@ -1055,8 +1064,8 @@ TextLayoutMetrics WebRenderer::MeasureText(const AttributedText& text, const Tex
   return metrics;
 }
 
-std::unique_ptr<TextLayout> WebRenderer::CreateTextLayout(const AttributedText& text, const TextStyle& style,
-    float max_width, const TextLayoutOptions& options) {
+std::unique_ptr<TextLayoutBackend> WebRenderer::CreatePlatformTextLayout(
+    const AttributedText& text, const TextStyle& style, float max_width, const TextLayoutOptions& options) {
   return std::make_unique<WebTextLayout>(context_, text, style.font, max_width, options);
 }
 
