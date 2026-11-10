@@ -1644,7 +1644,9 @@ void UiWindow::RetireContent() noexcept {
   state_->text_layout_cache_bytes_ = 0;
   if (state_->file_drop_) {
     state_->file_drop_->DisconnectFileDrop();
-    state_->file_drop_.reset();
+    if (state_->retired_) {
+      state_->file_drop_.reset();
+    }
   }
   if (state_->text_) {
     state_->text_->HideTextSelectionOverlay();
@@ -1654,17 +1656,21 @@ void UiWindow::RetireContent() noexcept {
     } catch (...) {
     }
   }
-  state_->text_.reset();
+  if (state_->retired_) {
+    state_->text_.reset();
+  }
   DeactivateExternalTextures(state_->committed_scene_snapshot_, state_->owner_.external_texture_frame_requester_);
   state_->committed_scene_snapshot_.clear();
   state_->has_committed_scene_snapshot_ = false;
   external_texture_frame_requester_->Close();
-  if (state_->pointer_) {
-    state_->pointer_->Disconnect();
-    state_->pointer_.reset();
+  if (state_->retired_) {
+    if (state_->pointer_) {
+      state_->pointer_->Disconnect();
+      state_->pointer_.reset();
+    }
+    state_->semantics_.reset();
+    state_->frame_commit_ = {};
   }
-  state_->semantics_.reset();
-  state_->frame_commit_ = {};
   if (state_->window_service_ && state_->retired_) {
     state_->window_service_->Disconnect();
   }

@@ -1766,7 +1766,7 @@ TEST_CASE("RefreshBox keeps content stationary while the indicator follows the p
 
   runtime.HandlePointerEvent({PointerEventType::Down, 501, {50.0F, 20.0F}, PointerDeviceKind::Touch});
   runtime.HandlePointerEvent({PointerEventType::Move, 501, {50.0F, 80.0F}, PointerDeviceKind::Touch});
-  REQUIRE(FindScrollNode(*runtime.RootNode())->scroll_state->overscroll_offset < 0.0F);
+  REQUIRE(FindScrollNode(*runtime.RootNode())->scroll_state->Motion(Axis::Vertical).overscroll_offset < 0.0F);
   const std::optional<float> short_indicator = RefreshIndicatorCenterY(runtime.BuildFrame());
   REQUIRE(short_indicator.has_value());
   // The pull is stored as overscroll, and the descendant translation must not follow it.

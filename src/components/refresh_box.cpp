@@ -131,7 +131,7 @@ public:
       // equal and opposite translation to cancel it for the descendants only; the indicator keeps using the
       // overscroll through LeadingDisplacement, and the offset itself must stay intact because the release
       // threshold and the settle motion are computed from it.
-      const float overscroll = mounted.scroll_state->overscroll_offset;
+      const float overscroll = mounted.scroll_state->Motion(Axis::Vertical).overscroll_offset;
       if (overscroll != 0.0F) {
         mounted.presentation.children_transform = detail::ComposeTransform(
             detail::TranslationTransform({0.0F, overscroll}),
