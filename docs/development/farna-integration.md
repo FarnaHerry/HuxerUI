@@ -8,9 +8,9 @@ Before treating a fork commit as an upstream contribution, check the [Upstream C
 
 ## Upstream anchor direction
 
-Upstream will unify `FocusTarget` and presentation anchors through `ViewHandle`, so anchor lifetime will be owned by that handle instead of per-node mount identity.
-The fork's `bd8fb056` layer-anchor transfer fix should not be proposed separately; PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged.
-Keep the fork fix until the upstream `ViewHandle` work lands, then remove it and rerun popup/menu replacement coverage against the unified handle.
+Upstream `1b227315` unified `FocusTarget` and presentation anchors through `ViewHandle`, so anchor lifetime is owned by that handle instead of per-node mount identity.
+The fork's `bd8fb056` layer-anchor transfer fix was removed during merge `c2f099c1`; it should not be proposed separately because PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged.
+`TestAnchoredPresentationFollowsViewHandleAcrossReplacement` covers popup replacement against the unified handle.
 
 ## Initial inventory
 

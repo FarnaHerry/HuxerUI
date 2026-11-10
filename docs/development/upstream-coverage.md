@@ -63,7 +63,7 @@ These items should not be resubmitted because an upstream design change owns the
 
 | Area | Fork evidence | Upstream direction | Action |
 |---|---|---|---|
-| Layer anchor transfer across structural replacement | `bd8fb056` | Upstream will unify `FocusTarget` and presentation anchors through `ViewHandle`; anchor lifetime will be owned by that handle instead of per-node mount identity. PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged. | Do not resubmit. Keep the fork fix until the `ViewHandle` change lands, then remove it and rerun the popup/menu replacement coverage. |
+| Layer anchor transfer across structural replacement | `bd8fb056` | Upstream `1b227315` unified `FocusTarget` and presentation anchors through `ViewHandle`; anchor lifetime is owned by that handle instead of per-node mount identity. PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged. | Do not resubmit. The fork fix was removed during merge `c2f099c1`; `TestAnchoredPresentationFollowsViewHandleAcrossReplacement` covers popup replacement with the unified handle. |
 
 ## Checked and still fork-only
 
