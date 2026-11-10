@@ -700,6 +700,8 @@ function(_huxerui_deploy_runtime source_executable content_directory executable)
         set(system_excludes "^/System/Library/" "^/usr/lib/")
     else ()
         find_program(patchelf patchelf REQUIRED)
+        # Before 0.19.0, --set-rpath could relocate .init without updating DT_INIT, so the loader jumped to
+        # overwritten bytes and the packaged application crashed (NixOS/patchelf#639).
         _huxerui_runtime_command(patchelf_version "${patchelf}" --version)
         if (NOT patchelf_version MATCHES "^patchelf ([0-9]+\\.[0-9]+(\\.[0-9]+)?)")
             message(FATAL_ERROR "HuxerUI could not determine the patchelf version at ${patchelf}: ${patchelf_version}")

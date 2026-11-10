@@ -2324,7 +2324,7 @@ private:
     } else if (position.x > content.x + content.width) {
       delta = position.x - (content.x + content.width);
     }
-    if (detail::ScrollNodeBy(*node_, delta, ScrollSource::Drag) != 0.0F) {
+    if (detail::ScrollNodeBy(*node_, node_->scroll_state->axis, delta, ScrollSource::Drag) != 0.0F) {
       caret_reveal_pending_ = false;
     }
   }

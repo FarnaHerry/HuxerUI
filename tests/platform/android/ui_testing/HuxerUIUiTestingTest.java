@@ -81,9 +81,11 @@ public final class HuxerUIUiTestingTest extends Instrumentation {
                 String packagePath = packageRoot.getAbsolutePath();
                 runOnMainSync(() -> result.putString("error", runNative(packagePath)));
                 if (org.huxerui.testing.BuildConfig.HUXERUI_BACKDROP_TESTS) HuxerUIBackdropTest.verify(this);
+                HuxerUIPermissionTest.verify(this);
                 HuxerUIFileReferenceTest.verify(this);
                 HuxerUIActivityResultTest.verify(this);
             }
+
             String error = result.getString("error");
             boolean passed = error != null && error.isEmpty();
             String success = nativeFastValidation ? "HuxerUI native Fast validation: PASS\n"

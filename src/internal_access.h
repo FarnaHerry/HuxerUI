@@ -135,8 +135,8 @@ struct InternalAccess {
       LayerPlacement placement,
       std::shared_ptr<LayerTransitionState> transition = {},
       std::shared_ptr<const SemanticModalGroupToken> semantic_modal_group = {},
-      std::optional<std::uint64_t> retained_focus_identity = std::nullopt,
-      std::optional<FocusRequester> initial_focus = std::nullopt
+      std::optional<ViewHandle> retained_focus_target = std::nullopt,
+      std::optional<ViewHandle> initial_focus = std::nullopt
   );
   static LayerId AttachCapturedReplacing(
       const LayerController& layers,
@@ -147,8 +147,8 @@ struct InternalAccess {
       LayerPlacement placement,
       std::shared_ptr<LayerTransitionState> transition,
       std::shared_ptr<const SemanticModalGroupToken> semantic_modal_group = {},
-      std::optional<std::uint64_t> retained_focus_identity = std::nullopt,
-      std::optional<FocusRequester> initial_focus = std::nullopt
+      std::optional<ViewHandle> retained_focus_target = std::nullopt,
+      std::optional<ViewHandle> initial_focus = std::nullopt
   );
   static bool UpdateCaptured(
       const LayerController& layers,

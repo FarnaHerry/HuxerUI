@@ -165,9 +165,7 @@ export namespace huxerui {
     using huxerui::FlatTheme;
     using huxerui::FlatThemeDefinition;
     using huxerui::Flow;
-    using huxerui::FocusRequester;
     using huxerui::FocusRing;
-    using huxerui::FocusTarget;
     using huxerui::Focusable;
     using huxerui::Font;
     using huxerui::FontFamily;
@@ -229,7 +227,6 @@ export namespace huxerui {
     using huxerui::KeyModifiers;
     using huxerui::KeyframeSpec;
     using huxerui::LaunchActivation;
-    using huxerui::LayerAnchor;
     using huxerui::LayerCancelPolicy;
     using huxerui::LayerController;
     using huxerui::LayerId;
@@ -298,6 +295,7 @@ export namespace huxerui {
     using huxerui::Path;
     using huxerui::PathFillRule;
     using huxerui::Permission;
+    using huxerui::PermissionSettingsTarget;
     using huxerui::PermissionStatus;
     using huxerui::PlacePlatformViewCommand;
     using huxerui::PlatformChannel;
@@ -370,7 +368,6 @@ export namespace huxerui {
     using huxerui::SaveFileOptions;
     using huxerui::Scale;
     using huxerui::ScaleFadeTransition;
-    using huxerui::SceneTransitionAnchor;
     using huxerui::SceneTransitionHandle;
     using huxerui::Scope;
     using huxerui::ScrollActivity;
@@ -564,7 +561,6 @@ export namespace huxerui {
     using huxerui::UseDialog;
     using huxerui::UseEnvironment;
     using huxerui::UseEvents;
-    using huxerui::UseFocusRequester;
     using huxerui::UseImage;
     using huxerui::UseMenu;
     using huxerui::UseNavigation;
@@ -585,6 +581,7 @@ export namespace huxerui {
     using huxerui::UseTheme;
     using huxerui::UseToast;
     using huxerui::UseVectorImage;
+    using huxerui::UseViewHandle;
     using huxerui::UseViewportClass;
     using huxerui::UseWindow;
     using huxerui::Validate;
@@ -597,6 +594,7 @@ export namespace huxerui {
     using huxerui::View;
     using huxerui::ViewEvents;
     using huxerui::ViewFactory;
+    using huxerui::ViewHandle;
     using huxerui::ViewModifier;
     using huxerui::ViewNode;
     using huxerui::ViewportBreakpoints;

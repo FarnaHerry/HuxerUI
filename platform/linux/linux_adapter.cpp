@@ -1642,28 +1642,30 @@ private:
     ExecutionGuard guard(InternalAccess::WindowExecution(*this));
     frame_source_ = 0;
     // A ready GLib frame source can run after a close request destroys the drawing widget.
-    if (!IsInitialized() || drawing_area_ == nullptr || !running_ ||
-        !GTK_IS_WIDGET(drawing_area_) || !frame_coordinator_.BeginCommit()) {
+    if (!IsInitialized() || drawing_area_ == nullptr || !running_ || !GTK_IS_WIDGET(drawing_area_)) {
       return;
     }
-    // Keep the previous frame's text scale until its snapshot has finished, then rebuild all text geometry together.
-    RefreshTextDpi();
     try {
-      const FrameCommit& commit = UiWindow::BuildFrame();
-      if (drawing_area_ == nullptr || !running_ || !GTK_IS_WIDGET(drawing_area_)) {
-        return;
-      }
-      committed_frame_ = &commit.render_frame;
-      if (platform_views_) {
-        platform_views_->Commit(*committed_frame_);
-      }
-      if (gtk_widget_is_visible(GTK_WIDGET(drawing_area_))) {
-        frame_coordinator_.MarkPaintPending();
-        gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
-      }
-      if (commit.next_frame_deadline.has_value()) {
-        RequestFrameAt(*commit.next_frame_deadline);
-      }
+      frame_coordinator_.Commit([&] {
+        // Keep the previous frame's text scale until its snapshot has finished, then rebuild all text geometry
+        // together.
+        RefreshTextDpi();
+        const FrameCommit& commit = BuildFrameOrErrorPage();
+        if (drawing_area_ == nullptr || !running_ || !GTK_IS_WIDGET(drawing_area_)) {
+          return;
+        }
+        committed_frame_ = &commit.render_frame;
+        if (platform_views_) {
+          platform_views_->Commit(*committed_frame_);
+        }
+        if (gtk_widget_is_visible(GTK_WIDGET(drawing_area_))) {
+          frame_coordinator_.MarkPaintPending();
+          gtk_widget_queue_draw(GTK_WIDGET(drawing_area_));
+        }
+        if (commit.next_frame_deadline.has_value()) {
+          RequestFrameAt(*commit.next_frame_deadline);
+        }
+      });
     } catch (...) {
       runtime_->ReportFailure(std::current_exception());
     }
@@ -1677,7 +1679,7 @@ private:
   }
 
   void DrawFrame(GtkSnapshot* snapshot) {
-    if (!IsInitialized() || committed_frame_ == nullptr) {
+    if (frame_coordinator_.DeferPaintIfCommitting() || !IsInitialized() || committed_frame_ == nullptr) {
       return;
     }
     frame_coordinator_.BeginPaint();
@@ -2391,7 +2393,7 @@ private:
   GdkDevice* pointer_device_ = nullptr;
   GdkDrag* native_drag_ = nullptr;
   std::shared_ptr<WindowDrag> native_transfer_;
-  PlatformFrameCoordinator frame_coordinator_;
+  FrameCoordinator frame_coordinator_;
   const RenderFrame* committed_frame_ = nullptr;
   guint frame_source_ = 0;
   bool running_ = false;

@@ -525,6 +525,7 @@ public:
 
   struct SettingsRequest {
     huxerui::Permission permission = huxerui::Permission::Camera;
+    huxerui::PermissionSettingsTarget target = huxerui::PermissionSettingsTarget::Application;
     huxerui::detail::PermissionSettingsCompletion completion;
     bool canceled = false;
   };
@@ -552,9 +553,9 @@ public:
     return [this, index] { requests[index].canceled = true; };
   }
 
-  std::function<void()> OpenSettings(huxerui::Permission permission,
+  std::function<void()> OpenSettings(huxerui::Permission permission, huxerui::PermissionSettingsTarget target,
       huxerui::detail::PermissionSettingsCompletion completion) override {
-    settings.push_back({permission, std::move(completion)});
+    settings.push_back({permission, target, std::move(completion)});
     const std::size_t index = settings.size() - 1;
     if (immediate_settings.has_value()) {
       settings[index].completion(*immediate_settings);
@@ -615,6 +616,7 @@ public:
   }
 
   using huxerui::UiWindow::UpdateSystemThemeBrightness;
+  using huxerui::UiWindow::BuildFrameOrErrorPage;
   ThemeBrightness QuerySystemThemeBrightness() const override { return system_theme_brightness; }
   ThemeBrightness system_theme_brightness = ThemeBrightness::Light;
 
