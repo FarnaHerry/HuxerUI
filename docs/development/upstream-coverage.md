@@ -7,8 +7,8 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `bfdbc8cc` (`feat(io): expose seekable Android fds and guard Web storage`).
-- Fork merge commit: `a559c788`.
+- Last merged upstream commit: `14b1af53` (`feat(scroll): support two-axis scrolling and virtualization`).
+- Fork merge commit: `c2f099c1`.
 - Last audit date: 2026-11-10.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
@@ -41,6 +41,7 @@ Check the residual diff and the upstream source, not only the commit list.
 | Drag preview grab-offset beyond viewport edges | `3e16bf4c` (drag-preview hunk) | Upstream `711a9eae` uses `LayerPlacementKind::Positioned` for preview placement; current fork has no residual `DragPreviewPlacement` difference | Drop the shared fix. |
 | Public paragraph layout | `554d9a54`, `TextParagraphLayout`, `TextMeasurer::LayoutText` | Upstream `1949e84e` added `TextLayout` and `TextMeasurer::CreateTextLayout`; the fork API and its module export were removed during merge `a559c788` | Do not reintroduce. `TextField::TextStyles` must use `CreatePlatformTextLayout(AttributedText)`. |
 | Runtime multi-window API and platform creation hooks | `d6c13b6c`, `5c6198e8`, `eab74b07`, `0b289005` overlap conceptually | Upstream already declares `ApplicationHandle::OpenWindow`, `Runtime::OpenWindow`, `SupportsMultipleWindows`, and Windows/Linux/macOS `CreateUiWindow` overrides; `examples/multi_window` also exists | Do not propose "add multi-window". Propose only the remaining capabilities and fixes: relationships, windowless startup, utility/floating windows, native window requests, and cross-window drag. |
+| patchelf 0.19 minimum for runtime deployment | `738fe88b` | Upstream `b51f7139` (#165) rejects older patchelf before rewriting staged binaries and pins SDK CI to the verified 0.19.2 archives | Drop the fork-only proposal; keep the merged upstream implementation. |
 
 ## Partially covered
 
@@ -48,14 +49,6 @@ Check the residual diff and the upstream source, not only the commit list.
 |---|---|---|
 | macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
 | iOS app-target link closure | Upstream `cmake/HuxerUIApp.cmake` walks `INTERFACE_LINK_LIBRARIES` and emits some `$<TARGET_FILE:>` entries | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, alias handling, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
-
-## Submitted upstream
-
-These items are no longer fork-only candidates, but they are not covered until the upstream PR merges.
-
-| Area | Fork evidence | Upstream PR | Submitted |
-|---|---|---|---|
-| patchelf 0.19 minimum for runtime deployment | `738fe88b` | [#165](https://github.com/HuxerUI/HuxerUI/pull/165) | 2026-11-10 |
 
 ## Superseded upstream
 
@@ -88,7 +81,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
 | Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability |
 | TextField attributed character styles | `319c538d` | Fork-only capability |
-| `ScrollView::FillViewport` | `12cd2215` | Fork-only capability |
+| `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice |
