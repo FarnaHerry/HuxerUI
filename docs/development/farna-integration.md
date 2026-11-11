@@ -50,6 +50,8 @@ control, and Pager distance/velocity thresholds. It is a preservation commit, no
 independent fix. The follow-up integration adds focused public-header, HTTP ownership and lifecycle checks,
 and makes the Linux native test target link libepoxy explicitly for shared-only builds.
 
+Pager release thresholds remain the only deliberate interaction tuning. The upstream author plans to expose configuration for them; the [Upstream Coverage Registry](upstream-coverage.md) records the current fork defaults and the replacement point.
+
 Android's whole-host default focus highlight is disabled in `HuxerUIView` on API 26 and later. Keyboard and touch-mode
 focus remain enabled. This moves the split-screen brightness correction into the framework for all consumers.
 The application-side workaround can be removed after a consumer adopts and verifies this revision.

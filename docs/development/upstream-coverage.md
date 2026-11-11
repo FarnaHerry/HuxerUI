@@ -87,11 +87,15 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
-| Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice |
+| Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
 | Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only build fix |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
+
+Pager release thresholds are the one interaction difference kept deliberately: the fork uses 450 logical pixels per second and 25% of the pager extent, while upstream uses 600 and 35%.
+The upstream author confirmed that configurable tuning will be opened later, so keep the fork constants until that capability lands and do not submit a duplicate PR.
+When the upstream API becomes available, replace the constants with explicit per-Pager configuration and leave upstream defaults in place for applications that do not opt in.
 
 ## Remaining upstream bug-fix candidates
 
