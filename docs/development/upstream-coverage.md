@@ -45,6 +45,10 @@ Check the residual diff and the upstream source, not only the commit list.
 | Windows DWM corner preference for custom chrome | `85a8ea5e` | Upstream `bdd0987b` requests `DWMWCP_ROUND` through `DWMWA_WINDOW_CORNER_PREFERENCE` after the custom frame is applied | Drop the fork patch; the merged `win32_adapter.cpp` keeps the upstream call with the fork's numeric attribute values so pre-Windows-11 SDK toolchains still compile. |
 | Windows PlatformView input-overlay window region | `e6b4ba83` | Upstream `38eb34dc` builds the overlay shield from mounted hit candidates, keeps covering controls shielded, honors custom input bounds, and covers `tests/platform/windows/platform_view.cpp` | Drop the fork patch; upstream's `BuildOverlayRegion` supersedes the container-rectangle holes. |
 | Windows single-instance activation target | `c9e3b63f` | Upstream discovers the target through the hidden facilities window with `EnumWindows` in `win32_adapter.cpp`; `af8b6462` restored that path and removed the fork's primary-window marker | Drop the fork patch. |
+| Win32 `CreateWindow` macro collision | `c81042d7`, PR #151 | Upstream `e613b515` renamed the Runtime factory to `CreateUiWindow`; the Windows-local `CreateApplicationWindow` helper keeps the macro away | The fork now matches upstream exactly; no separate patch. |
+| mcpp compile failure with profiling disabled | `368f3f57`, PR #164 | Upstream `9b8f5d05` defaults source profiling off and `3abaa77b` excludes `src/runtime/profiling.cpp` from the mcpp glob | Drop the fork patch; the merge brings the exclusion and the option default. |
+| Host system appearance preference | PR #135 | Upstream `5523172a` adds per-window `UseSystemThemeBrightness()` and `ThemeBrightness`, with native observation on every platform | Use only the upstream API; the fork branch was deleted. |
+| Pager, drag-preview, and hidden virtual-subtree fixes from PR #150 | `3e16bf4c` | Upstream `784f99a6`, `711a9eae`, and `9f90e005` landed the same behavior before closing #150 | Drop the shared hunks; only the pager cancel target remains fork-only. |
 
 ## Partially covered
 
@@ -66,7 +70,7 @@ These items should not be resubmitted because an upstream design change owns the
 These items were checked at the baseline and remain absent from upstream.
 The list is a re-audit shortcut, not a roadmap or a promise to upstream every item.
 
-| Area | Fork evidence | Status at 2026-11-10 |
+| Area | Fork evidence | Status at 2026-11-11 |
 |---|---|---|
 | Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
@@ -89,6 +93,29 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
 | Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only build fix |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
+
+## Remaining upstream bug-fix candidates
+
+Verified absent from `upstream/main` at `9ae9cb0d`. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+
+| Value | Item | Fork evidence | Upstream gap |
+|---|---|---|---|
+| High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
+| High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
+| High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
+| High | Windows fullscreen stays under the taskbar | `6ebc6213` | Fullscreen still uses `HWND_TOP`; no `HWND_TOPMOST` span or `HWND_NOTOPMOST` restore |
+| High | Pager cancel returns to the displayed page | `3e16bf4c` (pager hunk) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index` |
+| High | Programmatic scroll on disabled containers | `db693dcd` | `ScrollNodeBy` rejects every source when `interaction.enabled` is false |
+| Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
+| Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
+| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
+| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES`; no `LINK_LIBRARIES` closure, alias handling, `file(GENERATE)`, or `CoreMedia` |
+| Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions |
+| Low | Optional X11/Xext linkage | `ad73d2b7` | `cmake/platform/Linux.cmake` always links without optional `x11`/`xext` discovery, and mcpp has no matching switch |
+| Low | `WindowTitleBar` Objective-C++ braces | `3e16bf4c` (window.h hunk) | `window.h` still uses `CrossAlign(...)` instead of `CrossAlign{...}` |
+
+`TextField::TextStyles` (PR #153) stays unadopted upstream, but it is a capability rather than a bug fix.
+The maintainer closed #153 without an equivalent implementation, so it remains a design proposal instead of a regression fix.
 
 ## Procedure for the next upstream merge
 

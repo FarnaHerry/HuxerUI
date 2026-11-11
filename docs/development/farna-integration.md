@@ -12,6 +12,25 @@ Upstream `1b227315` unified `FocusTarget` and presentation anchors through `View
 The fork's `bd8fb056` layer-anchor transfer fix was removed during merge `c2f099c1`; it should not be proposed separately because PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged.
 `TestAnchoredPresentationFollowsViewHandleAcrossReplacement` covers popup replacement against the unified handle.
 
+## Closed upstream pull requests
+
+The maintainer closed eight fork PRs; almost every one landed as an independent implementation, usually without a review comment.
+The fork tracks those upstream commits, so the corresponding preparation branches are retired.
+
+| PR | Disposition | Upstream evidence |
+|---|---|---|
+| #170 | Partial: custom-chrome corner rounding and PlatformView input region adopted; icon resource not adopted; activation target already existed | `bdd0987b`, `38eb34dc` |
+| #164 | Fixed through the profiling default and the mcpp source exclusion | `9b8f5d05`, `3abaa77b` |
+| #163 | Superseded by the unified mounted view target | `1b227315` |
+| #154 | Superseded by the public `TextLayout` API | `1949e84e` |
+| #153 | Closed without an equivalent implementation; `TextField::TextStyles` remains fork-only | none |
+| #151 | Fixed with the `CreateUiWindow` name instead of the proposed `CreateApplicationWindow` | `e613b515` |
+| #150 | Pager, drag-preview, and virtual-subtree fixes landed before closing; the remaining items were already covered | `784f99a6`, `711a9eae`, `9f90e005` |
+| #135 | Replaced by per-window system appearance | `5523172a` |
+
+PRs #149 and #148 were closed by the fork after #150 absorbed them; #141 was later implemented upstream as `e0f49ceb`.
+PRs #139, #140, #138, and #118 were closed by the fork without an upstream equivalent.
+
 ## Initial inventory
 
 The upstream baseline is `0c5126235d43c2b703166bcc00781b850f2d1c39`. The starting acgu HEAD is
@@ -102,10 +121,14 @@ Deleted remote branches and their coverage:
 - `fix/windows-native-window-polish`: the corner preference and input-overlay region are covered by `bdd0987b` and `38eb34dc`, and the activation target was restored from upstream in `af8b6462`.
 - `codex/paragraph-layout` and `codex/upstream-paragraph-layout`: upstream `1949e84e` owns the paragraph layout surface.
 - `codex/upstream-text-field-styles`: already merged into `farna/main`.
+- `fix/mcpp-disabled-profiling`: upstream `3abaa77b` excludes the profiling source from the mcpp glob.
+- `codex/fix-win32-window-factory`: upstream `e613b515` renamed the factory to `CreateUiWindow`.
+- `feat/system-color-scheme`: upstream `5523172a` provides per-window system appearance.
 
 The local branches `fix/patchelf-runtime-safety`, `fix/presentation-layer-anchor-transfer`, and `feat/linux-resize-hitarea` were deleted with their prunable worktrees.
 `fix/windows-native-window-polish` remains checked out in `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-win32`; removing that worktree drops the branch.
-The performance, system-color-scheme, window-caption-controls, mcpp-profiling, Win32-window-factory, and multi-window feature branches remain available for ongoing work.
+`codex/fix-win32-window-factory` also remains checked out in its Codex worktree while the remote branch is gone.
+The performance, window-caption-controls, and multi-window feature branches remain available for ongoing work.
 
 ## llm-switch patch intake
 
