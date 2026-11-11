@@ -32,6 +32,7 @@ User guides describe the current public SDK, development guides cover this repos
 - [Farna floating-window and desktop-assistant TODO](development/farna-desktop-assistant-todo.md): delivered Windows baseline, validation limits, remaining foundations, and optional native services; not an upstream roadmap.
 - [Farna Linux accessibility TODO](development/farna-linux-accessibility-todo.md): downstream plans to bridge existing semantics to Linux accessibility, with GTK compatibility decisions and interactive Linux validation gates.
 - [SDK Packaging](development/sdk-packaging.md): produce and validate release-ready SDK archives.
+- Find the private vulnerability reporting channel in the [Security Policy](../SECURITY.md).
 
 ## Design reference
 
