@@ -39,7 +39,7 @@ Check the residual diff and the upstream source, not only the commit list.
 | Pager reverse-transition peer retention | `3e16bf4c` (pager hunk) | Upstream `784f99a6` keeps the previous destination visible when reversing an unfinished transition; the residual fork pager diff is touchpad paging only | Drop the shared fix. |
 | Hidden virtual-subtree measurement invalidation | `3e16bf4c` (virtual-layout hunk) | Upstream `9f90e005` retains pending work inside unplaced subtrees; current `PropagateVirtualLayoutInvalidation` matches | Drop the shared fix. |
 | Drag preview grab-offset beyond viewport edges | `3e16bf4c` (drag-preview hunk) | Upstream `711a9eae` uses `LayerPlacementKind::Positioned` for preview placement; current fork has no residual `DragPreviewPlacement` difference | Drop the shared fix. |
-| Public paragraph layout | `554d9a54`, `TextParagraphLayout`, `TextMeasurer::LayoutText` | Upstream `1949e84e` added `TextLayout` and `TextMeasurer::CreateTextLayout`; the fork API and its module export were removed during merge `a559c788` | Do not reintroduce. `TextField::TextStyles` must use `CreatePlatformTextLayout(AttributedText)`. |
+| Public paragraph layout | `554d9a54`, `TextParagraphLayout`, `TextMeasurer::LayoutText` | Upstream `1949e84e` added `TextLayout` and `TextMeasurer::CreateTextLayout`; the fork API and its module export were removed during merge `a559c788` | Do not reintroduce. The fork's `TextField::TextStyles` was removed separately; `TextField` uses the plain paragraph layout. |
 | Runtime multi-window API and platform creation hooks | `d6c13b6c`, `5c6198e8`, `eab74b07`, `0b289005` overlap conceptually | Upstream already declares `ApplicationHandle::OpenWindow`, `Runtime::OpenWindow`, `SupportsMultipleWindows`, and Windows/Linux/macOS `CreateUiWindow` overrides; `examples/multi_window` also exists | Do not propose "add multi-window". Propose only the remaining capabilities and fixes: relationships, windowless startup, utility/floating windows, native window requests, and cross-window drag. |
 | patchelf 0.19 minimum for runtime deployment | `738fe88b` | Upstream `b51f7139` (#165) rejects older patchelf before rewriting staged binaries and pins SDK CI to the verified 0.19.2 archives | Drop the fork-only proposal; keep the merged upstream implementation. |
 | Windows DWM corner preference for custom chrome | `85a8ea5e` | Upstream `bdd0987b` requests `DWMWCP_ROUND` through `DWMWA_WINDOW_CORNER_PREFERENCE` after the custom frame is applied | Drop the fork patch; the merged `win32_adapter.cpp` keeps the upstream call with the fork's numeric attribute values so pre-Windows-11 SDK toolchains still compile. |
@@ -84,7 +84,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability |
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
 | Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability |
-| TextField attributed character styles | `319c538d` | Fork-only capability |
 | `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
@@ -114,8 +113,7 @@ Verified absent from `upstream/main` at `9ae9cb0d`. These are the bug fixes stil
 | Low | Optional X11/Xext linkage | `ad73d2b7` | `cmake/platform/Linux.cmake` always links without optional `x11`/`xext` discovery, and mcpp has no matching switch |
 | Low | `WindowTitleBar` Objective-C++ braces | `3e16bf4c` (window.h hunk) | `window.h` still uses `CrossAlign(...)` instead of `CrossAlign{...}` |
 
-`TextField::TextStyles` (PR #153) stays unadopted upstream, but it is a capability rather than a bug fix.
-The maintainer closed #153 without an equivalent implementation, so it remains a design proposal instead of a regression fix.
+`TextField::TextStyles` (PR #153) was closed without an equivalent upstream implementation and is now removed from the fork rather than carried as a candidate.
 
 ## Procedure for the next upstream merge
 

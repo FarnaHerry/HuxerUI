@@ -23,7 +23,7 @@ The fork tracks those upstream commits, so the corresponding preparation branche
 | #164 | Fixed through the profiling default and the mcpp source exclusion | `9b8f5d05`, `3abaa77b` |
 | #163 | Superseded by the unified mounted view target | `1b227315` |
 | #154 | Superseded by the public `TextLayout` API | `1949e84e` |
-| #153 | Closed without an equivalent implementation; `TextField::TextStyles` remains fork-only | none |
+| #153 | Closed without an equivalent implementation; the fork removed `TextField::TextStyles` | none |
 | #151 | Fixed with the `CreateUiWindow` name instead of the proposed `CreateApplicationWindow` | `e613b515` |
 | #150 | Pager, drag-preview, and virtual-subtree fixes landed before closing; the remaining items were already covered | `784f99a6`, `711a9eae`, `9f90e005` |
 | #135 | Replaced by per-window system appearance | `5523172a` |
