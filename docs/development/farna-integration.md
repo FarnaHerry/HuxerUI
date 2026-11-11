@@ -93,6 +93,20 @@ The first tracks upstream PR #120, which is merged; the second's commits are all
 The remote default reference now points to `main`. The open performance branches, the open system-color-scheme
 branch, and the window-caption-controls WIP remain available for their ongoing work.
 
+On 2026-11-11, the merge of upstream `9ae9cb0d` retired the remaining upstream-preparation branches whose content upstream now owns.
+Deleted remote branches and their coverage:
+
+- `fix/patchelf-runtime-safety`: upstream `b51f7139` (#165) has the same rejection and pinned archives.
+- `perf/layout-loose-measure`: upstream measures bounded grow children only once.
+- `fix/presentation-layer-anchor-transfer`: superseded by upstream `1b227315`; PR [#163](https://github.com/HuxerUI/HuxerUI/pull/163) was closed unmerged.
+- `fix/windows-native-window-polish`: the corner preference and input-overlay region are covered by `bdd0987b` and `38eb34dc`, and the activation target was restored from upstream in `af8b6462`.
+- `codex/paragraph-layout` and `codex/upstream-paragraph-layout`: upstream `1949e84e` owns the paragraph layout surface.
+- `codex/upstream-text-field-styles`: already merged into `farna/main`.
+
+The local branches `fix/patchelf-runtime-safety`, `fix/presentation-layer-anchor-transfer`, and `feat/linux-resize-hitarea` were deleted with their prunable worktrees.
+`fix/windows-native-window-polish` remains checked out in `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-win32`; removing that worktree drops the branch.
+The performance, system-color-scheme, window-caption-controls, mcpp-profiling, Win32-window-factory, and multi-window feature branches remain available for ongoing work.
+
 ## llm-switch patch intake
 
 On 2026-10-07, llm-switch's CI-applied checkout patches were folded into the fork:

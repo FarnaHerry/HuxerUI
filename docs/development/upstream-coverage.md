@@ -44,6 +44,7 @@ Check the residual diff and the upstream source, not only the commit list.
 | patchelf 0.19 minimum for runtime deployment | `738fe88b` | Upstream `b51f7139` (#165) rejects older patchelf before rewriting staged binaries and pins SDK CI to the verified 0.19.2 archives | Drop the fork-only proposal; keep the merged upstream implementation. |
 | Windows DWM corner preference for custom chrome | `85a8ea5e` | Upstream `bdd0987b` requests `DWMWCP_ROUND` through `DWMWA_WINDOW_CORNER_PREFERENCE` after the custom frame is applied | Drop the fork patch; the merged `win32_adapter.cpp` keeps the upstream call with the fork's numeric attribute values so pre-Windows-11 SDK toolchains still compile. |
 | Windows PlatformView input-overlay window region | `e6b4ba83` | Upstream `38eb34dc` builds the overlay shield from mounted hit candidates, keeps covering controls shielded, honors custom input bounds, and covers `tests/platform/windows/platform_view.cpp` | Drop the fork patch; upstream's `BuildOverlayRegion` supersedes the container-rectangle holes. |
+| Windows single-instance activation target | `c9e3b63f` | Upstream discovers the target through the hidden facilities window with `EnumWindows` in `win32_adapter.cpp`; `af8b6462` restored that path and removed the fork's primary-window marker | Drop the fork patch. |
 
 ## Partially covered
 
@@ -74,7 +75,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | macOS native quit without `NSTerminateLater` | `ca6d413d` | Fork-only |
 | Windows application icon resource and handle lifetime | `bcead3fe`, `446a5a90` | Fork-only |
 | Windows fullscreen covering the taskbar | `6ebc6213` | Fork-only |
-| Windows single-instance activation target | `c9e3b63f` | Fork-only |
 | Window ownership and modality relationships | `6b34925e` and follow-up fixes | Fork-only capability |
 | Transparent utility windows and native window requests | `8e2adda1`, `3aef230b`, `317328c4` | Fork-only capability |
 | Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability |
