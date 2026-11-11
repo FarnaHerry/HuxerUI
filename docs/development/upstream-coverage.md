@@ -7,9 +7,9 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `14b1af53` (`feat(scroll): support two-axis scrolling and virtualization`).
-- Fork merge commit: `c2f099c1`.
-- Last audit date: 2026-11-10.
+- Last merged upstream commit: `9ae9cb0d` (`fix(clipboard): make HTML font size conversion portable`).
+- Fork merge commit: `ff1815e7`.
+- Last audit date: 2026-11-11.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -42,6 +42,8 @@ Check the residual diff and the upstream source, not only the commit list.
 | Public paragraph layout | `554d9a54`, `TextParagraphLayout`, `TextMeasurer::LayoutText` | Upstream `1949e84e` added `TextLayout` and `TextMeasurer::CreateTextLayout`; the fork API and its module export were removed during merge `a559c788` | Do not reintroduce. `TextField::TextStyles` must use `CreatePlatformTextLayout(AttributedText)`. |
 | Runtime multi-window API and platform creation hooks | `d6c13b6c`, `5c6198e8`, `eab74b07`, `0b289005` overlap conceptually | Upstream already declares `ApplicationHandle::OpenWindow`, `Runtime::OpenWindow`, `SupportsMultipleWindows`, and Windows/Linux/macOS `CreateUiWindow` overrides; `examples/multi_window` also exists | Do not propose "add multi-window". Propose only the remaining capabilities and fixes: relationships, windowless startup, utility/floating windows, native window requests, and cross-window drag. |
 | patchelf 0.19 minimum for runtime deployment | `738fe88b` | Upstream `b51f7139` (#165) rejects older patchelf before rewriting staged binaries and pins SDK CI to the verified 0.19.2 archives | Drop the fork-only proposal; keep the merged upstream implementation. |
+| Windows DWM corner preference for custom chrome | `85a8ea5e` | Upstream `bdd0987b` requests `DWMWCP_ROUND` through `DWMWA_WINDOW_CORNER_PREFERENCE` after the custom frame is applied | Drop the fork patch; the merged `win32_adapter.cpp` keeps only the upstream request. |
+| Windows PlatformView input-overlay window region | `e6b4ba83` | Upstream `38eb34dc` builds the overlay shield from mounted hit candidates, keeps covering controls shielded, honors custom input bounds, and covers `tests/platform/windows/platform_view.cpp` | Drop the fork patch; upstream's `BuildOverlayRegion` supersedes the container-rectangle holes. |
 
 ## Partially covered
 
@@ -70,10 +72,8 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only |
 | macOS native-input task and frame-commit deferral | `785eb892`, `7f0ffc9f` | Fork-only |
 | macOS native quit without `NSTerminateLater` | `ca6d413d` | Fork-only |
-| Windows DWM corner preference for custom chrome | `85a8ea5e` | Fork-only |
 | Windows application icon resource and handle lifetime | `bcead3fe`, `446a5a90` | Fork-only |
 | Windows fullscreen covering the taskbar | `6ebc6213` | Fork-only |
-| Windows PlatformView input-overlay window region | `e6b4ba83` | Fork-only |
 | Windows single-instance activation target | `c9e3b63f` | Fork-only |
 | Window ownership and modality relationships | `6b34925e` and follow-up fixes | Fork-only capability |
 | Transparent utility windows and native window requests | `8e2adda1`, `3aef230b`, `317328c4` | Fork-only capability |

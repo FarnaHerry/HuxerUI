@@ -1573,17 +1573,6 @@ private:
     if (window_ == nullptr) {
       throw std::runtime_error("HuxerUI could not create its Windows application window");
     }
-    if (custom_chrome_) {
-      // Win11 DWM rounds only windows that keep the standard frame; a
-      // frame-stripped custom-chrome window stays square unless it opts in.
-      // Windows 10 has no corner attribute and ignores the call, so literals
-      // keep older SDKs compiling (DWMWA_WINDOW_CORNER_PREFERENCE / DWMWCP_ROUND).
-      constexpr DWORD kDwmWindowCornerPreference = 33;
-      constexpr DWORD kDwmWindowCornerRound = 2;
-      DWORD preference = kDwmWindowCornerRound;
-      static_cast<void>(DwmSetWindowAttribute(
-          window_, kDwmWindowCornerPreference, &preference, sizeof(preference)));
-    }
     static_cast<WindowsRuntime&>(application).ApplyWindowIcons(window_);
     dpi_ = static_cast<float>(win32_api_.WindowDpi(window_));
     auto configuration = application.Resources()->Configuration();
