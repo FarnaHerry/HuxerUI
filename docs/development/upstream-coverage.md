@@ -33,7 +33,7 @@ Check the residual diff and the upstream source, not only the commit list.
 |---|---|---|---|
 | `ImageFit::Cover` source rectangle clamp | `0e3e89bb` | `src/runtime/render.cpp` uses `std::min(intrinsic.{width,height}, content / scale)`; the clamp hunk has no residual diff | Drop the fix. Optional: contribute `TestImageCoverFractionalFramesKeepSourceInsideIntrinsicBounds`, which upstream does not have. |
 | TextField trailing-caret clipping | `c6ecefc0` | Upstream `src/components/text_field.cpp` has the same caret-width clamp and `TestTextFieldPaintsTheTrailingCaretInsideTheEditorClip` | Drop the fix and its test. |
-| Linux custom-chrome resize hit area and directional cursor | `f38d5ec0` | Upstream `platform/linux/linux_adapter.cpp` has `HitTestResizeEdge`, `LinuxResizePointerCursor`, and the GTK resize request | Drop the patch. |
+| Linux custom-chrome resize hit area and directional cursor | `f38d5ec0` | Upstream has resize hit testing, directional cursors and the GTK resize request | Keep the original patch dropped; the narrow-band interaction override is listed below. |
 | Android whole-host default focus highlight | `97609cd8` | Upstream `platform/android/huxerui/src/main/java/org/huxerui/HuxerUIView.java` calls `setDefaultFocusHighlightEnabled(false)` on API 26 and later | Drop the patch. |
 | Redundant loose measurement of bounded grow children | `dce2a08b`, `c40a2da2` | Upstream `src/components/containers.cpp` already skips a grow child when `main` is bounded and `(!stretch || tight_cross)` | Drop both patches. |
 | Pager reverse-transition peer retention | `3e16bf4c` (pager hunk) | Upstream `784f99a6` keeps the previous destination visible when reversing an unfinished transition; the residual fork pager diff is touchpad paging only | Drop the shared fix. |
@@ -72,6 +72,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 
 | Area | Fork evidence | Status at 2026-11-12 |
 |---|---|---|
+| Linux custom-chrome resize band | `ResolveLinuxResizeEdge` | Fork-only interaction choice: 6-DIP band, 16-DIP corner directions within that band; upstream uses a 10-DIP band and 14-DIP square corners |
 | Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
 | GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only |
@@ -94,7 +95,9 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only build fix |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
 
-Pager release thresholds are the one interaction difference kept deliberately: the fork uses 450 logical pixels per second and 25% of the pager extent, while upstream uses 600 and 35%.
+Linux resize hit testing deliberately leaves the client interior outside its 6-DIP band interactive, including near corners. Hover and press use the same geometry.
+
+Pager release thresholds are another interaction difference kept deliberately: the fork uses 450 logical pixels per second and 25% of the pager extent, while upstream uses 600 and 35%.
 The upstream author confirmed that configurable tuning will be opened later, so keep the fork constants until that capability lands and do not submit a duplicate PR.
 When the upstream API becomes available, replace the constants with explicit per-Pager configuration and leave upstream defaults in place for applications that do not opt in.
 

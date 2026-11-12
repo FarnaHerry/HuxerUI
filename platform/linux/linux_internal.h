@@ -34,13 +34,15 @@ ResolveLinuxResizeEdge(Point point, Size viewport, bool disabled) noexcept {
       point.x > viewport.width || point.y > viewport.height) {
     return std::nullopt;
   }
-  constexpr float border = 10.0F;
-  constexpr float corner = 14.0F;
+  constexpr float border = 6.0F;
+  constexpr float corner = 16.0F;
   // Overlapping zones in small windows select the nearer edge; midpoint ties select left or top.
   const bool left_half = point.x <= viewport.width * 0.5F;
   const bool top_half = point.y <= viewport.height * 0.5F;
   const float horizontal_distance = left_half ? point.x : viewport.width - point.x;
   const float vertical_distance = top_half ? point.y : viewport.height - point.y;
+  // Corner directions extend along the narrow border, never into the client interior.
+  if (horizontal_distance > border && vertical_distance > border) return std::nullopt;
   if (horizontal_distance <= corner && vertical_distance <= corner) {
     if (top_half) return left_half ? LinuxResizeEdge::NorthWest : LinuxResizeEdge::NorthEast;
     return left_half ? LinuxResizeEdge::SouthWest : LinuxResizeEdge::SouthEast;

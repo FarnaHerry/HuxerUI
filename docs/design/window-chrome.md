@@ -337,7 +337,7 @@ Linux metric resolution prefers `AppOptions::window.title_bar_height`, enforces 
 Native drag and edge or corner resize use `gdk_toplevel_begin_move()` and `gdk_toplevel_begin_resize()` with the device, button, local coordinates, and timestamp from the initiating GTK gesture.
 Hit testing resolves resize edges before `UiWindow::IsWindowDragRegion()`, while shared caption controls consume their own pointer input before a drag can begin.
 
-The custom client area uses a 10-DIP resize border and 14-DIP square corner targets without changing visible geometry or layout.
+The custom client area uses a 6-DIP resize border without changing visible geometry or layout. Corner directions extend 16 DIP along that border; points deeper than 6 DIP from both adjoining edges remain client content.
 Overlapping targets in very small windows select the nearer edge on each axis, with midpoint ties selecting left or top; non-finite geometry and points outside the client area never select an edge.
 Resize hit testing is disabled for unmapped, minimized, maximized, fullscreen, or non-resizable windows.
 Hover and press use the same edge classification, with resize cursors temporarily overriding the component-requested cursor while no content pointer button is held.

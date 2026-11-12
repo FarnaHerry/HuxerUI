@@ -6,18 +6,26 @@
 
 namespace huxerui::test {
 
-TEST_CASE("LinuxResizeEdgesUseWiderCornersWithoutConsumingNearbyControls") {
+TEST_CASE("LinuxResizeEdgesKeepCornerTargetsWithinThinBorder") {
   using Edge = detail::LinuxResizeEdge;
   const Size viewport{800.0F, 600.0F};
   const std::pair<Point, Edge> cases[] = {
-      {{14.0F, 14.0F}, Edge::NorthWest},
-      {{400.0F, 10.0F}, Edge::North},
-      {{786.0F, 14.0F}, Edge::NorthEast},
-      {{790.0F, 300.0F}, Edge::East},
-      {{786.0F, 586.0F}, Edge::SouthEast},
-      {{400.0F, 590.0F}, Edge::South},
-      {{14.0F, 586.0F}, Edge::SouthWest},
-      {{10.0F, 300.0F}, Edge::West},
+      {{16.0F, 6.0F}, Edge::NorthWest},
+      {{6.0F, 16.0F}, Edge::NorthWest},
+      {{400.0F, 6.0F}, Edge::North},
+      {{784.0F, 6.0F}, Edge::NorthEast},
+      {{794.0F, 16.0F}, Edge::NorthEast},
+      {{794.0F, 300.0F}, Edge::East},
+      {{794.0F, 584.0F}, Edge::SouthEast},
+      {{784.0F, 594.0F}, Edge::SouthEast},
+      {{400.0F, 594.0F}, Edge::South},
+      {{6.0F, 584.0F}, Edge::SouthWest},
+      {{16.0F, 594.0F}, Edge::SouthWest},
+      {{6.0F, 300.0F}, Edge::West},
+      {{16.01F, 6.0F}, Edge::North},
+      {{6.0F, 16.01F}, Edge::West},
+      {{783.99F, 6.0F}, Edge::North},
+      {{794.0F, 16.01F}, Edge::East},
       {{0.0F, 0.0F}, Edge::NorthWest},
       {{800.0F, 600.0F}, Edge::SouthEast},
   };
@@ -26,9 +34,11 @@ TEST_CASE("LinuxResizeEdgesUseWiderCornersWithoutConsumingNearbyControls") {
     REQUIRE(detail::ResolveLinuxResizeEdge(point, viewport, false) == edge);
   }
   const Point interior[] = {
-      {400.0F, 300.0F}, {10.01F, 300.0F}, {789.99F, 300.0F},
-      {400.0F, 10.01F}, {400.0F, 589.99F}, {14.01F, 14.0F}, {14.0F, 14.01F},
-      {785.99F, 586.0F}, {786.0F, 585.99F},
+      {400.0F, 300.0F}, {6.01F, 300.0F}, {793.99F, 300.0F},
+      {400.0F, 6.01F}, {400.0F, 593.99F},
+      {8.0F, 8.0F}, {792.0F, 8.0F}, {8.0F, 592.0F}, {792.0F, 592.0F},
+      {6.01F, 6.01F}, {793.99F, 6.01F}, {6.01F, 593.99F}, {793.99F, 593.99F},
+      {14.0F, 14.0F}, {786.0F, 586.0F},
   };
   for (const Point point : interior) {
     CAPTURE(point.x, point.y);
@@ -70,15 +80,15 @@ TEST_CASE("LinuxResizeEdgesRejectDisabledAndInvalidGeometry") {
 
 TEST_CASE("LinuxResizeEdgesChooseNearestSideWhenSmallWindowZonesOverlap") {
   using Edge = detail::LinuxResizeEdge;
-  REQUIRE(detail::ResolveLinuxResizeEdge({9.0F, 9.0F}, {20.0F, 20.0F}, false) == Edge::NorthWest);
-  REQUIRE(detail::ResolveLinuxResizeEdge({11.0F, 9.0F}, {20.0F, 20.0F}, false) == Edge::NorthEast);
-  REQUIRE(detail::ResolveLinuxResizeEdge({9.0F, 11.0F}, {20.0F, 20.0F}, false) == Edge::SouthWest);
-  REQUIRE(detail::ResolveLinuxResizeEdge({11.0F, 11.0F}, {20.0F, 20.0F}, false) == Edge::SouthEast);
-  REQUIRE(detail::ResolveLinuxResizeEdge({10.0F, 10.0F}, {20.0F, 20.0F}, false) == Edge::NorthWest);
-  REQUIRE(detail::ResolveLinuxResizeEdge({9.0F, 50.0F}, {20.0F, 100.0F}, false) == Edge::West);
-  REQUIRE(detail::ResolveLinuxResizeEdge({11.0F, 50.0F}, {20.0F, 100.0F}, false) == Edge::East);
-  REQUIRE(detail::ResolveLinuxResizeEdge({50.0F, 9.0F}, {100.0F, 20.0F}, false) == Edge::North);
-  REQUIRE(detail::ResolveLinuxResizeEdge({50.0F, 11.0F}, {100.0F, 20.0F}, false) == Edge::South);
+  REQUIRE(detail::ResolveLinuxResizeEdge({5.0F, 5.0F}, {12.0F, 12.0F}, false) == Edge::NorthWest);
+  REQUIRE(detail::ResolveLinuxResizeEdge({7.0F, 5.0F}, {12.0F, 12.0F}, false) == Edge::NorthEast);
+  REQUIRE(detail::ResolveLinuxResizeEdge({5.0F, 7.0F}, {12.0F, 12.0F}, false) == Edge::SouthWest);
+  REQUIRE(detail::ResolveLinuxResizeEdge({7.0F, 7.0F}, {12.0F, 12.0F}, false) == Edge::SouthEast);
+  REQUIRE(detail::ResolveLinuxResizeEdge({6.0F, 6.0F}, {12.0F, 12.0F}, false) == Edge::NorthWest);
+  REQUIRE(detail::ResolveLinuxResizeEdge({5.0F, 50.0F}, {12.0F, 100.0F}, false) == Edge::West);
+  REQUIRE(detail::ResolveLinuxResizeEdge({7.0F, 50.0F}, {12.0F, 100.0F}, false) == Edge::East);
+  REQUIRE(detail::ResolveLinuxResizeEdge({50.0F, 5.0F}, {100.0F, 12.0F}, false) == Edge::North);
+  REQUIRE(detail::ResolveLinuxResizeEdge({50.0F, 7.0F}, {100.0F, 12.0F}, false) == Edge::South);
   REQUIRE(detail::ResolveLinuxResizeEdge({1.0F, 1.0F}, {1.0F, 1.0F}, false) == Edge::SouthEast);
 }
 
