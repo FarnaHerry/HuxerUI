@@ -7,9 +7,9 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `9ae9cb0d` (`fix(clipboard): make HTML font size conversion portable`).
-- Fork merge commit: `ff1815e7`.
-- Last audit date: 2026-11-11.
+- Last merged upstream commit: `00d1a486` (`perf(text): speed up layout creation and reuse layouts for drawing`).
+- Fork merge commit: `f405dcdc`.
+- Last audit date: 2026-11-12.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -55,7 +55,7 @@ Check the residual diff and the upstream source, not only the commit list.
 | Item | Upstream state | Residual fork work |
 |---|---|---|
 | macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
-| iOS app-target link closure | Upstream `cmake/HuxerUIApp.cmake` walks `INTERFACE_LINK_LIBRARIES` and emits some `$<TARGET_FILE:>` entries | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, alias handling, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
+| iOS app-target link closure | Upstream `dde77cf9` walks the declared `HUXERUI_LIBRARIES` graph transitively through `_huxerui_collect_library_dependencies` with cycle detection and collects those packages for resources, but it still does not read the app target's raw `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, `LINK_ONLY` handling, alias resolution, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
 
 ## Superseded upstream
 
@@ -70,7 +70,7 @@ These items should not be resubmitted because an upstream design change owns the
 These items were checked at the baseline and remain absent from upstream.
 The list is a re-audit shortcut, not a roadmap or a promise to upstream every item.
 
-| Area | Fork evidence | Status at 2026-11-11 |
+| Area | Fork evidence | Status at 2026-11-12 |
 |---|---|---|
 | Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
@@ -87,6 +87,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
+| Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Fork-only optimization; upstream `00d1a486` retains prepared layouts for drawing and caches overflow paragraphs, but plain text measurement still calls the platform measurer on each layout pass |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
@@ -99,7 +100,7 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `9ae9cb0d`. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..00d1a486` range does not change the adapters and subsystems below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
