@@ -18,6 +18,7 @@
 #include "graphics/external_texture_internal.h"
 #include "graphics/paint_internal.h"
 #include "profiling_internal.h"
+#include "text/text_internal.h"
 
 namespace huxerui::detail {
 
@@ -120,7 +121,11 @@ PaintSequence FrozenScene::CopyPaintSequence(const PaintSequence& source) {
   if (source.HasBackdropCommands()) {
     throw std::logic_error("HuxerUI frozen scenes cannot capture live backdrop effects");
   }
-  PaintSequence copy = source;
+  PaintSequence copy;
+  copy.commands_ = source.commands_;
+  copy.bounds_ = source.bounds_;
+  copy.revision_ = source.revision_;
+  copy.has_external_texture_commands_ = source.has_external_texture_commands_;
   std::erase_if(copy.commands_, [](const PaintCommand& command) {
     return std::holds_alternative<PlacePlatformViewCommand>(command);
   });
@@ -812,6 +817,9 @@ void RecordNodePaint(MountedNode& node) {
     if (node.kind == NodeKind::Text) {
       if (node.image_properties.HasValue() || node.layout_values.contains(typeid(LabelContentMetrics))) {
         PaintLabelContent(node, content, text_style);
+      } else if (const auto& paragraph = node.cached_paragraph_layout; paragraph && paragraph->HasOverflowPolicy()) {
+        paragraph->Draw(*node.ui_window, content, node.ContentBounds(), node.text, text_style,
+                        node.properties.text_layout_options.vertical_align);
       } else {
         content.DrawText(node.ContentBounds(), node.text, text_style, node.properties.text_layout_options);
       }

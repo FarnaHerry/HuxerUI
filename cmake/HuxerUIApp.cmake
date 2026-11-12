@@ -9,9 +9,10 @@ function(_huxerui_configure_ios_app_core target_name)
             TARGET ${target_name}
             PROPERTY HUXERUI_APP_FRAMEWORK_TARGET
     )
-    get_property(HUXERUI_IOS_LIBRARY_TARGETS
-            TARGET ${target_name}
-            PROPERTY HUXERUI_LIBRARIES
+    set(HUXERUI_IOS_LIBRARY_TARGETS "")
+    set(HUXERUI_IOS_REQUESTED_LIBRARY_TARGETS "")
+    _huxerui_collect_library_dependencies("${target_name}" ""
+            HUXERUI_IOS_LIBRARY_TARGETS HUXERUI_IOS_REQUESTED_LIBRARY_TARGETS
     )
     find_program(HUXERUI_IOS_LIBTOOL libtool REQUIRED)
     set(HUXERUI_IOS_CORE_DIRECTORY
@@ -202,6 +203,7 @@ function(huxerui_add_app target_name)
     )
 
     target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_compile_options(${target_name} PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
     _huxerui_configure_optimization(${target_name})
     target_link_libraries(${target_name} PRIVATE
             ${HUXERUI_APP_FRAMEWORK_TARGET}

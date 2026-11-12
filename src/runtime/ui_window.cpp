@@ -795,7 +795,7 @@ bool ExtensionNodeInputsEqual(const MountedNode& mounted, const ViewSpec& incomi
          LayoutValuesEquivalent(mounted.layout_values, incoming.layout_values) &&
          mounted.event_bindings == incoming.event_bindings && mounted.environment == environment &&
          mounted.pointer_events_enabled == incoming.pointer_events_enabled &&
-         mounted.local_enabled == incoming.local_enabled && mounted.focusable == incoming.focusable &&
+         mounted.local_enabled == incoming.local_enabled && mounted.declared_focusable == incoming.focusable &&
          mounted.trap_focus == incoming.trap_focus;
 }
 
@@ -835,7 +835,7 @@ void ApplyViewDeclaration(MountedNode& mounted, ViewSpec& compiled, std::shared_
   mounted.reduced_motion = ResolveThemeSpec(mounted.environment).motion.reduced_motion;
   mounted.pointer_events_enabled = compiled.pointer_events_enabled;
   mounted.local_enabled = compiled.local_enabled;
-  mounted.focusable = compiled.focusable;
+  mounted.declared_focusable = compiled.focusable;
   if (mounted.view_handle != compiled.view_handle) {
     if (mounted.view_handle && mounted.view_handle->node_identity == mounted.identity) {
       mounted.view_handle->node_identity = 0;
@@ -1114,7 +1114,7 @@ bool RevealFocusInTwoAxes(MountedNode& root, std::uint64_t identity) {
 }
 
 void CollectFocusableNodes(MountedNode& node, std::vector<MountedNode*>& nodes) {
-  if (node.interaction.enabled && node.focusable) {
+  if (node.interaction.enabled && node.IsFocusable()) {
     nodes.push_back(&node);
   }
   for (auto& child : node.children) {
@@ -1399,26 +1399,10 @@ TextLayout UiWindow::CreateTextLayout(const AttributedText& text, const TextStyl
   data->width = width;
   data->lines = data->backend->LineMetrics();
   const TextOffset length = text.Length();
-  const auto hard_break = [](std::string_view value) {
-    return value == "\n" || value == "\r" || value == "\r\n" || value == "\xE2\x80\xA8" ||
-           value == "\xE2\x80\xA9";
-  };
-  for (TextLineMetrics& line : data->lines) {
-    // Some native engines include the hard break in the preceding line's range.
-    while (line.range.end > line.range.start) {
-      const TextOffset previous = data->backend->PreviousCaretOffset(line.range.end);
-      if (previous < line.range.start || previous >= line.range.end ||
-          !hard_break(text.TextInRange({previous, line.range.end}))) {
-        break;
-      }
-      line.range.end = previous;
-    }
-  }
   if (data->lines.empty() && length != 0) {
     throw std::logic_error("HuxerUI text layout backend returned no visual lines");
   }
-  const bool trailing_break = length > 0 && hard_break(
-      text.TextInRange({data->backend->PreviousCaretOffset(length), length}));
+  const bool trailing_break = data->NormalizeLineRanges();
   if (data->lines.empty() || (trailing_break && data->lines.back().range.start != length)) {
     const FontMetrics font = Metrics(style.font);
     const float top = data->lines.empty() ? 0.0F : data->backend->Measure().height;
@@ -2486,7 +2470,7 @@ void UiWindow::RefreshInteractionTree() {
           const auto window = target ? target->source->ui.lock() : nullptr;
           const auto* candidate = window && window->ui_window == this
               ? FindNode(*focus_root, target->node_identity) : nullptr;
-          if (candidate && candidate->interaction.enabled && candidate->focusable) {
+          if (candidate && candidate->interaction.enabled && candidate->IsFocusable()) {
             SetFocusedNode(candidate->identity);
           }
         }
@@ -2504,7 +2488,7 @@ void UiWindow::RefreshInteractionTree() {
   focus_root = ActiveFocusTrapRoot();
   if (state_->focused_node_identity_.has_value()) {
     detail::MountedNode* focused = FindNode(*state_->mounted_root_, *state_->focused_node_identity_);
-    if (!focused || !focused->interaction.enabled || !focused->focusable ||
+    if (!focused || !focused->interaction.enabled || !focused->IsFocusable() ||
         (focus_root && !ContainsNodeIdentity(*focus_root, focused->identity))) {
       SetFocusedNode(std::nullopt);
     }
@@ -2530,7 +2514,7 @@ detail::MountedNode* UiWindow::ActiveFocusTrapRoot() {
 std::optional<std::uint64_t> UiWindow::ResolvePointerFocusTarget(const std::vector<detail::MountedNode*>& route) {
   std::optional<std::uint64_t> candidate;
   for (auto node = route.rbegin(); node != route.rend(); ++node) {
-    if ((*node)->interaction.enabled && (*node)->focusable) {
+    if ((*node)->interaction.enabled && (*node)->IsFocusable()) {
       candidate = (*node)->identity;
       break;
     }
@@ -2696,7 +2680,7 @@ bool UiWindow::HandleBack(const BackEvent& incoming) {
 bool UiWindow::RequestFocus(std::uint64_t identity, bool focus_visible) {
   if (state_->retired_ || state_->closing_ || state_->focus_change_in_progress_ || !state_->mounted_root_) return false;
   const auto* target = FindNode(*state_->mounted_root_, identity);
-  if (!target || !target->interaction.enabled || !target->focusable) return false;
+  if (!target || !target->interaction.enabled || !target->IsFocusable()) return false;
   if (const auto* root = ActiveFocusTrapRoot(); root && !ContainsNodeIdentity(*root, identity)) return false;
   detail::TextInteraction::KeyboardDispatch keyboard_dispatch(*state_->text_);
   SetFocusedNode(identity, focus_visible);
@@ -2711,7 +2695,7 @@ void UiWindow::SetFocusedNode(std::optional<std::uint64_t> identity, std::option
       identity.reset();
     } else {
       detail::MountedNode* candidate = FindNode(*state_->mounted_root_, *identity);
-      if (!candidate || !candidate->interaction.enabled || !candidate->focusable) {
+      if (!candidate || !candidate->interaction.enabled || !candidate->IsFocusable()) {
         identity.reset();
       }
     }
@@ -3032,7 +3016,7 @@ bool UiWindow::DispatchKeyEvent(const KeyEvent& event) {
   if (state_->focused_node_identity_.has_value()) {
     focused = FindNode(*state_->mounted_root_, *state_->focused_node_identity_);
   }
-  if (focused && (!focused->interaction.enabled || !focused->focusable)) {
+  if (focused && (!focused->interaction.enabled || !focused->IsFocusable())) {
     SetFocusedNode(std::nullopt);
     state_->text_->RefreshTextInputSession();
     focused = nullptr;

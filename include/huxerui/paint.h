@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,8 +25,10 @@ namespace huxerui {
 class PaintContext;
 
 namespace detail {
+struct CachedParagraphLayout;
 struct FrozenScene;
 struct InternalAccess;
+class TextLayoutBackend;
 } // namespace detail
 
 /// Selects how intrinsic image geometry maps into a destination rectangle.
@@ -547,14 +550,21 @@ public:
   }
 
 private:
+  struct PreparedText {
+    std::size_t command_index;
+    std::shared_ptr<const detail::TextLayoutBackend> layout;
+  };
+
   std::vector<PaintCommand> commands_;
   Rect bounds_;
   std::uint64_t revision_ = 0;
   bool has_external_texture_commands_ = false;
   bool has_backdrop_commands_ = false;
+  std::vector<PreparedText> prepared_text_;
 
   friend class PaintContext;
   friend struct detail::FrozenScene;
+  friend struct detail::InternalAccess;
 };
 
 /// Records one complete PaintSequence in a caller-provided logical coordinate space.
@@ -694,6 +704,7 @@ private:
   void Include(Rect rect) noexcept;
   void PlacePlatformView(PlacePlatformViewCommand command);
   void RequireOpen() const;
+  void RetainTextLayout(std::shared_ptr<const detail::TextLayoutBackend> layout);
 
   PaintSequence& sequence_;
   Rect bounds_;
@@ -705,6 +716,7 @@ private:
   std::vector<StackEntry> command_stack_;
   bool finished_ = false;
 
+  friend struct detail::CachedParagraphLayout;
   friend struct detail::InternalAccess;
 };
 

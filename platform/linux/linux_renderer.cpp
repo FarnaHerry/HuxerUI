@@ -416,6 +416,8 @@ public:
     return metrics_;
   }
 
+  PangoLayout* Layout() const noexcept { return layout_; }
+
   std::vector<TextLineMetrics> LineMetrics() const override {
     std::vector<TextLineMetrics> result;
     result.reserve(metrics_.line_count);
@@ -1188,6 +1190,10 @@ public:
     DrawCommand(command);
   }
 
+  void Draw(const DrawTextCommand& command, const TextLayoutBackend* prepared) {
+    DrawCommand(command, dynamic_cast<const PangoTextLayout*>(prepared));
+  }
+
 private:
   int MaskDimension(float length) const noexcept {
     const double pixels = std::ceil(static_cast<double>(length) * device_scale_);
@@ -1250,15 +1256,16 @@ private:
     cairo_fill(context_);
   }
 
-  void DrawCommand(const DrawTextCommand& command) {
+  void DrawCommand(const DrawTextCommand& command, const PangoTextLayout* prepared) {
     if (command.text.PlainText().empty() || command.rect.IsEmpty()) {
       return;
     }
-    auto shaped = impl_.TextLayoutFor(command.text, command.style, command.rect.width, command.options);
-    PangoLayout* layout = shaped.layout();
+    auto shaped = prepared ? LinuxRenderer::Impl::ScopedTextLayout{}
+                           : impl_.TextLayoutFor(command.text, command.style, command.rect.width, command.options);
+    PangoLayout* layout = prepared ? prepared->Layout() : shaped.layout();
     PangoRectangle logical{};
     pango_layout_get_extents(layout, nullptr, &logical);
-    if (command.options.wrap == TextWrap::NoWrap && PangoUnits(logical.width) < command.rect.width) {
+    if (!prepared && command.options.wrap == TextWrap::NoWrap && PangoUnits(logical.width) < command.rect.width) {
       pango_layout_set_width(layout, static_cast<int>(std::ceil(command.rect.width * PANGO_SCALE)));
     }
     const float remaining_height = std::max(0.0F, command.rect.height - PangoUnits(logical.height));
@@ -1968,6 +1975,7 @@ private:
     const PaintCommand* command;
     cairo_matrix_t matrix;
     Rect device_bounds;
+    const TextLayoutBackend* prepared;
   };
 
   static constexpr std::size_t maximum_deferred_commands = 4096;
@@ -2094,8 +2102,12 @@ private:
     raster_bounds_ = UnionRect(raster_bounds_, {left, top, right - left, bottom - top});
   }
 
-  template <CairoPaintCommand Command> void DrawRaster(const Command& command) {
-    CairoCommandPainter(impl_, context_).Draw(command);
+  template <CairoPaintCommand Command> void DrawRaster(const Command& command, const TextLayoutBackend* prepared) {
+    if constexpr (std::same_as<Command, DrawTextCommand>) {
+      CairoCommandPainter(impl_, context_).Draw(command, prepared);
+    } else {
+      CairoCommandPainter(impl_, context_).Draw(command);
+    }
     Rect bounds = CairoCommandBounds(command);
     if constexpr (std::same_as<Command, DrawBorderCommand>) {
       bounds = ExpandRect(bounds, command.style.width * std::max(1.0F, command.style.miter_limit));
@@ -2106,13 +2118,14 @@ private:
 
   void Sequence(const PaintSequence& sequence) {
     for (const PaintCommand& command : sequence.Commands()) {
-      std::visit([this, &command](const auto& value) {
+      std::visit([this, &sequence, &command](const auto& value) {
         if constexpr (CairoPaintCommand<std::decay_t<decltype(value)>>) {
           if (deferred_raster_.size() == maximum_deferred_commands) {
             FlushBackdropPlane();
           }
+          const auto* prepared = InternalAccess::TextLayoutForPaint(sequence, command);
           if (planes_.empty()) {
-            DrawRaster(value);
+            DrawRaster(value, prepared);
           } else {
             Rect bounds = CairoCommandBounds(value);
             if constexpr (std::same_as<std::decay_t<decltype(value)>, DrawBorderCommand>) {
@@ -2122,7 +2135,7 @@ private:
             cairo_get_matrix(context_, &matrix);
             const Rect device_bounds = bounds.IsEmpty()
                 ? Rect{} : ExpandRect(TransformBounds(CurrentDeviceTransform(), bounds), 3.0F);
-            deferred_raster_.push_back({&command, matrix, device_bounds});
+            deferred_raster_.push_back({&command, matrix, device_bounds, prepared});
           }
         } else {
           Command(value);
@@ -2176,9 +2189,9 @@ private:
     cairo_save(context_);
     for (const DeferredRaster& raster : deferred_raster_) {
       cairo_set_matrix(context_, &raster.matrix);
-      std::visit([this](const auto& command) {
+      std::visit([this, &raster](const auto& command) {
         if constexpr (CairoPaintCommand<std::decay_t<decltype(command)>>) {
-          DrawRaster(command);
+          DrawRaster(command, raster.prepared);
         }
       }, *raster.command);
     }
@@ -2538,6 +2551,7 @@ public:
 
 private:
   struct CairoBatch {
+    const PaintSequence& sequence;
     std::vector<const PaintCommand*> commands;
     Rect bounds;
   };
@@ -2578,7 +2592,7 @@ private:
   }
 
   void DrawSequence(const PaintSequence& sequence) {
-    CairoBatch batch;
+    CairoBatch batch{sequence, {}, {}};
     batch.commands.reserve(sequence.Commands().size());
     for (const PaintCommand& command : sequence.Commands()) {
       if (!std::holds_alternative<PlacePlatformViewCommand>(command) && command_range_.has_value()) {
@@ -2693,9 +2707,12 @@ private:
     CairoCommandPainter painter(impl_, context);
     for (const PaintCommand* command : batch.commands) {
       std::visit(
-          [&painter](const auto& value) {
+          [&painter, &batch, command](const auto& value) {
             using Value = std::decay_t<decltype(value)>;
-            if constexpr (CairoPaintCommand<Value>) {
+            if constexpr (std::same_as<Value, DrawTextCommand>) {
+              const auto* prepared = InternalAccess::TextLayoutForPaint(batch.sequence, *command);
+              painter.Draw(value, prepared);
+            } else if constexpr (CairoPaintCommand<Value>) {
               painter.Draw(value);
             } else {
               throw std::logic_error("HuxerUI GTK snapshot contains a non-Cairo command in a Cairo batch");

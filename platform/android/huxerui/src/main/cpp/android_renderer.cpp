@@ -20,6 +20,7 @@
 
 #include <huxerui/android/jni.h>
 
+#include "android_text_layout.h"
 #include "graphics/effects_internal.h"
 #include "graphics/geometry_internal.h"
 #include "internal_access.h"
@@ -223,6 +224,8 @@ void AndroidRenderer::Initialize(JNIEnv* environment, jclass view_class) {
       environment->GetMethodID(view_class, "drawBrushRect", "(Landroid/graphics/Canvas;FFFFII[F[F[IF)V");
   draw_text_ =
       environment->GetMethodID(view_class, "drawText", "(Landroid/graphics/Canvas;[BFFFFFFIFI[BIIIIIII[B[B)V");
+  draw_prepared_text_ = environment->GetMethodID(
+      view_class, "drawPreparedText", "(Landroid/graphics/Canvas;Ljava/lang/Object;FFFFFFI)V");
   draw_text_runs_ =
       environment->GetMethodID(view_class, "drawTextRuns", "(Landroid/graphics/Canvas;[B[I[F[I[F[I[B[I)V");
   draw_image_ = environment->GetMethodID(view_class, "drawImage", "(Landroid/graphics/Canvas;J[BFFFFFFFFFI)Z");
@@ -286,6 +289,7 @@ void AndroidRenderer::Initialize(JNIEnv* environment, jclass view_class) {
   if (native_backdrop_available_ == nullptr || native_backdrop_fallback_ == nullptr ||
       begin_native_backdrop_canvas_ == nullptr ||
       draw_native_backdrop_ == nullptr || draw_brush_rect_ == nullptr || draw_text_ == nullptr ||
+      draw_prepared_text_ == nullptr ||
       draw_text_runs_ == nullptr || draw_image_ == nullptr ||
       draw_external_texture_ == nullptr || draw_circle_ == nullptr || draw_line_ == nullptr || draw_arc_ == nullptr ||
       draw_border_ == nullptr || draw_shadow_ == nullptr || fill_brush_path_ == nullptr ||
@@ -394,9 +398,12 @@ bool AndroidRenderer::RenderSequence(
       }
     } else {
       std::visit(
-          [this, environment, view, canvas](const auto& value) {
+          [this, environment, view, canvas, &sequence, &command](const auto& value) {
             using Command = std::remove_cvref_t<decltype(value)>;
-            if constexpr (!std::same_as<Command, DrawExternalTextureCommand>) {
+            if constexpr (std::same_as<Command, DrawTextCommand>) {
+              const auto* prepared = InternalAccess::TextLayoutForPaint(sequence, command);
+              RenderCommand(environment, view, canvas, value, prepared);
+            } else if constexpr (!std::same_as<Command, DrawExternalTextureCommand>) {
               RenderCommand(environment, view, canvas, value);
             }
           },
@@ -558,7 +565,14 @@ void AndroidRenderer::RenderCommand(JNIEnv* environment, jobject view, jobject c
   );
 }
 
-void AndroidRenderer::RenderCommand(JNIEnv* environment, jobject view, jobject canvas, const DrawTextCommand& command) {
+void AndroidRenderer::RenderCommand(JNIEnv* environment, jobject view, jobject canvas, const DrawTextCommand& command,
+    const TextLayoutBackend* prepared) {
+  if (jobject layout = prepared ? AndroidTextLayoutObject(*prepared) : nullptr) {
+    environment->CallVoidMethod(view, draw_prepared_text_, canvas, layout, command.rect.x, command.rect.y,
+        command.rect.width, command.rect.height, command.paragraph_offset.x, command.paragraph_offset.y,
+        PackColor(command.style.foreground));
+    return;
+  }
   auto attributes = AndroidTextAttributes(environment, command.text, command.style);
   if (!attributes) {
     return;

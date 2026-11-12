@@ -53,7 +53,7 @@ private:
       bool draw_background);
   void RenderCommand(CGContextRef context, const DrawBackdropCommand& command);
   void RenderCommand(CGContextRef context, const DrawRectCommand& command);
-  void RenderCommand(CGContextRef context, const DrawTextCommand& command);
+  void RenderCommand(CGContextRef context, const DrawTextCommand& command, const TextLayoutBackend* prepared);
   void RenderCommand(CGContextRef context, const DrawTextRunsCommand& command);
   void RenderCommand(CGContextRef context, const DrawImageCommand& command);
   void RenderCommand(CGContextRef context, const DrawExternalTextureCommand& command);

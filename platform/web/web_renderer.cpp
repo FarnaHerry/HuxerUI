@@ -519,13 +519,7 @@ std::vector<TextOffset> BrowserGraphemeBoundaries(std::string_view text, std::st
   } catch (...) {
   }
 
-  // Without Intl.Segmenter, keep scalar-safe UTF-16 boundaries; this fallback is not full grapheme segmentation.
-  for (TextOffset offset = 1; offset <= length; ++offset) {
-    if (Utf8TextInRange(text, {0, offset}).has_value()) {
-      result.push_back(offset);
-    }
-  }
-  return result;
+  return GraphemeBoundaries(text);
 }
 
 } // namespace
@@ -1109,7 +1103,14 @@ void WebRenderer::RenderSequence(const PaintSequence& sequence, CommandRange* ra
     if (!selected) {
       continue;
     }
-    std::visit([this](const auto& value) { RenderCommand(value); }, command);
+    std::visit([this, &sequence, &command](const auto& value) {
+      if constexpr (std::same_as<std::remove_cvref_t<decltype(value)>, DrawTextCommand>) {
+        const auto* prepared = InternalAccess::TextLayoutForPaint(sequence, command);
+        RenderCommand(value, prepared);
+      } else {
+        RenderCommand(value);
+      }
+    }, command);
   }
 }
 
@@ -1204,12 +1205,14 @@ void WebRenderer::RenderCommand(const DrawRectCommand& command) {
   context_.call<void>("fill");
 }
 
-void WebRenderer::RenderCommand(const DrawTextCommand& command) {
+void WebRenderer::RenderCommand(const DrawTextCommand& command, const TextLayoutBackend* prepared) {
   if (command.rect.IsEmpty()) {
     return;
   }
-  const auto paragraph = ParagraphFor(command.text, command.style, command.rect.width, command.options);
-  const WebTextLayout& layout = *paragraph;
+  const auto* resolved = dynamic_cast<const WebTextLayout*>(prepared);
+  const auto paragraph = resolved ? nullptr : ParagraphFor(command.text, command.style, command.rect.width,
+                                                           command.options);
+  const WebTextLayout& layout = resolved ? *resolved : *paragraph;
   const float remaining_height = std::max(0.0F, command.rect.height - layout.Metrics().size.height);
   float vertical_offset = 0.0F;
   if (command.options.vertical_align == TextVerticalAlign::Center) {

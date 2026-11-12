@@ -21,6 +21,12 @@
 
 namespace huxerui::detail {
 
+bool MountedNode::IsFocusable() const noexcept {
+  return declared_focusable || std::ranges::any_of(text.LinkRanges(), [this](const auto& link) {
+    return !cached_paragraph_layout || cached_paragraph_layout->RetainsSourceRange(link.range);
+  });
+}
+
 LayoutContext InternalAccess::CreateLayoutContext(
     void* state, LayoutContext::MeasureFunction measure, EdgeInsets safe_area,
     const WindowTitleBarMetrics* title_bar_metrics) {
@@ -215,7 +221,7 @@ bool BuildPointerRouteImpl(MountedNode& node, Point position, std::vector<Mounte
 
   if (within_node &&
       (HandlesPointer(node) || ExtensionHandlesPointer(node, *local_position) ||
-       ExtensionHandlesHover(node, *local_position) || IsScrollContainer(node) || node.focusable ||
+       ExtensionHandlesHover(node, *local_position) || IsScrollContainer(node) || node.IsFocusable() ||
        (purpose == PointerRoutePurpose::Cursor && node.properties.pointer_cursor.has_value()) ||
        (purpose == PointerRoutePurpose::Hover && HasEventBinding<ViewEvents::Hover>(node.event_bindings)) ||
        node.kind == NodeKind::PlatformView)) {
@@ -254,7 +260,7 @@ WindowHitTarget HitTestWindowTarget(MountedNode& node, Point position) {
     return WindowHitTarget::None;
   }
   if (HandlesPointer(node) || ExtensionHandlesPointer(node, *local_position) || IsScrollContainer(node) ||
-      node.focusable) {
+      node.IsFocusable()) {
     return WindowHitTarget::Client;
   }
   return node.properties.window_drag_region ? WindowHitTarget::Drag : WindowHitTarget::None;
@@ -404,6 +410,12 @@ Size MeasureLabelContent(MountedNode& node, UiWindow& ui_window, const Constrain
 }
 
 Size MeasureTextContent(MountedNode& node, UiWindow& ui_window, const Constraints& content_constraints) {
+  if (node.properties.text_line_limit || node.properties.text_overflow != TextOverflow::Clip) {
+    return MeasureTextParagraph(node, ui_window, content_constraints);
+  }
+  if (node.cached_paragraph_layout && node.cached_paragraph_layout->HasOverflowPolicy()) {
+    node.cached_paragraph_layout.reset();
+  }
   const float max_width = content_constraints.max_width;
 #if defined(__EMSCRIPTEN__) || (defined(__linux__) && !defined(__ANDROID__))
   const std::uint64_t text_metrics_revision = InternalAccess::TextMetricsRevision(ui_window);
