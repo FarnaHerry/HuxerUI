@@ -838,7 +838,7 @@ public:
       if (window_.screen != nil) configuration.display_scale = static_cast<float>(window_.screen.backingScaleFactor);
       text_input_ = std::make_unique<MacTextInput>(*this, view_);
       platform_views_ = std::make_unique<AppKitPlatformViews>(
-          renderer_, frame_coordinator_, InternalAccess::ApplicationRegistry(application_runtime), *this, window_);
+          *renderer_, frame_coordinator_, InternalAccess::ApplicationRegistry(application_runtime), *this, window_);
       accessibility_ = std::make_unique<MacAccessibility>(*this, view_, *platform_views_);
       frame_scheduler_ = [[HuxerUIFrameScheduler alloc] initWithView:view_];
       InitializeWindow(application_runtime, std::move(content), options, configuration);
