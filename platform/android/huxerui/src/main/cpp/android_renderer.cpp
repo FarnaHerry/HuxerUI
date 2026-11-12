@@ -1425,7 +1425,10 @@ void AndroidRenderer::DrawRasterCommand(JNIEnv* environment, jobject view, jobje
   RecordRaster(environment, view, canvas, command);
   std::visit(
       [&](const auto& value) {
-        if constexpr (!std::same_as<std::remove_cvref_t<decltype(value)>, DrawExternalTextureCommand>) {
+        using Command = std::remove_cvref_t<decltype(value)>;
+        if constexpr (std::same_as<Command, DrawTextCommand>) {
+          RenderCommand(environment, view, canvas, value, nullptr);
+        } else if constexpr (!std::same_as<Command, DrawExternalTextureCommand>) {
           RenderCommand(environment, view, canvas, value);
         }
       },
