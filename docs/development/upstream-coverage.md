@@ -7,8 +7,8 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `00d1a486` (`perf(text): speed up layout creation and reuse layouts for drawing`).
-- Fork merge commit: `f405dcdc`.
+- Last merged upstream commit: `ad28dd34` (`perf(text): reuse paragraph layouts for measurement and drawing`).
+- Fork merge commit: `2f6df692`.
 - Last audit date: 2026-11-12.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
@@ -88,7 +88,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
-| Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Fork-only optimization; upstream `00d1a486` retains prepared layouts for drawing and caches overflow paragraphs, but plain text measurement still calls the platform measurer on each layout pass |
+| Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Fork-only optimization; upstream `ad28dd34` caches paragraph metrics and drawing layouts per platform, but each layout pass still re-enters the platform measurer, while the mounted-node memo skips that call when text, font, options, and width are unchanged |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
@@ -103,7 +103,7 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..00d1a486` range does not change the adapters and subsystems below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..ad28dd34` range does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
