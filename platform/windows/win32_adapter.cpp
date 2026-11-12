@@ -2323,6 +2323,7 @@ private:
       break;
     case WM_SETTINGCHANGE:
       if (IsInitialized()) UpdateSystemThemeBrightness(QuerySystemThemeBrightness());
+      renderer_.UpdateTextLocale();
       UiWindow::UpdateResourceConfiguration(Configuration());
       return 0;
     case WM_DISPLAYCHANGE:

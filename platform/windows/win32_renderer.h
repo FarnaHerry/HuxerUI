@@ -33,6 +33,7 @@ public:
   void Initialize();
   void Discard() noexcept;
   void ResetDeviceResources() noexcept;
+  void UpdateTextLocale();
   void Resize(HWND window, float dpi);
   void DpiChanged(HWND window, float dpi);
   void SetTransparentSurface(bool transparent);
