@@ -181,3 +181,8 @@ The downstream extensions retain windowless startup, floating utility presentati
 Windows and Linux implement native window creation; macOS remains a preview requiring its own CI and interactive validation.
 Android, iOS, and Web retain platform-driven attachments without programmatic top-level creation.
 [Developing Multi-Window](multi-window.md) lists host validation commands, behavioral notes, and the porting checklist.
+
+## Deferred upstream ownership
+
+The upstream author will manage transparency and Gaussian blur centrally.
+The fork's backdrop and liquid-glass materials (`include/huxerui/effects.h`, [Backdrop effects](../design/backdrop-effects.md), and [Glass](../guide/glass.md)) remain fork-only capability for local use, but they are not prepared for upstream PRs and need no fork assistance (2026-11-13).

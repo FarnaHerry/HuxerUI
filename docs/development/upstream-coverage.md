@@ -71,7 +71,7 @@ These items should not be resubmitted because an upstream design change owns the
 These items were checked at the baseline and remain absent from upstream.
 The list is a re-audit shortcut, not a roadmap or a promise to upstream every item.
 
-| Area | Fork evidence | Status at 2026-11-12 |
+| Area | Fork evidence | Status at 2026-11-13 |
 |---|---|---|
 | Linux custom-chrome resize band | `ResolveLinuxResizeEdge` | Fork-only interaction choice: 6-DIP band, 16-DIP corner directions within that band; upstream uses a 10-DIP band and 14-DIP square corners |
 | Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
@@ -85,7 +85,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Transparent utility windows and native window requests | `8e2adda1`, `3aef230b`, `317328c4` | Fork-only capability |
 | Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability |
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
-| Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability |
+| Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability; do not prepare an upstream PR. The upstream author will own transparency and Gaussian blur centrally later (2026-11-13). |
 | `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
@@ -97,6 +97,11 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
 
 Linux resize hit testing deliberately leaves the client interior outside its 6-DIP band interactive, including near corners. Hover and press use the same geometry.
+
+## Deferred to upstream ownership
+
+The upstream author will manage transparency and Gaussian blur centrally.
+The fork's backdrop and liquid-glass materials remain a fork-only capability for local use, but they are not upstream PR candidates and need no fork assistance (2026-11-13).
 
 Pager release thresholds are another interaction difference kept deliberately: the fork uses 450 logical pixels per second and 25% of the pager extent, while upstream uses 600 and 35%.
 The upstream author confirmed that configurable tuning will be opened later, so keep the fork constants until that capability lands and do not submit a duplicate PR.
