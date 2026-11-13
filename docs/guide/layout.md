@@ -162,9 +162,7 @@ return ScrollView(content)
 Use `ScrollBar()` as a modifier to draw an interactive indicator on each axis with a scroll range.
 The scrollbar reads committed scroll geometry; it does not own or duplicate the content offset.
 
-Use `.FillViewport()` to give short content the viewport's extent along each scroll axis.
-On an unbounded axis it uses the incoming minimum.
-Larger content still scrolls normally.
+Use `.FillViewport()` to give short content the viewport's extent along each scroll axis. On an unbounded axis it uses the incoming minimum. Larger content still scrolls normally.
 
 Combine it with `MainAlign(MainAxisAlignment::End)` to place a short transcript at the bottom.
 
