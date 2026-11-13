@@ -31,6 +31,14 @@ The fork tracks those upstream commits, so the corresponding preparation branche
 PRs #149 and #148 were closed by the fork after #150 absorbed them; #141 was later implemented upstream as `e0f49ceb`.
 PRs #139, #140, #138, and #118 were closed by the fork without an upstream equivalent.
 
+## Upstreamed installer work
+
+Upstream `adea3ba8` (authored by FarnaHerry) supersedes the fork's installer upgrade and unattended-run work.
+It is a single-parent squash commit, and none of the fork commits (`929ebde9`, `8c2eae59`, `884b8a59`, `c0949cc5`, `9333c98b`, `abd07a3f`, and the installer hunk of `42f0069d`) are ancestors, so this is an upstream rewrite rather than a merged branch.
+The rewrite inlines the command policy and hidden owner window, tightens preemption to headless, passive, and failed-upgrade embedded runs, keeps full-display `/uninstall` and `/repair` behind confirmation, and preserves restart exit codes; `b2ae8e8f` adds the restart prompt.
+Merge `8eb3adfc` therefore removed `installer_command_policy.h`, `installer_native_window.h`, their platform test, the SDK header installs, and the test-only WiX wiring.
+The fork keeps one residual policy: engine error prompts never offer `Ignore` (`3517ea29`).
+
 ## Initial inventory
 
 The upstream baseline is `0c5126235d43c2b703166bcc00781b850f2d1c39`. The starting acgu HEAD is
@@ -131,6 +139,9 @@ The local branches `fix/patchelf-runtime-safety`, `fix/presentation-layer-anchor
 `fix/windows-native-window-polish` remains checked out in `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-win32`; removing that worktree drops the branch.
 `codex/fix-win32-window-factory` also remains checked out in its Codex worktree while the remote branch is gone.
 The performance, window-caption-controls, and multi-window feature branches remain available for ongoing work.
+
+On 2026-11-13, upstream `adea3ba8` covered the installer work, so `fix/windows-installer-runs` (remote and local) is ready to retire.
+Its commits are not ancestors of the integration and the branch is no longer needed for upstream preparation.
 
 ## llm-switch patch intake
 
