@@ -7,8 +7,8 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `8d2bcea1` (`fix(release): resolve 0.4.0 validation failures`).
-- Fork merge commit: `8eb3adfc`.
+- Last merged upstream commit: `babf9f2a` (`feat(window): add fullscreen and window shortcuts`).
+- Fork merge commit: `3da96007`.
 - Last audit date: 2026-11-13.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
@@ -116,7 +116,7 @@ Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..8d2bcea1` ran
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| High | Windows fullscreen stays under the taskbar | `6ebc6213` | Fullscreen still uses `HWND_TOP`; no `HWND_TOPMOST` span or `HWND_NOTOPMOST` restore |
+| High | Windows fullscreen stays under the taskbar | `6ebc6213` | Upstream `babf9f2a` adds fullscreen but `ApplyFullscreen()` still omits the `HWND_TOPMOST` span and `HWND_NOTOPMOST` restore |
 | High | Pager returns to the committed page when direct paging is canceled | `00caf9a0` (cancel line), `3e16bf4c` (peer retention) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index`; disabling drag mid-gesture has the same issue although `docs/design/pager.md` promises the controlled page |
 | High | Programmatic scroll on disabled containers | `db693dcd` | `ScrollNodeBy` rejects every source when `interaction.enabled` is false |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
