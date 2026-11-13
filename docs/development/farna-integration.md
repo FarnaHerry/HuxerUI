@@ -38,7 +38,7 @@ PRs #139, #140, #138, and #118 were closed by the fork without an upstream equiv
 | #174 | `d407f566` | Disabled containers accept programmatic controller scrolls, including `ScrollToItem`, while user-driven sources and focus reveal stay blocked. |
 | #175 | `df5f4ba0` | `ScrollView::FillViewport()` exposes the existing fill-viewport measurement policy; the public header and guide document bounded and unbounded axes. |
 
-The coverage registry records both as covered. `farna/main` keeps its equivalent local implementations until the next upstream merge.
+The coverage registry records both as covered. Upstream commits are now merged into `farna/main`; the merge commit is `d48d36d0`.
 
 ## Upstreamed installer work
 

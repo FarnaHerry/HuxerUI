@@ -7,9 +7,8 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `babf9f2a` (`feat(window): add fullscreen and window shortcuts`).
-- Latest upstream commit reviewed: `df5f4ba0` (includes absorbed fork PRs [#174](https://github.com/HuxerUI/HuxerUI/pull/174) and [#175](https://github.com/HuxerUI/HuxerUI/pull/175)); not yet merged into `farna/main`.
-- Fork merge commit: `3da96007`.
+- Last merged upstream commit: `df5f4ba0` (`feat(scroll): expose FillViewport on ScrollView (#175)`).
+- Fork merge commit: `d48d36d0`.
 - Last audit date: 2026-11-13.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
