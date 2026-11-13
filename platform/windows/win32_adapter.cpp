@@ -2182,6 +2182,7 @@ private:
   void ApplyFullscreen(bool fullscreen) {
     if (fullscreen == windowed_placement_.has_value()) return;
     constexpr UINT frame_change = SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOACTIVATE;
+    constexpr UINT topmost_change = SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_NOACTIVATE;
     if (fullscreen) {
       if (IsIconic(window_)) return;
       WindowedPlacement saved{GetWindowLongPtrW(window_, GWL_STYLE), {}};
@@ -2194,12 +2195,13 @@ private:
       }
       windowed_placement_ = saved;
       const RECT& bounds = monitor.rcMonitor;
+      // The taskbar is always topmost; a non-topmost fullscreen window can leave it covering the client area.
       if (!SetWindowStyle(saved.style & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE)) ||
-          !SetWindowPos(window_, nullptr, bounds.left, bounds.top, bounds.right - bounds.left,
-                        bounds.bottom - bounds.top, frame_change)) {
+          !SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top, bounds.right - bounds.left,
+                        bounds.bottom - bounds.top, topmost_change)) {
         windowed_placement_.reset();
         RestoreWindowedPlacement(saved);
-        SetWindowPos(window_, nullptr, 0, 0, 0, 0, frame_change | SWP_NOMOVE | SWP_NOSIZE);
+        SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 0, 0, frame_change | SWP_NOMOVE | SWP_NOSIZE);
       }
     } else {
       const WindowedPlacement saved = *windowed_placement_;
@@ -2209,7 +2211,7 @@ private:
         windowed_placement_ = saved;
         SetWindowStyle(fullscreen_style);
       }
-      SetWindowPos(window_, nullptr, 0, 0, 0, 0, frame_change | SWP_NOMOVE | SWP_NOSIZE);
+      SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 0, 0, frame_change | SWP_NOMOVE | SWP_NOSIZE);
     }
     UpdateRuntimeViewport();
     UpdateFullscreen(windowed_placement_.has_value());
