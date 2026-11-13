@@ -117,7 +117,7 @@ Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..8d2bcea1` ran
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
 | High | Windows fullscreen stays under the taskbar | `6ebc6213` | Fullscreen still uses `HWND_TOP`; no `HWND_TOPMOST` span or `HWND_NOTOPMOST` restore |
-| High | Pager cancel returns to the displayed page | `3e16bf4c` (pager hunk) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index` |
+| High | Pager returns to the committed page when direct paging is canceled | `00caf9a0` (cancel line), `3e16bf4c` (peer retention) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index`; disabling drag mid-gesture has the same issue although `docs/design/pager.md` promises the controlled page |
 | High | Programmatic scroll on disabled containers | `db693dcd` | `ScrollNodeBy` rejects every source when `interaction.enabled` is false |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
