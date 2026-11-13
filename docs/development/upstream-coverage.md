@@ -83,7 +83,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Windows fullscreen covering the taskbar | `6ebc6213` | Fork-only |
 | Window ownership and modality relationships | `6b34925e` and follow-up fixes | Fork-only capability |
 | Transparent utility windows and native window requests | `8e2adda1`, `3aef230b`, `317328c4` | Fork-only capability |
-| Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability |
+| Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability. A clean upstream port is blocked by fork-only multi-window prerequisites: `WindowIdentity`/`WindowOptions::key`, window relationship and modal blocking, the multi-window test harness, and Linux window lifecycle hooks. Do not prepare a standalone PR until those land or the feature is redesigned on upstream's `OpenWindow` API. |
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
 | Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability; do not prepare an upstream PR. The upstream author will own transparency and Gaussian blur centrally later (2026-11-13). |
 | `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
