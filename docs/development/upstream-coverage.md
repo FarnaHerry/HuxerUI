@@ -7,8 +7,8 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `df5f4ba0` (`feat(scroll): expose FillViewport on ScrollView (#175)`).
-- Fork merge commit: `d48d36d0`.
+- Last merged upstream commit: `4d573263` (`docs(readme): refresh project introduction and quick start`, release `v0.4.0`).
+- Fork merge commit: `85d65da5`.
 - Last audit date: 2026-11-13.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
