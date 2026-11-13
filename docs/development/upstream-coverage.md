@@ -8,6 +8,7 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
 - Last merged upstream commit: `babf9f2a` (`feat(window): add fullscreen and window shortcuts`).
+- Latest upstream commit reviewed: `df5f4ba0` (includes absorbed fork PRs [#174](https://github.com/HuxerUI/HuxerUI/pull/174) and [#175](https://github.com/HuxerUI/HuxerUI/pull/175)); not yet merged into `farna/main`.
 - Fork merge commit: `3da96007`.
 - Last audit date: 2026-11-13.
 
@@ -50,6 +51,8 @@ Check the residual diff and the upstream source, not only the commit list.
 | Host system appearance preference | PR #135 | Upstream `5523172a` adds per-window `UseSystemThemeBrightness()` and `ThemeBrightness`, with native observation on every platform | Use only the upstream API; the fork branch was deleted. |
 | Pager, drag-preview, and hidden virtual-subtree fixes from PR #150 | `3e16bf4c` | Upstream `784f99a6`, `711a9eae`, and `9f90e005` landed the same behavior before closing #150 | Drop the shared hunks; only the pager cancel target remains fork-only. |
 | Windows installer upgrade, maintenance, unattended, and restart flows | `929ebde9`, `8c2eae59`, `884b8a59`, `c0949cc5`, `9333c98b`, `abd07a3f`, `42f0069d` (installer hunk), plus the `InstallerCommandPolicy` tests | Upstream `adea3ba8` detects installed versions, keeps interactive actions gated by confirmation, completes automatic upgrade uninstall and recovery, preserves restart exit codes, and honors `/norestart`; `b2ae8e8f` adds the restart prompt. The hidden owner window and terminal handling are inline in `windows_installer.cpp` | Drop the fork extraction: `installer_command_policy.h`, `installer_native_window.h`, their platform test, the SDK header installs, and the test-only WiX wiring were removed. Residual fork-only: engine error prompts never offer `Ignore` (`3517ea29`). |
+| Programmatic controller scroll on disabled containers | `db693dcd` | Upstream `d407f566` (PR [#174](https://github.com/HuxerUI/HuxerUI/pull/174)) accepts `ScrollSource::Programmatic` on disabled containers and keeps pending item alignment through layout; tests cover single-axis realization refinement, two-axis item movement, and rejected drags | Drop the fork fix; upstream now covers it. |
+| `ScrollView::FillViewport` | `12cd2215` | Upstream `df5f4ba0` (PR [#175](https://github.com/HuxerUI/HuxerUI/pull/175)) exposes the existing `ScrollFillViewport` measurement policy for short content, bounded and unbounded axes, horizontal, oversized, and two-axis content | Drop the fork public API; upstream now covers it. |
 
 ## Partially covered
 
@@ -74,7 +77,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Area | Fork evidence | Status at 2026-11-13 |
 |---|---|---|
 | Linux custom-chrome resize band | `ResolveLinuxResizeEdge` | Fork-only interaction choice: 6-DIP band, 16-DIP corner directions within that band; upstream uses a 10-DIP band and 14-DIP square corners |
-| Programmatic controller scroll on disabled containers | `db693dcd` | Fork-only |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
 | GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only |
 | macOS native-input task and frame-commit deferral | `785eb892`, `7f0ffc9f` | Fork-only |
@@ -86,7 +88,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability. A clean upstream port is blocked by fork-only multi-window prerequisites: `WindowIdentity`/`WindowOptions::key`, window relationship and modal blocking, the multi-window test harness, and Linux window lifecycle hooks. Feature request: [#177](https://github.com/HuxerUI/HuxerUI/issues/177). Wait for maintainer agreement on the API/scope before preparing a PR on upstream's `OpenWindow` API. |
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
 | Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability; do not prepare an upstream PR. The upstream author will own transparency and Gaussian blur centrally later (2026-11-13). |
-| `ScrollView::FillViewport` | `12cd2215` | Fork-only public API; upstream already has the internal `ScrollFillViewport` layout value used by Tabs, but no `ScrollView` method |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
 | Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Fork-only optimization; upstream `ad28dd34` caches paragraph metrics and drawing layouts per platform, but each layout pass still re-enters the platform measurer, while the mounted-node memo skips that call when text, font, options, and width are unchanged |
@@ -109,7 +110,7 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..8d2bcea1` range does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..df5f4ba0` range does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
@@ -118,7 +119,6 @@ Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..8d2bcea1` ran
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
 | High | Windows fullscreen stays under the taskbar | `6ebc6213` | Upstream `babf9f2a` adds fullscreen but `ApplyFullscreen()` still omits the `HWND_TOPMOST` span and `HWND_NOTOPMOST` restore |
 | High | Pager returns to the committed page when direct paging is canceled | `00caf9a0` (cancel line), `3e16bf4c` (peer retention) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index`; disabling drag mid-gesture has the same issue although `docs/design/pager.md` promises the controlled page |
-| High | Programmatic scroll on disabled containers | `db693dcd` | `ScrollNodeBy` rejects every source when `interaction.enabled` is false |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |

@@ -31,6 +31,15 @@ The fork tracks those upstream commits, so the corresponding preparation branche
 PRs #149 and #148 were closed by the fork after #150 absorbed them; #141 was later implemented upstream as `e0f49ceb`.
 PRs #139, #140, #138, and #118 were closed by the fork without an upstream equivalent.
 
+## Upstreamed fork pull requests
+
+| PR | Upstream commit | Result |
+|---|---|---|
+| #174 | `d407f566` | Disabled containers accept programmatic controller scrolls, including `ScrollToItem`, while user-driven sources and focus reveal stay blocked. |
+| #175 | `df5f4ba0` | `ScrollView::FillViewport()` exposes the existing fill-viewport measurement policy; the public header and guide document bounded and unbounded axes. |
+
+The coverage registry records both as covered. `farna/main` keeps its equivalent local implementations until the next upstream merge.
+
 ## Upstreamed installer work
 
 Upstream `adea3ba8` (authored by FarnaHerry) supersedes the fork's installer upgrade and unattended-run work.

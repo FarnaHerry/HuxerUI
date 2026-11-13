@@ -1791,10 +1791,9 @@ public:
   ScrollView Controller(huxerui::ScrollController controller) &&;
   /// Connects a stable controller to one axis selected by ScrollBothAxes(). Use a distinct controller for each axis.
   ScrollView Controller(Axis axis, huxerui::ScrollController controller) &&;
-  /// Makes the content at least as tall as the viewport along the scroll axis.
-  ///
-  /// Bottom-anchored feeds (chat transcripts, activity streams) combine this with a MainAlign(End)
-  /// content column: short content hugs the viewport end, and overflow scrolls normally.
+  /// Raises the content's minimum extent along every enabled scroll axis.
+  /// Uses the bounded viewport extent or the incoming minimum on an unbounded axis.
+  /// Larger content can still scroll normally.
   ScrollView FillViewport() &&;
 };
 

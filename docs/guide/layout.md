@@ -162,6 +162,20 @@ return ScrollView(content)
 Use `ScrollBar()` as a modifier to draw an interactive indicator on each axis with a scroll range.
 The scrollbar reads committed scroll geometry; it does not own or duplicate the content offset.
 
+Use `.FillViewport()` to give short content the viewport's extent along each scroll axis.
+On an unbounded axis it uses the incoming minimum.
+Larger content still scrolls normally.
+
+Combine it with `MainAlign(MainAxisAlignment::End)` to place a short transcript at the bottom.
+
+```cpp
+return ScrollView(
+    Column {
+      Transcript(),
+    }.With(MainAlign(MainAxisAlignment::End))
+).FillViewport();
+```
+
 An explicit `ScrollPhysics` modifier configures fling and overscroll behavior for one container.
 Without one, the container uses the current platform adapter's default physics.
 
@@ -251,6 +265,8 @@ Keep the controller stable across recomposition.
 Bind a controller to a single-axis view with `.Controller(controller)`. Two-axis views use `.Controller(axis, controller)` for each axis that needs application control. Use distinct controllers when binding both axes.
 
 It can scroll to or by an offset and ask a supported virtual layout to scroll to an item.
+A disabled scroll container still accepts controller requests; drag, wheel, trackpad, momentum, and focus reveal stay rejected.
+This supports paint-only rails that mirror another scroll position without becoming interactive.
 Focus and text-input reveal use the same authoritative scroll position internally rather than a separate controller path.
 User input, animation, focus reveal, and controller requests all update one authoritative scroll position.
 Observe `Metrics()` for content-offset and extent changes instead of deriving position from raw scroll input.
