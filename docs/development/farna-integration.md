@@ -140,8 +140,19 @@ The local branches `fix/patchelf-runtime-safety`, `fix/presentation-layer-anchor
 `codex/fix-win32-window-factory` also remains checked out in its Codex worktree while the remote branch is gone.
 The performance, window-caption-controls, and multi-window feature branches remain available for ongoing work.
 
-On 2026-11-13, upstream `adea3ba8` covered the installer work, so `fix/windows-installer-runs` (remote and local) is ready to retire.
-Its commits are not ancestors of the integration and the branch is no longer needed for upstream preparation.
+On 2026-11-13, after upstream `adea3ba8` covered the installer work, the following branches and clean preparation worktrees were deleted:
+
+- `fix/windows-installer-runs` (remote tip `9def0481`; upstream rewrite `adea3ba8` and `b2ae8e8f`) with `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-installer`.
+- `codex/fix-win32-window-factory` (`c81042d7`) with its Codex worktree; upstream `e613b515` renamed the factory.
+- `fix/windows-native-window-polish` (`cd7d44a7`) with `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-win32`; covered by `bdd0987b`, `38eb34dc`, and `af8b6462`.
+- `codex/linux-glass-native` (`c1cce090`) and `codex/macos-multi-window-preview` (`ad73d2b7`) with their clean Codex worktrees.
+- `codex/application-scoped-drag`, `codex/linux-floating-windows`, `codex/linux-liquid-glass-opt`, `codex/macos-floating-windows`, `feat/disabled-scroll-programmatic`, and `feat/multi-window`, all merged into `farna/main`.
+
+The remote branches `codex/macos-floating-windows`, `feat/disabled-scroll-programmatic`, and `fix/windows-installer-runs` were deleted.
+The remote `fix/windows-installer-runs` tip `9def0481` carried `4f53e7f4`, `6d854e48`, and `9def0481` beyond the local preparation branch; upstream's squash `adea3ba8` owns that behavior.
+
+`feat/scroll-fill-viewport` keeps its worktree at `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-fill-viewport` because it has uncommitted work.
+`farna/upstream-2026-10`, `farna/worktree-snapshot-20261018`, `probe/ui-perf`, `origin/perf/text-measurement-memo`, and `origin/wip/window-caption-controls` remain available.
 
 ## llm-switch patch intake
 
