@@ -7,9 +7,9 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `ad28dd34` (`perf(text): reuse paragraph layouts for measurement and drawing`).
-- Fork merge commit: `2f6df692`.
-- Last audit date: 2026-11-12.
+- Last merged upstream commit: `8d2bcea1` (`fix(release): resolve 0.4.0 validation failures`).
+- Fork merge commit: `8eb3adfc`.
+- Last audit date: 2026-11-13.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -49,6 +49,7 @@ Check the residual diff and the upstream source, not only the commit list.
 | mcpp compile failure with profiling disabled | `368f3f57`, PR #164 | Upstream `9b8f5d05` defaults source profiling off and `3abaa77b` excludes `src/runtime/profiling.cpp` from the mcpp glob | Drop the fork patch; the merge brings the exclusion and the option default. |
 | Host system appearance preference | PR #135 | Upstream `5523172a` adds per-window `UseSystemThemeBrightness()` and `ThemeBrightness`, with native observation on every platform | Use only the upstream API; the fork branch was deleted. |
 | Pager, drag-preview, and hidden virtual-subtree fixes from PR #150 | `3e16bf4c` | Upstream `784f99a6`, `711a9eae`, and `9f90e005` landed the same behavior before closing #150 | Drop the shared hunks; only the pager cancel target remains fork-only. |
+| Windows installer upgrade, maintenance, unattended, and restart flows | `929ebde9`, `8c2eae59`, `884b8a59`, `c0949cc5`, `9333c98b`, `abd07a3f`, `42f0069d` (installer hunk), plus the `InstallerCommandPolicy` tests | Upstream `adea3ba8` detects installed versions, keeps interactive actions gated by confirmation, completes automatic upgrade uninstall and recovery, preserves restart exit codes, and honors `/norestart`; `b2ae8e8f` adds the restart prompt. The hidden owner window and terminal handling are inline in `windows_installer.cpp` | Drop the fork extraction: `installer_command_policy.h`, `installer_native_window.h`, their platform test, the SDK header installs, and the test-only WiX wiring were removed. Residual fork-only: engine error prompts never offer `Ignore` (`3517ea29`). |
 
 ## Partially covered
 
@@ -103,7 +104,7 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..ad28dd34` range does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..8d2bcea1` range does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
