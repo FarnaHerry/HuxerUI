@@ -90,6 +90,10 @@ public:
 
 namespace {
 
+auto ShortcutKey(Key key, KeyModifiers modifiers) {
+  return std::tuple{key, modifiers.shift, modifiers.control, modifiers.alt, modifiers.meta};
+}
+
 StringVariant WindowCommandLabel(const WindowCaptionLabels& labels, WindowCommand command, bool maximized) {
   switch (command) {
   case WindowCommand::Minimize:
@@ -236,6 +240,10 @@ bool WindowService::IsOpen() const {
   return open_.Get();
 }
 
+bool WindowService::IsFullscreen() const {
+  return IsOpen() && fullscreen_.Get();
+}
+
 void WindowService::Open() {
   open_ = true;
 }
@@ -330,6 +338,50 @@ void WindowService::RequestKeyboard(bool show) {
   ui_window_->RequestKeyboard(show);
 }
 
+void WindowService::RequestFullscreen(bool fullscreen) {
+  if (!IsOpen()) return;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  ui_window_->RequestFullscreen(fullscreen);
+}
+
+void WindowService::UpdateFullscreen(bool fullscreen) {
+  fullscreen_ = fullscreen;
+}
+
+bool WindowService::HandleShortcut(const KeyEvent& event) {
+  if (event.type != KeyEventType::Down || event.repeat || shortcuts_.empty()) return false;
+  const auto found = shortcuts_.find(ShortcutKey(event.key, event.modifiers));
+  if (found == shortcuts_.end()) return false;
+  // The callback can unmount its own binding during dispatch.
+  const auto handler = found->second;
+  return (*handler)();
+}
+
+std::function<void()> WindowService::ConnectShortcut(Key key, KeyModifiers modifiers, std::function<bool()> handler) {
+  if (!IsOpen() || CurrentUiWindow() != ui_window_) {
+    throw std::logic_error("HuxerUI window shortcuts require a composition in the target window");
+  }
+  const auto shortcut = ShortcutKey(key, modifiers);
+  auto binding = std::make_shared<std::function<bool()>>(
+      [source = CurrentExecutionContext(), handler = std::move(handler)] {
+        ExecutionGuard guard(source);
+        return handler();
+      }
+  );
+  std::function<void()> disconnect = [weak = weak_from_this(), shortcut, original = std::weak_ptr{binding}] {
+    if (const auto service = weak.lock()) {
+      const auto found = service->shortcuts_.find(shortcut);
+      if (found != service->shortcuts_.end() && found->second == original.lock()) {
+        service->shortcuts_.erase(found);
+      }
+    }
+  };
+  if (!shortcuts_.try_emplace(shortcut, std::move(binding)).second) {
+    throw std::logic_error("HuxerUI window shortcut is already bound");
+  }
+  return disconnect;
+}
+
 bool WindowService::HandleRequest(WindowCommand command) {
   if (!IsOpen()) return true;
   RequestHandler& request = Handler(command);
@@ -406,6 +458,7 @@ void WindowService::Disconnect() noexcept {
 void WindowService::ClearHandlers() noexcept {
   minimize_handler_ = {};
   close_handler_ = {};
+  shortcuts_.clear();
   lifecycle_handlers_.clear();
 }
 
@@ -504,8 +557,8 @@ bool WindowHandle::IsOpen() const {
   return service_->IsOpen();
 }
 
-void WindowHandle::Show() const {
-  service_->Request(WindowCommand::Show);
+bool WindowHandle::IsFullscreen() const {
+  return service_->IsFullscreen();
 }
 
 WindowCapabilities WindowHandle::Capabilities() const {
@@ -553,8 +606,8 @@ WindowLifecycleState WindowHandle::LifecycleState() const {
   return service_->LifecycleState();
 }
 
-std::function<void()> WindowHandle::ConnectLifecycle(std::function<void(WindowLifecycleState)> handler) const {
-  return service_->ConnectLifecycle(std::move(handler));
+void WindowHandle::Show() const {
+  service_->Request(WindowCommand::Show);
 }
 
 void WindowHandle::Hide() const {
@@ -590,7 +643,7 @@ void WindowHandle::ToggleMaximize() const {
 }
 
 void WindowHandle::SetFullscreen(bool fullscreen) const {
-  service_->Request(fullscreen ? WindowCommand::EnterFullscreen : WindowCommand::ExitFullscreen);
+  service_->RequestFullscreen(fullscreen);
 }
 
 void WindowHandle::Close() const {
@@ -604,6 +657,15 @@ std::optional<Point> WindowHandle::Position() const {
 std::function<void()>
 WindowHandle::ConnectRequest(WindowCommand command, std::function<bool()> handler) const {
   return service_->ConnectRequest(command, std::move(handler));
+}
+
+std::function<void()> WindowHandle::ConnectLifecycle(std::function<void(WindowLifecycleState)> handler) const {
+  return service_->ConnectLifecycle(std::move(handler));
+}
+
+std::function<void()>
+WindowHandle::ConnectShortcut(Key key, KeyModifiers modifiers, std::function<bool()> handler) const {
+  return service_->ConnectShortcut(key, modifiers, std::move(handler));
 }
 
 WindowHandle UseWindow() {

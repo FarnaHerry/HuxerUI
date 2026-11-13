@@ -1597,12 +1597,10 @@ public:
       gtk_window_is_maximized(window_) ? gtk_window_unmaximize(window_) : gtk_window_maximize(window_);
       break;
     case WindowCommand::EnterFullscreen:
-      // Leave monitor selection to the current toplevel's placement. Forcing a monitor first moves
-      // the restored Xwayland window to that monitor's origin on some window managers.
-      gtk_window_fullscreen(window_);
+      RequestFullscreen(true);
       break;
     case WindowCommand::ExitFullscreen:
-      gtk_window_unfullscreen(window_);
+      RequestFullscreen(false);
       break;
     case WindowCommand::Close:
       performing_close_ = true;
@@ -1625,6 +1623,17 @@ public:
       gtk_window_present(window_);
       RequestFrameAt(Now());
       break;
+    }
+  }
+
+  void RequestFullscreen(bool fullscreen) override {
+    if (!IsInitialized() || window_ == nullptr) return;
+    if (fullscreen) {
+      // Leave monitor selection to the current toplevel's placement. Forcing a monitor first moves
+      // the restored Xwayland window to that monitor's origin on some window managers.
+      gtk_window_fullscreen(window_);
+    } else {
+      gtk_window_unfullscreen(window_);
     }
   }
 
@@ -2110,7 +2119,8 @@ private:
   }
 
   bool BeginWindowOperation(GdkEvent* event, guint button, Point point) {
-    if (!custom_chrome_ || window_ == nullptr || gtk_window_is_fullscreen(window_) || !IsInitialized() || event == nullptr) {
+    if (!custom_chrome_ || window_ == nullptr || !IsInitialized() || event == nullptr ||
+        gtk_window_is_fullscreen(window_)) {
       return false;
     }
     GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
@@ -2173,13 +2183,14 @@ private:
     if (!IsInitialized()) {
       return false;
     }
-    return UiWindow::HandleKeyEvent({
+    const KeyEvent key_event{
         type,
         TranslateKey(UnmodifiedKeyValue(event, key_value)),
         type == KeyEventType::Down ? KeyText(key_value, state) : std::string{},
         TranslateModifiers(state),
         repeat,
-    });
+    };
+    return UiWindow::HandleKeyEvent(key_event) || HandleFullscreenShortcut(key_event);
   }
 
   void DetachCanvasCallbacks() noexcept {
@@ -2407,6 +2418,7 @@ private:
   static void WindowResizeStateChanged(GObject*, GParamSpec*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    if (self.IsInitialized()) self.UpdateFullscreen(gtk_window_is_fullscreen(self.window_));
     self.UpdateRuntimeViewport();
   }
 

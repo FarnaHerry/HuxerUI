@@ -63,6 +63,7 @@ namespace {
 
 constexpr UINT kRenderMessage = WM_APP + 1;
 constexpr UINT kWindowCommandMessage = WM_APP + 3;
+constexpr UINT kFullscreenMessage = WM_APP + 4;
 constexpr UINT_PTR kFrameTimer = 1;
 constexpr UINT_PTR kTouchpadScrollTimer = 2;
 constexpr UINT kTouchpadScrollIdleMs = 120;
@@ -1251,7 +1252,10 @@ public:
       ui->platform_views_->SynchronizeFocus(GetFocus());
       return;
     }
-    TranslateMessage(&message);
+    if (ui == nullptr || message.hwnd != root || !ui->IsInitialized() ||
+        (message.message != WM_KEYDOWN && message.message != WM_SYSKEYDOWN)) {
+      TranslateMessage(&message);
+    }
     DispatchMessageW(&message);
     if (ui && ui->IsInitialized()) ui->platform_views_->SynchronizeFocus(GetFocus());
   }
@@ -1350,6 +1354,7 @@ public:
   std::shared_ptr<FilePickerTransport> CreateFilePickerTransport() override {
     return CreateWin32FilePickerTransport([this] { return window_; }, ui_dispatcher_.Bind());
   }
+
   void RequestWindowCommand(WindowCommand command) override {
     if (window_ == nullptr) {
       return;
@@ -1371,7 +1376,7 @@ public:
   WindowRequestResult RequestWindowPosition(Point position) override {
     POINT origin{};
     RECT bounds{};
-    if (fullscreen_ || !ClientToScreen(window_, &origin) || !GetWindowRect(window_, &bounds)) {
+    if (windowed_placement_ || !ClientToScreen(window_, &origin) || !GetWindowRect(window_, &bounds)) {
       return WindowRequestResult::Rejected;
     }
     const int x = ResolveWindowPositionCoordinate(static_cast<double>(position.x) * DpiScale() + bounds.left - origin.x,
@@ -1383,7 +1388,7 @@ public:
   }
 
   WindowRequestResult RequestWindowSize(Size size) override {
-    if (fullscreen_) return WindowRequestResult::Rejected;
+    if (windowed_placement_) return WindowRequestResult::Rejected;
     if (minimum_size_) {
       size.width = std::max(size.width, minimum_size_->width);
       size.height = std::max(size.height, minimum_size_->height);
@@ -1422,7 +1427,7 @@ public:
   }
 
   WindowRequestResult RequestWindowMove() override {
-    if (input_blocked_ || fullscreen_) return WindowRequestResult::Rejected;
+    if (input_blocked_ || windowed_placement_) return WindowRequestResult::Rejected;
     // SC_MOVE is queued so native capture cancellation cannot dismantle an in-flight gesture callback.
     return PostMessageW(window_, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0)
                ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
@@ -1485,15 +1490,24 @@ public:
     return Point{static_cast<float>(origin.x) / scale, static_cast<float>(origin.y) / scale};
   }
 
-
+  void RequestFullscreen(bool fullscreen) override {
+    if (window_ != nullptr) PostMessageW(window_, kFullscreenMessage, fullscreen, 0);
+  }
 
   ResourceConfiguration Configuration() const {
     ResourceConfiguration configuration = static_cast<WindowsRuntime&>(ApplicationRuntime()).Configuration();
-    configuration.display_scale = static_cast<float>(window_ != nullptr ? win32_api_.WindowDpi(window_) : win32_api_.SystemDpi()) / kDipsPerInch;
+    configuration.display_scale =
+        static_cast<float>(window_ != nullptr ? win32_api_.WindowDpi(window_) : win32_api_.SystemDpi()) / kDipsPerInch;
     return configuration;
   }
+
 private:
   friend class WindowsRuntime;
+
+  struct WindowedPlacement {
+    LONG_PTR style;
+    WINDOWPLACEMENT placement;
+  };
 
   void UpdateApplicationLifecycleState(ApplicationLifecycleState lifecycle_state) {
     if (IsInitialized()) {
@@ -1669,7 +1683,7 @@ private:
   }
 
   std::optional<WindowTitleBarMetrics> QueryTitleBarMetrics(Size viewport) const noexcept {
-    if (!custom_chrome_ || fullscreen_) {
+    if (!custom_chrome_ || windowed_placement_) {
       return std::nullopt;
     }
     const float scale = DpiScale();
@@ -1798,7 +1812,7 @@ private:
   }
 
   LRESULT ResizeHitTest(LPARAM position) const noexcept {
-    if (window_ == nullptr || fullscreen_ || IsZoomed(window_)) {
+    if (window_ == nullptr || windowed_placement_ || IsZoomed(window_)) {
       return HTCLIENT;
     }
     RECT bounds{};
@@ -2089,7 +2103,7 @@ private:
   LRESULT HandleOverlayMessage(HWND source, UINT message, WPARAM w_param, LPARAM l_param) {
     ExecutionGuard guard(InternalAccess::WindowExecution(*this));
     if (message == WM_NCHITTEST) {
-      if (!custom_chrome_ || fullscreen_) {
+      if (!custom_chrome_ || windowed_placement_) {
         return HTCLIENT;
       }
       if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
@@ -2111,6 +2125,11 @@ private:
   }
 
   void ExecuteWindowCommand(WindowCommand command) {
+    // Keep the saved windowed placement until SetFullscreen(false) restores it.
+    if (windowed_placement_ && (command == WindowCommand::Maximize || command == WindowCommand::Restore ||
+                               command == WindowCommand::ToggleMaximize)) {
+      return;
+    }
     switch (command) {
     case WindowCommand::Minimize:
       ShowWindow(window_, SW_MINIMIZE);
@@ -2124,29 +2143,11 @@ private:
     case WindowCommand::ToggleMaximize:
       ShowWindow(window_, IsZoomed(window_) ? SW_RESTORE : SW_MAXIMIZE);
       break;
-    case WindowCommand::EnterFullscreen: {
-      if (fullscreen_) break;
-      MONITORINFO monitor{sizeof(MONITORINFO)};
-      if (!GetMonitorInfoW(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor) ||
-          !GetWindowPlacement(window_, &fullscreen_placement_)) break;
-      fullscreen_style_ = GetWindowLongPtrW(window_, GWL_STYLE);
-      fullscreen_ = true;
-      SetWindowLongPtrW(window_, GWL_STYLE, fullscreen_style_ & ~(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE));
-      // 网页式真全屏：任务栏永远 TOPMOST，HWND_TOP 压不住它（窗口尺寸对了、
-      // 任务栏仍盖在上面，看上去就成了「窗口全屏」）。全屏期间置顶，退出时
-      // 明确放回 NOTOPMOST，别让窗口永远留在最顶层。
-      SetWindowPos(window_, HWND_TOPMOST, monitor.rcMonitor.left, monitor.rcMonitor.top,
-                   monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
-                   SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+    case WindowCommand::EnterFullscreen:
+      ApplyFullscreen(true);
       break;
-    }
     case WindowCommand::ExitFullscreen:
-      if (!fullscreen_) break;
-      fullscreen_ = false;
-      SetWindowLongPtrW(window_, GWL_STYLE, fullscreen_style_);
-      SetWindowPlacement(window_, &fullscreen_placement_);
-      SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 0, 0,
-                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER);
+      ApplyFullscreen(false);
       break;
     case WindowCommand::Close:
       performing_close_ = true;
@@ -2165,14 +2166,64 @@ private:
     }
   }
 
+  bool SetWindowStyle(LONG_PTR style) {
+    SetLastError(ERROR_SUCCESS);
+    return SetWindowLongPtrW(window_, GWL_STYLE, style) != 0 || GetLastError() == ERROR_SUCCESS;
+  }
+
+  bool RestoreWindowedPlacement(const WindowedPlacement& saved) {
+    // Let SetWindowPlacement apply the show state so User32 recalculates the maximized frame.
+    constexpr LONG_PTR show_state = WS_MAXIMIZE | WS_MINIMIZE;
+    const LONG_PTR current_style = GetWindowLongPtrW(window_, GWL_STYLE);
+    return SetWindowStyle((saved.style & ~show_state) | (current_style & show_state)) &&
+           SetWindowPlacement(window_, &saved.placement);
+  }
+
+  void ApplyFullscreen(bool fullscreen) {
+    if (fullscreen == windowed_placement_.has_value()) return;
+    constexpr UINT frame_change = SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_NOZORDER | SWP_NOACTIVATE;
+    if (fullscreen) {
+      if (IsIconic(window_)) return;
+      WindowedPlacement saved{GetWindowLongPtrW(window_, GWL_STYLE), {}};
+      saved.placement.length = sizeof(saved.placement);
+      MONITORINFO monitor{};
+      monitor.cbSize = sizeof(monitor);
+      if (!GetWindowPlacement(window_, &saved.placement) ||
+          !GetMonitorInfoW(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        return;
+      }
+      windowed_placement_ = saved;
+      const RECT& bounds = monitor.rcMonitor;
+      if (!SetWindowStyle(saved.style & ~static_cast<LONG_PTR>(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE)) ||
+          !SetWindowPos(window_, nullptr, bounds.left, bounds.top, bounds.right - bounds.left,
+                        bounds.bottom - bounds.top, frame_change)) {
+        windowed_placement_.reset();
+        RestoreWindowedPlacement(saved);
+        SetWindowPos(window_, nullptr, 0, 0, 0, 0, frame_change | SWP_NOMOVE | SWP_NOSIZE);
+      }
+    } else {
+      const WindowedPlacement saved = *windowed_placement_;
+      const LONG_PTR fullscreen_style = GetWindowLongPtrW(window_, GWL_STYLE);
+      windowed_placement_.reset();
+      if (!RestoreWindowedPlacement(saved)) {
+        windowed_placement_ = saved;
+        SetWindowStyle(fullscreen_style);
+      }
+      SetWindowPos(window_, nullptr, 0, 0, 0, 0, frame_change | SWP_NOMOVE | SWP_NOSIZE);
+    }
+    UpdateRuntimeViewport();
+    UpdateFullscreen(windowed_placement_.has_value());
+  }
+
   bool SendKey(KeyEventType type, WPARAM virtual_key, LPARAM key_data) {
-    return UiWindow::HandleKeyEvent({
+    const KeyEvent event{
         type,
         TranslateKey(virtual_key, key_data),
         type == KeyEventType::Down && !text_input_.Active() ? TranslateKeyText(virtual_key, key_data) : std::string{},
         CurrentKeyModifiers(),
         type == KeyEventType::Down && (static_cast<std::uintptr_t>(key_data) & (1ULL << 30U)) != 0,
-    });
+    };
+    return UiWindow::HandleKeyEvent(event) || HandleFullscreenShortcut(event);
   }
 
   LRESULT HandleMessage(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -2181,13 +2232,14 @@ private:
       return message == WM_CLOSE ? 0 : DefWindowProcW(window, message, w_param, l_param);
     }
     if (message == WM_MOUSEACTIVATE && passive_display_) return MA_NOACTIVATE;
+    if (windowed_placement_ && message == WM_NCCALCSIZE) return 0;
     if (custom_chrome_ && message == WM_NCCALCSIZE) {
       // User32 must observe the first captioned-window calculation before the client takes ownership of the frame.
       if (first_nc_calc_) {
         first_nc_calc_ = false;
         return DefWindowProcW(window, message, w_param, l_param);
       }
-      if (!fullscreen_ && IsZoomed(window)) {
+      if (!windowed_placement_ && IsZoomed(window)) {
         RECT* client = w_param == FALSE ? reinterpret_cast<RECT*>(l_param)
                                         : &reinterpret_cast<NCCALCSIZE_PARAMS*>(l_param)->rgrc[0];
         *client = InsetWin32MaximizedClientRect(*client, ResizeBorderX(), ResizeBorderY());
@@ -2206,7 +2258,7 @@ private:
       break;
     case WM_GETMINMAXINFO: {
       const LRESULT result = DefWindowProcW(window, message, w_param, l_param);
-      if (!minimum_size_.has_value()) {
+      if (!minimum_size_.has_value() || windowed_placement_) {
         return result;
       }
       const UINT dpi = std::max(1U, win32_api_.WindowDpi(window));
@@ -2225,7 +2277,7 @@ private:
     }
     case WM_NCHITTEST:
       if (utility_window_) return HTCLIENT;
-      if (fullscreen_) return HTCLIENT;
+      if (windowed_placement_) return HTCLIENT;
       if (custom_chrome_) {
         if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
           return *caption_control;
@@ -2258,7 +2310,7 @@ private:
       return 0;
     case WM_SYSCOMMAND:
       if ((w_param & 0xFFF0U) == SC_MOVE) {
-        if (input_blocked_ || fullscreen_) return 0;
+        if (input_blocked_ || windowed_placement_) return 0;
         CancelPointer();
       }
       if ((w_param & 0xFFF0U) == SC_MINIMIZE && IsInitialized() &&
@@ -2381,6 +2433,9 @@ private:
     case kWindowCommandMessage:
       ExecuteWindowCommand(static_cast<WindowCommand>(w_param));
       return 0;
+    case kFullscreenMessage:
+      ApplyFullscreen(w_param != 0);
+      return 0;
     case WM_TIMER:
       if (w_param == kTouchpadScrollTimer) {
         KillTimer(window, kTouchpadScrollTimer);
@@ -2437,15 +2492,22 @@ private:
       }
       break;
     case WM_KEYDOWN:
-    case WM_SYSKEYDOWN:
+    case WM_SYSKEYDOWN: {
       text_input_.ClearPendingResult();
-      if (message == WM_KEYDOWN && text_input_.Active() && (w_param == VK_PROCESSKEY || text_input_.Composing())) {
-        return DefWindowProcW(window, message, w_param, l_param);
-      }
-      if (SendKey(KeyEventType::Down, w_param, l_param)) {
+      const bool ime_key = message == WM_KEYDOWN && text_input_.Active() &&
+                           (w_param == VK_PROCESSKEY || text_input_.Composing());
+      if (!ime_key && SendKey(KeyEventType::Down, w_param, l_param)) {
         return 0;
       }
+      // Translate only unhandled presses so a consumed shortcut cannot enqueue WM_CHAR or WM_SYSCHAR.
+      MSG key_message{};
+      key_message.hwnd = window;
+      key_message.message = message;
+      key_message.wParam = w_param;
+      key_message.lParam = l_param;
+      TranslateMessage(&key_message);
       return DefWindowProcW(window, message, w_param, l_param);
+    }
     case WM_KEYUP:
     case WM_SYSKEYUP:
       if (message == WM_KEYUP && text_input_.Active() && (w_param == VK_PROCESSKEY || text_input_.Composing())) {
@@ -2512,13 +2574,11 @@ private:
   HINSTANCE instance_ = nullptr;
   HWND window_ = nullptr;
   float dpi_ = kDipsPerInch;
+  std::optional<WindowedPlacement> windowed_placement_;
   bool custom_chrome_ = false;
   bool utility_window_ = false;
   bool transparent_surface_ = false;
   bool passive_display_ = false;
-  bool fullscreen_ = false;
-  LONG_PTR fullscreen_style_ = 0;
-  WINDOWPLACEMENT fullscreen_placement_{sizeof(WINDOWPLACEMENT)};
   float custom_title_bar_height_ = 0.0F;
   std::optional<Size> minimum_size_;
   bool first_nc_calc_ = true;
