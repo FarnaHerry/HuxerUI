@@ -124,7 +124,7 @@ Verified absent from `upstream/main` at `1be39135`; `124837c1..1be39135` changes
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| High | Pager settles on the displayed page when drag is disabled mid-gesture | `dbc28f3c` | `Update()` binds the interrupting settle to `displayed_index_` although `docs/design/pager.md` promises the controlled page. A controlled page change combined with `DragEnabled(false)` during a drag rebounds to the outgoing page and then jumps. Upstream PR branch `fix/pager-disable-drag` prepared on `1be39135`. |
+| High | Pager settles on the displayed page when drag is disabled mid-gesture | `dbc28f3c` | `Update()` binds the interrupting settle to `displayed_index_` although `docs/design/pager.md` promises the controlled page. A controlled page change combined with `DragEnabled(false)` during a drag rebounds to the outgoing page and then jumps. Upstream PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182) is open from `fix/pager-disable-drag` on `1be39135`. |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
@@ -147,7 +147,7 @@ They are not upstream bug-fix candidates until that capability is proposed.
 
 Continuous touchpad paging makes both states reachable in the fork.
 If that capability is proposed upstream, carry the rebase and Cancel fixes with it instead of opening standalone bug PRs.
-The mid-gesture disable fix is different: it is reachable upstream and is prepared as `fix/pager-disable-drag`.
+The mid-gesture disable fix is different: it is reachable upstream and is open as PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182).
 
 ## Procedure for the next upstream merge
 
