@@ -287,6 +287,9 @@ class TextSelectionClient {
 public:
   virtual ~TextSelectionClient() = default;
 
+  virtual TextEditingActionStatus GetTextEditingActionStatus(TextEditingAction action, const Clipboard& clipboard) const;
+  virtual void PerformTextEditingAction(TextEditingAction action, const Clipboard& clipboard);
+
   virtual bool ClearSelection() = 0;
   virtual bool SelectWord(Point position) = 0;
   virtual bool ExtendSelection(Point position, bool start_handle) = 0;
@@ -299,7 +302,7 @@ Selection points and geometry use the owning node's local logical coordinates.
 `TextSelectionGeometry` contains independent optional `start`, `end`, and `toolbar_anchor` rectangles; an offscreen endpoint does not hide a visible handle or clear the logical selection.
 `QuerySelectionGeometry()` returns `std::nullopt` when no logical selection or editor caret exists, ending the old menu intent; an existing selection with no visible geometry returns `TextSelectionGeometry{}` and can restore its menu when visible again.
 UiWindow maps them through the node's resolved presentation transform exactly once at the host boundary.
-The optional editing-action methods allow read-only clients to expose Copy and Select All through the shared clipboard menu without pretending to be IME clients.
+The editing-action methods are optional. Read-only clients can expose Copy and Select All through the shared selection menu without opening an IME session.
 
 `ClearSelection()` cancels a range without needing visible geometry: a read-only client removes its logical selection, while an editor collapses to its active endpoint through its normal controlled update path. UiWindow invokes it after a confirmed touch tap elsewhere. A tap inside the active editor retains its ordinary caret-placement path instead of emitting a second selection update.
 
@@ -950,19 +953,23 @@ Default behavior is:
 
 Shift extends the selection for movement commands. macOS `NSTextInputClient` selectors retain their word, line, page, and document semantics when converted to common key events.
 
-Clipboard uses the optional `PlatformClipboard` capability. UiWindow maps Ctrl/Command+A, C, V, and X to typed `TextEditingAction` values. TextField supports Select All, Copy, Paste, and Cut subject to its read-only and secure configuration; SelectionArea supports Select All and Copy. Undo and redo stay inside TextField rather than expanding `TextEditingAction` or the common input protocol. Secure fields allow Select All and Paste but reject Copy and Cut. Complex text clients retain ownership of their own history.
+UiWindow maps Ctrl/Command+A, C, V, and X to typed `TextEditingAction` values and dispatches them through the same entry point as the touch selection menu. The focused editor owns its editing actions even when its read-only configuration closes the input session. UiWindow checks the current configuration before asking the selection client. Read-only input blocks Cut and Paste. Secure input blocks Copy and Cut. SelectionArea supports Select All and Copy. Editors retain ownership of their own history.
 
 The application service owns one public `Clipboard` per Runtime and delegates to its stable `PlatformClipboard` capability. Runtime retirement disconnects this service before releasing the platform capability. Clipboard tasks capture their inputs and platform resources before they can outlive the service.
 
-Built-in editing actions use the synchronous plain-text operations on platforms that provide them. Paste availability checks use advertised formats where available and permit a paste attempt when the format is unknown. They do not request clipboard payloads. Application code uses `WriteContent()` and typed asynchronous reads for rich text, image content, and file lists on desktop platforms, Android, and iOS.
+Built-in editing actions use the synchronous plain-text operations on platforms that provide them. Paste availability checks use advertised formats where available and permit a paste attempt when the format is unknown. They do not request clipboard payloads.
+
+`GetTextEditingActionStatus()` returns `UseDefault` to leave an action with the framework, `Disabled` to suppress it, or `Handle` to execute it through the selection client. The menu queries availability without reading payloads. Dispatch checks the status again and consumes a claimed action immediately, including when an asynchronous clipboard operation later fails. Editors revalidate the original editing target, selection, and policy before applying a delayed result.
 
 When a platform lacks synchronous clipboard access, unhandled Copy, Cut, and Paste shortcuts reach the platform's default editing path. The Web input proxy blocks browser Copy and Cut for secure entries. Read-only clients do not open a text-input session.
 
-Clipboard HTML conversion supports inline character styles, safe links, and text breaks. Conversion does not load external content. Windows stores HTML fragments with byte offsets and UTF-16 text separately. GDK uses bounded asynchronous streams for typed clipboard reads. AppKit uses pasteboard item representations. Image payloads and dimensions are bounded before delivery. File lists reuse existing read-only file reference factories, retain access through the reference lifetime, and never acknowledge a move.
+`ClipboardItem` owns alternative representations of one selection. A write publishes the complete item or reports failure. Each item can contain plain UTF-8 text, an HTML fragment, encoded image content, and custom MIME bytes. Custom names are normalized before dispatch. Custom data has a shared 16 MiB budget and at most 16 formats per item. HTML and plain text are supplied independently. `FromAttributedText()` generates both, and `ToAttributedText()` imports supported inline styles, links, and breaks. The converter never loads external content. Raw HTML remains available to the application.
 
-Android captures the current clip on the application thread and resolves URI contents on a worker. A non-exported content provider serves read-only URI grants for published images and local files. UIKit loads pasteboard item provider representations and retains explicit file URLs or copies callback-scoped files.
+A read starts from one platform item or clipboard offer. The platform chooses the first item advertising a requested representation. All accepted representations come from that item, and any read that loses track of the original item fails as a whole. A failure confined to one representation leaves the other readable values available. A fully captured item owns its data independently of future clipboard changes. File operations capture a complete ordered list through the existing file reference factories and publish copy semantics.
 
-Web begins browser clipboard operations during the triggering user action and delivers Promise results through the Task dispatcher. Reads expose text, HTML, and PNG or JPEG images. Writes use `writeText()` for plain text and one `ClipboardItem` for HTML with its plain-text alternative or for PNG. Canceling a Task detaches its callback from the Promise. Platforms with synchronous publication perform the write when `WriteContentAsync()` is called and return the result through the Task.
+Windows captures named formats while holding one clipboard open. Its custom format name identifies a versioned byte-length header so allocation padding never becomes application data. GDK publishes a provider union and keeps a single format list, change signal, cancellation token, and timeout for one capture. AppKit captures one pasteboard item and verifies the pasteboard change count. UIKit retains one item provider. Apple custom formats share a deterministic UTI derived from the MIME name. Android resolves one captured clip item on a worker. Its read-only content provider serves custom and image MIME streams from the same granted URI.
+
+Web starts browser access during the triggering user action and delivers Promise results through the Task dispatcher. The browser handles text, HTML, supported images, and custom web formats where available. All payloads are read from one browser `ClipboardItem`. Canceling a Task detaches its completion. Platforms with synchronous publication perform the write when `WriteItemAsync()` is called and deliver the result through the Task.
 
 ## Android adapter
 

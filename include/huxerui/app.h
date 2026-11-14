@@ -651,7 +651,7 @@ public:
   [[nodiscard]] ApplicationLifecycleState LifecycleState() const;
   /// @brief Returns the shared system clipboard for this application's Runtime.
   /// @return The same non-null instance on every call, including on hosts without clipboard support.
-  /// Clipboard::IsAvailable() reports synchronous plain-text support. Typed operations report their own results.
+  /// Clipboard::SupportsSynchronousText() reports synchronous plain-text support.
   ///
   /// This accessor does not require an active composition and may be called on a captured ApplicationHandle.
   /// Clipboard operations start on the owning application thread. After Runtime destruction, the returned
@@ -980,8 +980,8 @@ public:
   /// @return Whether the focused client currently allows it; this query does not mutate text.
   [[nodiscard]] bool CanPerformTextEditingAction(TextEditingAction action) const;
   /// Executes a supported action on the focused editing or selection client.
-  /// @param action Normalized editing action requested by a native menu or shortcut.
-  /// @return Whether the action was handled; controlled text changes still use the shared editing protocol.
+  /// @param action Normalized editing action requested by a menu or shortcut.
+  /// @return True if the default action succeeded or the selection client accepted the action for execution.
   bool PerformTextEditingAction(TextEditingAction action);
   /// Applies an ordered native text-input command batch to its original active session.
   /// @param batch Session/revision-qualified commands in the text-input contract's UTF-16 coordinates.

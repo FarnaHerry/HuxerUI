@@ -72,7 +72,8 @@ export namespace huxerui {
     using huxerui::ClipChildren;
     using huxerui::ClipShape;
     using huxerui::Clipboard;
-    using huxerui::ClipboardContent;
+    using huxerui::ClipboardItem;
+    using huxerui::ClipboardReadOptions;
     using huxerui::Color;
     using huxerui::ColorScheme;
     using huxerui::Column;
@@ -465,6 +466,7 @@ export namespace huxerui {
     using huxerui::TextDecoration;
     using huxerui::TextDirection;
     using huxerui::TextEditingAction;
+    using huxerui::TextEditingActionStatus;
     using huxerui::TextEditingValue;
     using huxerui::TextEvents;
     using huxerui::TextField;

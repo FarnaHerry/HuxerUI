@@ -1763,6 +1763,8 @@ TEST_CASE("Pager uses touch release velocity and returns after pointer cancellat
 }
 
 TEST_CASE("Pager returns to the controlled page when dragging is disabled mid-gesture") {
+  const bool released = GENERATE(false, true);
+  CAPTURE(released);
   pager_proposals.clear();
   pager_settlements.clear();
   accept_pager_proposals = true;
@@ -1775,6 +1777,9 @@ TEST_CASE("Pager returns to the controlled page when dragging is disabled mid-ge
   runtime.HandlePointerEvent({PointerEventType::Move, 308, {20.0F, 40.0F}, PointerDeviceKind::Mouse});
   runtime.BuildFrame();
   REQUIRE(runtime.RootNode()->children[2]->PresentationBounds().x == Catch::Approx(40.0F));
+  if (released) {
+    runtime.HandlePointerEvent({PointerEventType::Up, 308, {20.0F, 40.0F}, PointerDeviceKind::Mouse});
+  }
 
   // A programmatic page change and drag disable in the same turn must settle on the controlled page.
   interactive_pager_page = 2;
