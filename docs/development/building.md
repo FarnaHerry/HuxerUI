@@ -146,6 +146,12 @@ build/bin/huxerui_linux_tests LinuxTextLayoutCaretHitTestingPreservesAlignedBidi
 build/bin/huxerui_runtime_tests "UiWindow profiling distinguishes mounting invalidation and cached layout"
 ```
 
+## Debug layout guides
+
+Open the `DEBUG` ribbon and turn on **Layout guides**. The debug overlay is enabled by default in Debug builds and can also be enabled with `AppOptions::show_debug_overlay`. Guides start off in each window and stay visible when you collapse the panel.
+
+Cyan outlines show node bounds, amber marks padding and content bounds, pink marks actual Row and Column spacing and `Spacer` extents, and green marks alignment. Blue outlines show scroll viewports, and red outlines show explicit clipping. Guides show axis-aligned bounds in the application content tree, with descendant guides limited to the enclosing clip bounds. Separately presented layers and their controls are outside that tree.
+
 ## Runtime profiling
 
 For native Windows paint-resource comparisons, use the separate [Windows Paint Benchmark](windows-paint-benchmark.md), which measures submission and GPU timestamps without swap-chain presentation.
