@@ -52,6 +52,11 @@ Check the residual diff and the upstream source, not only the commit list.
 | Windows installer upgrade, maintenance, unattended, and restart flows | `929ebde9`, `8c2eae59`, `884b8a59`, `c0949cc5`, `9333c98b`, `abd07a3f`, `42f0069d` (installer hunk), plus the `InstallerCommandPolicy` tests | Upstream `adea3ba8` detects installed versions, keeps interactive actions gated by confirmation, completes automatic upgrade uninstall and recovery, preserves restart exit codes, and honors `/norestart`; `b2ae8e8f` adds the restart prompt. The hidden owner window and terminal handling are inline in `windows_installer.cpp` | Drop the fork extraction: `installer_command_policy.h`, `installer_native_window.h`, their platform test, the SDK header installs, and the test-only WiX wiring were removed. Residual fork-only: engine error prompts never offer `Ignore` (`3517ea29`). |
 | Programmatic controller scroll on disabled containers | `db693dcd` | Upstream `d407f566` (PR [#174](https://github.com/HuxerUI/HuxerUI/pull/174)) accepts `ScrollSource::Programmatic` on disabled containers and keeps pending item alignment through layout; tests cover single-axis realization refinement, two-axis item movement, and rejected drags | Drop the fork fix; upstream now covers it. |
 | `ScrollView::FillViewport` | `12cd2215` | Upstream `df5f4ba0` (PR [#175](https://github.com/HuxerUI/HuxerUI/pull/175)) exposes the existing `ScrollFillViewport` measurement policy for short content, bounded and unbounded axes, horizontal, oversized, and two-axis content | Drop the fork public API; upstream now covers it. |
+| Windows fullscreen taskbar coverage | `6ebc6213`, `4b444b19` | Upstream `babf9f2a` implements F11 and `Window::SetFullscreen`, and `ApplyFullscreen()` leaves z-order unchanged. Verified on Windows 11 26300 at `124837c1`: entering fullscreen from the foreground makes the shell hide the taskbar, permanent `HWND_TOPMOST` only occluded the application selected after a focus switch | Drop the fork patch; `ApplyFullscreen()` matches upstream again. Do not re-add unconditional topmost. |
+
+Windows owns taskbar visibility for fullscreen windows.
+The shell hides the taskbar when a window enters fullscreen while it is already the foreground window, and keeps it hidden across later focus changes; a window that enters fullscreen while backgrounded leaves the taskbar visible and later activation does not re-evaluate.
+That is a shell heuristic rather than a window state, so the framework cannot make coverage deterministic; matching upstream's z-order handling is the supported choice.
 
 ## Partially covered
 
@@ -81,7 +86,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | macOS native-input task and frame-commit deferral | `785eb892`, `7f0ffc9f` | Fork-only |
 | macOS native quit without `NSTerminateLater` | `ca6d413d` | Fork-only |
 | Windows application icon resource and handle lifetime | `bcead3fe`, `446a5a90` | Fork-only |
-| Windows fullscreen covering the taskbar | `6ebc6213` | Fork-only |
 | Window ownership and modality relationships | `6b34925e` and follow-up fixes | Fork-only capability |
 | Transparent utility windows and native window requests | `8e2adda1`, `3aef230b`, `317328c4` | Fork-only capability |
 | Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability. A clean upstream port is blocked by fork-only multi-window prerequisites: `WindowIdentity`/`WindowOptions::key`, window relationship and modal blocking, the multi-window test harness, and Linux window lifecycle hooks. Feature request: [#177](https://github.com/HuxerUI/HuxerUI/issues/177). Wait for maintainer agreement on the API/scope before preparing a PR on upstream's `OpenWindow` API. |
@@ -116,7 +120,6 @@ Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..df5f4ba0` ran
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| High | Windows fullscreen stays under the taskbar | `6ebc6213` | Upstream `babf9f2a` adds fullscreen but `ApplyFullscreen()` still omits the `HWND_TOPMOST` span and `HWND_NOTOPMOST` restore |
 | High | Pager returns to the committed page when direct paging is canceled | `00caf9a0` (cancel line), `3e16bf4c` (peer retention) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index`; disabling drag mid-gesture has the same issue although `docs/design/pager.md` promises the controlled page |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
