@@ -57,6 +57,7 @@ When a fork-only capability creates the state, the fix belongs with that capabil
 | Programmatic controller scroll on disabled containers | `db693dcd` | Upstream `d407f566` (PR [#174](https://github.com/HuxerUI/HuxerUI/pull/174)) accepts `ScrollSource::Programmatic` on disabled containers and keeps pending item alignment through layout; tests cover single-axis realization refinement, two-axis item movement, and rejected drags | Drop the fork fix; upstream now covers it. |
 | `ScrollView::FillViewport` | `12cd2215` | Upstream `df5f4ba0` (PR [#175](https://github.com/HuxerUI/HuxerUI/pull/175)) exposes the existing `ScrollFillViewport` measurement policy for short content, bounded and unbounded axes, horizontal, oversized, and two-axis content | Drop the fork public API; upstream now covers it. |
 | Windows fullscreen taskbar coverage | `6ebc6213`, `4b444b19` | Upstream `babf9f2a` implements F11 and `Window::SetFullscreen`, and `ApplyFullscreen()` leaves z-order unchanged. Verified on Windows 11 26300 at `124837c1`: entering fullscreen from the foreground makes the shell hide the taskbar, permanent `HWND_TOPMOST` only occluded the application selected after a focus switch | Drop the fork patch; `ApplyFullscreen()` matches upstream again. Do not re-add unconditional topmost. |
+| Pager settles on the controlled page when drag is disabled mid-gesture | `dbc28f3c` | Upstream `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)) targets `behavior_.selected_index` in the disabled-drag branch and adds `Pager returns to the controlled page when dragging is disabled mid-gesture` covering both `Dragging` and `AwaitingCommit` | Drop the fork patch at the next merge; keep the fork-only rebase and Cancel fixes for touchpad paging. |
 
 Windows owns taskbar visibility for fullscreen windows.
 The shell hides the taskbar when a window enters fullscreen while it is already the foreground window, and keeps it hidden across later focus changes; a window that enters fullscreen while backgrounded leaves the taskbar visible and later activation does not re-evaluate.
@@ -117,14 +118,13 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `1be39135`; `124837c1..1be39135` changes Linux CLI packaging, Windows text rendering, and text direction, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `92ccb9cb`; the range since `124837c1` changes Linux CLI packaging, Windows text rendering and direction, resource packages, and the Pager disabled-drag branch, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| High | Pager settles on the displayed page when drag is disabled mid-gesture | `dbc28f3c` | `Update()` binds the interrupting settle to `displayed_index_` although `docs/design/pager.md` promises the controlled page. A controlled page change combined with `DragEnabled(false)` during a drag rebounds to the outgoing page and then jumps. Upstream PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182) is open from `fix/pager-disable-drag` on `1be39135`. |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
@@ -147,7 +147,8 @@ They are not upstream bug-fix candidates until that capability is proposed.
 
 Continuous touchpad paging makes both states reachable in the fork.
 If that capability is proposed upstream, carry the rebase and Cancel fixes with it instead of opening standalone bug PRs.
-The mid-gesture disable fix is different: it is reachable upstream and is open as PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182).
+The mid-gesture disable fix is different: it was reachable upstream and merged as `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)).
+The next upstream merge can drop `dbc28f3c` and keep the shared code identical to upstream.
 
 ## Procedure for the next upstream merge
 

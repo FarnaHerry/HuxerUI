@@ -37,8 +37,9 @@ PRs #139, #140, #138, and #118 were closed by the fork without an upstream equiv
 |---|---|---|
 | #174 | `d407f566` | Disabled containers accept programmatic controller scrolls, including `ScrollToItem`, while user-driven sources and focus reveal stay blocked. |
 | #175 | `df5f4ba0` | `ScrollView::FillViewport()` exposes the existing fill-viewport measurement policy; the public header and guide document bounded and unbounded axes. |
+| #182 | `acfb154b` | Disabling direct drag during an active Pager gesture settles on the controlled page instead of the outgoing displayed page, for both `Dragging` and `AwaitingCommit`. |
 
-The coverage registry records both as covered. Upstream commits are now merged into `farna/main`; the merge commit is `d48d36d0`.
+The coverage registry records all three as covered. The #174 and #175 commits are merged into `farna/main`; the merge commit is `d48d36d0`. PR #182 (`acfb154b`) is not merged yet: the next upstream merge drops the fork's duplicate `dbc28f3c` change.
 
 ## Upstreamed installer work
 
