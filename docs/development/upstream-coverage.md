@@ -7,9 +7,9 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `4d573263` (`docs(readme): refresh project introduction and quick start`, release `v0.4.0`).
-- Fork merge commit: `85d65da5`.
-- Last audit date: 2026-11-13.
+- Last merged upstream commit: `df065105` (`fix(windows): render opaque emoji in color`).
+- Fork merge commit: `f45c19fd`.
+- Last audit date: 2026-11-14.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -113,14 +113,14 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `9ae9cb0d`; the `9ae9cb0d..df5f4ba0` range does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `124837c1`; `124837c1..df065105` changes only Linux CLI packaging and Windows text rendering, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| High | Pager returns to the committed page when direct paging is canceled | `00caf9a0` (cancel line), `3e16bf4c` (peer retention) | Cancel calls `BeginAnimation(mounted, displayed_index_)` instead of the committed `selected_index`; disabling drag mid-gesture has the same issue although `docs/design/pager.md` promises the controlled page |
+| High | Pager returns to the controlled page after an interrupted settle | `00caf9a0` (cancel line and drag-begin rebase) | A normal cancel rebounds to the displayed page, but a drag that begins during an unfinished settle leaves `displayed_index_` on the outgoing page while `selected_index` is already the incoming page. Cancel then targets the outgoing page and jumps to the controlled page when the rebound completes; disabling drag mid-gesture also targets `displayed_index_` although `docs/design/pager.md` promises the controlled page |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
