@@ -125,13 +125,13 @@ Verified absent from `upstream/main` at `92ccb9cb`; the range since `124837c1` c
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
-| Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
 | Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES`; no `LINK_LIBRARIES` closure, alias handling, `file(GENERATE)`, or `CoreMedia` |
 | Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions |
 | Low | Optional X11/Xext linkage | `ad73d2b7` | `cmake/platform/Linux.cmake` always links without optional `x11`/`xext` discovery, and mcpp has no matching switch |
-| Low | `WindowTitleBar` Objective-C++ braces | `3e16bf4c` (window.h hunk) | `window.h` still uses `CrossAlign(...)` instead of `CrossAlign{...}` |
+
+Windows application icon resources (`bcead3fe`) and RefreshBox `move_content` (`16323d5a`) were reclassified as capability work: both add API that upstream does not have, so their behavior cannot be a standalone upstream bug fix.
+`WindowTitleBar` brace initialization is style-only on current toolchains; do not submit it without an older-Clang repro.
 
 `TextField::TextStyles` (PR #153) was closed without an equivalent upstream implementation and is now removed from the fork rather than carried as a candidate.
 
