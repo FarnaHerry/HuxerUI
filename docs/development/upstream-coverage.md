@@ -27,6 +27,10 @@ A fork commit remaining in `git log upstream/main..farna/main` does not prove it
 Upstream may have fixed the same bug independently, or a later upstream refactor may have superseded it.
 Check the residual diff and the upstream source, not only the commit list.
 
+A fix is only an upstream candidate when upstream can reach the affected state.
+Check the input gating, allowed sources, and public entry points that lead to the behavior, not only whether the symbol exists.
+When a fork-only capability creates the state, the fix belongs with that capability rather than in a standalone bug PR.
+
 ## Covered by upstream
 
 | Item | Fork evidence | Upstream evidence | Action |
@@ -113,14 +117,14 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `124837c1`; `124837c1..df065105` changes only Linux CLI packaging and Windows text rendering, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `1be39135`; `124837c1..1be39135` changes Linux CLI packaging, Windows text rendering, and text direction, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
 | High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()` |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
 | High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| High | Pager returns to the controlled page after an interrupted settle | `00caf9a0` (cancel line and drag-begin rebase), `dbc28f3c` (mid-gesture disable target) | A normal cancel rebounds to the displayed page, but a drag that begins during an unfinished settle leaves `displayed_index_` on the outgoing page while `selected_index` is already the incoming page. Cancel then targets the outgoing page and jumps to the controlled page when the rebound completes; disabling drag mid-gesture also targets `displayed_index_` although `docs/design/pager.md` promises the controlled page |
+| High | Pager settles on the displayed page when drag is disabled mid-gesture | `dbc28f3c` | `Update()` binds the interrupting settle to `displayed_index_` although `docs/design/pager.md` promises the controlled page. A controlled page change combined with `DragEnabled(false)` during a drag rebounds to the outgoing page and then jumps. Upstream PR branch `fix/pager-disable-drag` prepared on `1be39135`. |
 | Medium | Windows application icon resource | `bcead3fe`, `446a5a90` | No `HUXERUI_WINDOWS_APPLICATION_ICON_RESOURCE_ID` registration or `WM_SETICON` handle lifetime |
 | Medium | RefreshBox `move_content=false` overscroll | `16323d5a`, `0b6400c0` | No `move_content` style; the overscroll offset still translates the pulled content |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
@@ -130,6 +134,20 @@ Verified absent from `upstream/main` at `124837c1`; `124837c1..df065105` changes
 | Low | `WindowTitleBar` Objective-C++ braces | `3e16bf4c` (window.h hunk) | `window.h` still uses `CrossAlign(...)` instead of `CrossAlign{...}` |
 
 `TextField::TextStyles` (PR #153) was closed without an equivalent upstream implementation and is now removed from the fork rather than carried as a candidate.
+
+## Fork-only reachability
+
+Some fork fixes address states that only a fork-only capability can produce.
+They are not upstream bug-fix candidates until that capability is proposed.
+
+| Area | Fork evidence | Why upstream cannot reach it |
+|---|---|---|
+| Pager interrupted-settle rebase | `00caf9a0` | `Pager` allows `Drag` only in `Stable` and `Dragging`, so a pointer drag cannot begin while `Animating`; upstream `ScrollSource` has no touchpad member |
+| Pager Cancel target | `00caf9a0` | Cancel is handled only in `Dragging`, where `displayed_index_` always equals `behavior_.selected_index`, so both targets are equivalent |
+
+Continuous touchpad paging makes both states reachable in the fork.
+If that capability is proposed upstream, carry the rebase and Cancel fixes with it instead of opening standalone bug PRs.
+The mid-gesture disable fix is different: it is reachable upstream and is prepared as `fix/pager-disable-drag`.
 
 ## Procedure for the next upstream merge
 
@@ -145,6 +163,8 @@ Verified absent from `upstream/main` at `124837c1`; `124837c1..df065105` changes
    git diff upstream/main..farna/main -- <relevant paths>
    git grep -n '<symbol>' upstream/main -- <relevant paths>
    ```
+   Confirm the affected state is reachable upstream as well: check the recognizer, allowed-source gating, and public entry points, not only the symbol.
+   A fix for a state only a fork-only capability produces is not an upstream bug candidate.
 4. Mark newly covered rows as **Covered**, add the upstream evidence, and remove the item from the upstream PR list.
 5. If upstream covered only part of an item, move the exact residual into **Partially covered**.
 6. Leave **Fork-only** rows in place until upstream lands the behavior, the fork drops it, or the fork decides not to upstream it.
