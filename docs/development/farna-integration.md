@@ -95,14 +95,11 @@ They are integrated in the `FarnaHerry/Lib-CodeEditor` fork instead (upstream re
 The Clash-Flux integration passes the incremental Linux Debug runtime and standalone-header builds, the Linux Release framework build, and all four common CTest suites, including 953 runtime cases.
 Focused regressions cover non-adjacent Pager reversal without a geometry jump, preview grab offsets beyond viewport edges, and hidden virtual-page measurement resuming on selection.
 
-Linux Debug and Release compilation, standalone public-header checks and focused shared HTTP/lifecycle tests passed.
-The full Debug CTest run passed 30 of 32 suites, with two existing failures reproduced in a clean checkout of the same official
-upstream baseline on this host:
+On 2026-11-15, the `c67c42c2` integration passed Linux Debug compilation and the full Debug CTest run passed 36 of 37 suites.
+The remaining failure is the documented `HuxerUILinuxTests` bidi caret Y mismatch (`0` versus `5`); it is a host limitation, not waived or weakened by the integration.
+`HuxerUIRuntimeDependencyTests` now passes.
+macOS, Windows, and iOS native execution was not verified for this merge on this Linux host.
 
-- `HuxerUILinuxTests`: `LinuxTextLayoutCaretHitTestingPreservesAlignedBidiGeometry`, caret Y `0` versus `5`.
-- `HuxerUIRuntimeDependencyTests`: the relocated dependency fixture segfaults during dynamic-library initialization.
-
-These assertions are retained. They are not waived or weakened by the integration.
 On 2026-10-07, direct ADB instrumentation passed **126 assertions** on OnePlus PJE110 / Android 16.
 The actual host focus check requires native HuxerUI because constructing HuxerUIView loads JNI. The test APK used
 matching ARM64 libhuxerui.so and libc++_shared.so from an application built against revision `b12080c`;
