@@ -79,6 +79,7 @@ set_target_properties(huxerui_macos_native_tests PROPERTIES
 _huxerui_append_resource_package_input(huxerui_macos_native_tests "${HUXERUI_TEST_BUILTIN_RESOURCE_PACKAGE}")
 
 foreach (native_case IN ITEMS
+        WindowStartupFailuresReleasePartialAttachments
         WindowFrameFailuresPropagateFromTheSharedLoop
         WindowCloseWaitsForKeyDispatchToReturn
         ApplicationModalsStackAndCoverNewWindows
@@ -93,10 +94,10 @@ foreach (native_case IN ITEMS
 endforeach ()
 
 set(native_initial_sections
-        "The initial handle requests application shutdown"
+        "Explicit application Quit releases every window"
         "Native application Quit returns after orderly shutdown"
-        "Native initial-window close requests application shutdown"
-        "Native initial-window destruction requests application shutdown"
+        "Native initial-window close preserves independent windows"
+        "Native initial-window destruction preserves independent windows"
 )
 set(native_initial_names Handle Quit Close Destroy)
 foreach (index RANGE 0 3)

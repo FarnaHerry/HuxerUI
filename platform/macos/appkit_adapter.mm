@@ -698,10 +698,12 @@ private:
       deferred_native_tasks_.push_back(std::move(task));
       return;
     }
-    try {
-      task();
-    } catch (...) {
-      ReportFailure(std::current_exception());
+    @autoreleasepool {
+      try {
+        task();
+      } catch (...) {
+        ReportFailure(std::current_exception());
+      }
     }
   }
 
@@ -1618,16 +1620,32 @@ void MacRuntime::UpdateWindows() {
 }
 
 int RunPlatformApplication(const Application& application) {
+  std::exception_ptr failure;
   @autoreleasepool {
-    MacRuntime runtime;
-    runtime.Start(application);
-    if (application.options.create_initial_window) {
-      UseApplication().OpenWindow(application.root_factory, application.options.window);
+    try {
+      MacRuntime runtime;
+      // Startup callbacks can autorelease windows before AppKit starts draining event-loop pools.
+      @autoreleasepool {
+        try {
+          runtime.Start(application);
+          if (application.options.create_initial_window) {
+            UseApplication().OpenWindow(application.root_factory, application.options.window);
+          }
+        } catch (...) {
+          failure = std::current_exception();
+        }
+      }
+      if (!failure) {
+        [NSApplication.sharedApplication run];
+        runtime.RethrowFailure();
+      }
+    } catch (...) {
+      // An exception escaping @autoreleasepool would bypass its drain.
+      failure = std::current_exception();
     }
-    [NSApplication.sharedApplication run];
-    runtime.RethrowFailure();
-    return 0;
   }
+  if (failure) std::rethrow_exception(failure);
+  return 0;
 }
 
 } // namespace huxerui::detail

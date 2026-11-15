@@ -140,6 +140,24 @@ View NativeWindowContent(std::uint32_t slot, const std::string& label) {
 
 View NativeMultiWindowRoot() { return NativeWindowContent(0, "primary"); }
 
+void RequireReleasedWindows(const NativeScenario& scenario) {
+  // AppKit and main-queue blocks release their final autoreleased references on a later native turn.
+  const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  bool released = false;
+  do {
+    @autoreleasepool {
+      [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                            beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+      released = std::all_of(scenario.watches.begin(), scenario.watches.end(),
+                             [](const auto& watch) { return watch->Released(); });
+    }
+  } while (!released && std::chrono::steady_clock::now() < release_deadline);
+  for (std::size_t index = 0; index != scenario.watches.size(); ++index) {
+    INFO(index);
+    REQUIRE(scenario.watches[index]->Released());
+  }
+}
+
 void RunScenario(NativeScenario& scenario, const std::string& expected_failure = {}) {
   current_scenario = &scenario;
   REQUIRE(NSThread.isMainThread);
@@ -223,34 +241,30 @@ void RunScenario(NativeScenario& scenario, const std::string& expected_failure =
     record.handle->Show();
     record.handle->Close();
   }
-  // AppKit and main-queue blocks release their final autoreleased references on a later native turn.
-  const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-  bool released = false;
-  do {
-    @autoreleasepool {
-      [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
-                            beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-      released = std::all_of(scenario.watches.begin(), scenario.watches.end(),
-                             [](const auto& watch) { return watch->Released(); });
-    }
-  } while (!released && std::chrono::steady_clock::now() < release_deadline);
-  for (std::size_t index = 0; index != scenario.watches.size(); ++index) {
-    INFO(index);
-    REQUIRE(scenario.watches[index]->Released());
-  }
+  RequireReleasedWindows(scenario);
 }
 
 } // namespace
 
 TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-native]") {
   NativeScenario scenario;
-  SECTION("Explicit application Quit releases every window") {}
-  SECTION("Native application Quit returns after orderly shutdown") { scenario.native_quit = true; }
-  SECTION("Native initial-window close preserves independent windows") { scenario.native_primary_close = true; }
+  bool scenario_selected = false;
+  SECTION("Explicit application Quit releases every window") { scenario_selected = true; }
+  SECTION("Native application Quit returns after orderly shutdown") {
+    scenario_selected = true;
+    scenario.native_quit = true;
+  }
+  SECTION("Native initial-window close preserves independent windows") {
+    scenario_selected = true;
+    scenario.native_primary_close = true;
+  }
   SECTION("Native initial-window destruction preserves independent windows") {
+    scenario_selected = true;
     scenario.native_primary_close = true;
     scenario.destroy_primary = true;
   }
+  // Catch2 can report success without entering any section when a --section argument is stale.
+  REQUIRE(scenario_selected);
   int phase = 0;
   int primary_compositions = 0;
   int extra_compositions = 0;
@@ -365,6 +379,31 @@ TEST_CASE("MacNativeWindowsIsolateStateAndReleaseClosedAttachments", "[macos-nat
     }
   };
   REQUIRE_NOTHROW(RunScenario(scenario));
+}
+
+TEST_CASE("MacNativeWindowStartupFailuresReleasePartialAttachments", "[macos-native]") {
+  NativeScenario scenario;
+  const Application application{
+      [] { return View{}; },
+      {
+          .window = {.title = "HuxerUI native startup failure", .initial_size = {320.0F, 240.0F}},
+          .show_debug_overlay = false,
+          .window_hooks = {[&scenario](WindowContext&) {
+            scenario.Watch("HuxerUI native startup failure");
+            throw std::runtime_error("HuxerUI native test startup failure");
+          }},
+      },
+  };
+  std::exception_ptr failure;
+  try {
+    detail::RunPlatformApplication(application);
+  } catch (...) {
+    failure = std::current_exception();
+  }
+  REQUIRE(failure != nullptr);
+  REQUIRE_THROWS_WITH(std::rethrow_exception(failure), "HuxerUI native test startup failure");
+  REQUIRE(scenario.watches.size() == 1);
+  RequireReleasedWindows(scenario);
 }
 
 TEST_CASE("MacNativeWindowFrameFailuresPropagateFromTheSharedLoop", "[macos-native]") {
