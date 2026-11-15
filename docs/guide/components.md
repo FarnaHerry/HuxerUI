@@ -18,6 +18,7 @@ return Text("مرحبا")
 ```
 
 Canvas `DrawText`, `DrawTextRun`, and `DrawTextRuns` calls inherit the Canvas node Locale only for entries whose shaping locale is empty.
+Recording a positioned text run rejects Unicode mandatory line breaks. Windows applies the same check to `MeasureRun()`.
 TextMeasurer has no implicit Environment lookup; pass a locale explicitly when custom composition measurement needs it.
 On Windows, paragraphs and positioned text runs use color glyphs when the font supplies them and all foreground colors for that paragraph or run are fully opaque.
 
@@ -813,5 +814,7 @@ Use `ReadTextAsync()`, `ReadRichTextAsync()`, `ReadImageAsync()`, or `ReadFilesA
 Image content and copied image files are separate clipboard representations. Desktop platforms copy local files and directories. Android copies ordinary local files and readable content URIs, which remain subject to system grants. iOS publishes ordinary local files on the device and reads explicit file URLs, open-in-place file representations, and file copies published by HuxerUI.
 
 On Web, start `WriteContentAsync()`, `ReadTextAsync()`, `ReadRichTextAsync()`, or `ReadImageAsync()` directly in the user action and then schedule or await the returned Task. The browser requires a secure context and may prompt for access. Writes support plain text, `AttributedText` as HTML with a plain-text alternative, and PNG images. The write Task yields true after browser acceptance, or false for unsupported content or rejection. Direct file reads are unsupported. Web TextField copy, cut, and paste use browser-managed editing events.
+
+Custom editors can override `TextSelectionClient::GetTextEditingActionStatus()` and `PerformTextEditingAction()` to handle shortcuts and touch selection menu actions together. Return `Handle` to claim an action, `Disabled` to block it, or `UseDefault` to allow the framework's default behavior. Start clipboard operations in the execution callback. Wait for a successful write before deleting text for Cut, and verify that delayed results still apply to the original editor and selection.
 
 For editing invariants and platform protocols, see [Text Input and TextField Design](../design/text-input.md).
