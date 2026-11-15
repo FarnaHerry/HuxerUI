@@ -42,7 +42,7 @@ Use an isolated X11 display for synthetic pointer sequences, since desktop focus
 CMake links Xext when XShape is available; the mcpp payload configuration declares XShape support and probes `xext` explicitly so its consumers receive the same link dependency.
 
 The complete `[linux-native-floating]` X11 scenario remains unqualified: the current desktop and pre-integration binary both time out at stage 6, and an isolated Xwayland run times out at stage 3.
-Independent X11 lifecycle, geometry, retirement, and isolated cross-window drag checks pass; those results do not establish the complete floating-window input sequence.
+Independent X11 lifecycle, geometry, retirement, and upstream application-scoped drag checks pass; those results do not establish the complete floating-window input sequence.
 A combined hidden-tag invocation also encountered a GDK/SIGSEGV after the floating scenario timed out; its cause remains unresolved, so independent-process results are the supported validation record.
 For the deferred bidirectional-caret failure and hidden profiling failure, see [Known Linux test failures](building.md#known-linux-test-failures).
 

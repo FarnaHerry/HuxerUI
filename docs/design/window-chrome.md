@@ -110,15 +110,16 @@ struct WindowMetrics {
 struct WindowOptions {
   std::string title = "HuxerUI";
   Size initial_size = {520.0F, 360.0F};
+  std::optional<Point> initial_position;
   std::optional<Size> minimum_size;
   WindowContentMode content_mode = WindowContentMode::SafeArea;
   WindowChromeMode chrome_mode = WindowChromeMode::System;
   float title_bar_height = 40.0F;
   WindowCaptionLabels caption_labels;
-  bool transparent_background = false;
-  bool always_on_top = false;
-  bool activatable = true;
-  bool pointer_pass_through = false;
+  WindowPresentation presentation = WindowPresentation::Standard;
+  bool transparent_surface = false;
+  bool show_without_activation = false;
+  bool topmost = false;
   bool resizable = true;
 };
 
@@ -393,11 +394,11 @@ Linux Custom mode uses framework controls in a `WindowControlsLayout` layer, GTK
 
 ## Desktop window policies
 
-The application Runtime owns capability discovery and validates requested policies before creating the window. Each UiWindow applies its own configuration and uses the existing WindowService for requests. Creation and later activation requests show a non-activating window without moving keyboard focus. Native input and shared focus dispatch both honor that policy.
+The application Runtime validates requested policies before creating the window. Each UiWindow applies its own configuration, reports native support through `NativeWindowCapabilities()`, and uses the existing WindowService for requests. Creation and later activation requests show a `show_without_activation` window without moving keyboard focus. Native input and shared focus dispatch both honor that policy.
 
-Transparency configures the base surface and renderer. Windows uses the retained Direct2D scene and a premultiplied DirectComposition swap chain, clearing damaged pixels to transparent before replay. HWND and DirectComposition presentation both support changing pointer pass-through with layered window styles at full opacity. AppKit clears the dirty region of the nonopaque content surface and uses a non-activating panel when required. GTK clears its themed window background through a scoped style and uses the GDK surface input region for pass-through, including after surface layout updates.
+Transparency configures the base surface and renderer through `transparent_surface`. Windows uses the retained Direct2D scene and a premultiplied DirectComposition swap chain, clearing damaged pixels to transparent before replay. AppKit clears the dirty region of the nonopaque content surface and uses a non-activating panel when required. GTK clears its themed window background through a scoped style and uses the X11 shape input region for pass-through.
 
-Window level and pointer pass-through can change independently of background transparency. Pointer capture belongs to the window that is switching policy. GTK reports only the behaviors it can provide with the current display backend.
+Window stacking and input passthrough can change independently of surface transparency through `SetTopmost()` and `SetInputPassthrough()`. Pointer capture belongs to the window that is switching policy. GTK reports only the behaviors it can provide with the current display backend.
 
 ## Fullscreen and keyboard shortcuts
 

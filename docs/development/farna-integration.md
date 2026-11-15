@@ -39,7 +39,7 @@ PRs #139, #140, #138, and #118 were closed by the fork without an upstream equiv
 | #175 | `df5f4ba0` | `ScrollView::FillViewport()` exposes the existing fill-viewport measurement policy; the public header and guide document bounded and unbounded axes. |
 | #182 | `acfb154b` | Disabling direct drag during an active Pager gesture settles on the controlled page instead of the outgoing displayed page, for both `Dragging` and `AwaitingCommit`. |
 
-The coverage registry records all three as covered. Upstream merged all three; the #174 and #175 commits are also merged into `farna/main` through `d48d36d0`. PR #182 (`acfb154b`) is merged upstream but not yet integrated into `farna/main`: the next upstream merge drops the fork's duplicate `dbc28f3c` change.
+The coverage registry records all three as covered. Upstream merged all three; the #174 and #175 commits are also merged into `farna/main` through `d48d36d0`. PR #182 (`acfb154b`) is integrated through the `bca06f08` merge `d5c66a42`; the fork's duplicate `dbc28f3c` change is now identical to upstream.
 
 ## Upstreamed installer work
 
@@ -185,7 +185,8 @@ it is a straight port of the patch llm-switch CI already applies and validates o
 The multi-window API follows upstream's explicit content factories: `ApplicationHandle::OpenWindow(content, options)` creates a Runtime-owned window through the platform `CreateUiWindow` factory.
 Applications retain `WindowHandle` values and attach business metadata to their own models or factory captures.
 [Multi-Window Design](../design/multi-window.md) defines the ownership, per-window state, windowless startup, and last-window close policy.
-The downstream extensions retain windowless startup, floating utility presentation, window relationships, and cross-window drag support.
+The downstream extensions retain windowless startup, floating utility presentation, and window relationships.
+Cross-window drag uses upstream's `BeginApplicationDrag` transport; the fork removed its duplicate `WindowDrag` implementation during the `c67c42c2` merge.
 
 [Window Relationship Design](../design/window-relationship.md) defines ownership, modality, and child-first cascade through the same Runtime maintenance path.
 Windows and Linux implement native window creation; macOS remains a preview requiring its own CI and interactive validation.
