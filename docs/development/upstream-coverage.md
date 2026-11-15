@@ -9,6 +9,8 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 - Fork integration branch: `farna/main`.
 - Last merged upstream commit: `df065105` (`fix(windows): render opaque emoji in color`).
 - Fork merge commit: `f45c19fd`.
+- Audited upstream HEAD: `bca06f08` (`feat(text-input): let editors handle clipboard actions`).
+  The four commits after the merge commit are not integrated into `farna/main` yet.
 - Last audit date: 2026-11-14.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
@@ -67,8 +69,8 @@ That is a shell heuristic rather than a window state, so the framework cannot ma
 
 | Item | Upstream state | Residual fork work |
 |---|---|---|
-| macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
-| iOS app-target link closure | Upstream `dde77cf9` walks the declared `HUXERUI_LIBRARIES` graph transitively through `_huxerui_collect_library_dependencies` with cycle detection and collects those packages for resources, but it still does not read the app target's raw `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, `LINK_ONLY` handling, alias resolution, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
+| macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. An upstream port keeps only the key-window gating; `input_blocked_` and the drag/drop checks are fork-only, and a native regression test is still missing. |
+| iOS app-target link closure | Upstream `dde77cf9` walks the declared `HUXERUI_LIBRARIES` graph transitively through `_huxerui_collect_library_dependencies` with cycle detection and collects those packages for resources, but it still does not read the app target's raw `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, `LINK_ONLY` handling, alias resolution, and `file(GENERATE)`. Its `-framework CoreMedia` addition serves the separate Lib-Camera and must be dropped from any upstream patch. Still fork-only. |
 
 ## Superseded upstream
 
@@ -83,11 +85,11 @@ These items should not be resubmitted because an upstream design change owns the
 These items were checked at the baseline and remain absent from upstream.
 The list is a re-audit shortcut, not a roadmap or a promise to upstream every item.
 
-| Area | Fork evidence | Status at 2026-11-13 |
+| Area | Fork evidence | Status at 2026-11-14 |
 |---|---|---|
 | Linux custom-chrome resize band | `ResolveLinuxResizeEdge` | Fork-only interaction choice: 6-DIP band, 16-DIP corner directions within that band; upstream uses a 10-DIP band and 14-DIP square corners |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
-| GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only |
+| GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only architecture: upstream lacks `DiscardHost`/`CanDiscardHost` and retires a Runtime-owned window from `MaintainWindows` before destroying it; `LinuxUiWindow::Cleanup` already resets text input and clears the canvas data pointer. Most of `99fd7ba2` depends on fork-only `ReleaseRetiredWindow`/`RetireOwned`. Recheck only with a concrete upstream repro; the file-picker `GWeakRef` is the only candidate that may stand alone. |
 | macOS native-input task and frame-commit deferral | `785eb892`, `7f0ffc9f` | Fork-only |
 | macOS native quit without `NSTerminateLater` | `ca6d413d` | Fork-only |
 | Windows application icon resource and handle lifetime | `bcead3fe`, `446a5a90` | Fork-only |
@@ -102,7 +104,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
-| Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only build fix |
+| Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only capability support: upstream has no `HUXERUI_LINUX_X11` consumer, so the build switch is not a standalone fix and belongs to the Linux placement and input-passthrough capability. |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
 
 Linux resize hit testing deliberately leaves the client interior outside its 6-DIP band interactive, including near corners. Hover and press use the same geometry.
@@ -118,17 +120,23 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `92ccb9cb`; the range since `124837c1` changes Linux CLI packaging, Windows text rendering and direction, resource packages, and the Pager disabled-drag branch, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `bca06f08`.
+The four commits since the last merge (`df065105`) add text-input clipboard handling, independent resource packages, the Pager disabled-drag branch, and Windows text direction; none covers the behaviors below.
+These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
-| High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()`. Upstream PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190) is open from `fix/macos-quit-modal-loop` on `92ccb9cb`. |
-| High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
-| High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
-| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES`; no `LINK_LIBRARIES` closure, alias handling, `file(GENERATE)`, or `CoreMedia` |
+| High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()`. Upstream PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190) is open from `fix/macos-quit-modal-loop` (head `ed7b0094` on `92ccb9cb`, mergeable and awaiting review). |
+| High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
+| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only |
+| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia` |
 | Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions |
-| Low | Optional X11/Xext linkage | `ad73d2b7` | `cmake/platform/Linux.cmake` always links without optional `x11`/`xext` discovery, and mcpp has no matching switch |
+
+GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after re-auditing `bca06f08`.
+Upstream has no `DiscardHost`/`CanDiscardHost`; `Runtime::MaintainWindows` retires a Runtime-owned window in a posted task before destroying it, and `LinuxUiWindow::Cleanup` resets text input and clears the canvas data pointer before `gtk_window_destroy`.
+Most of the fork change depends on fork-only `ReleaseRetiredWindow`, `RetireOwned`, and `WindowHandle::Retire` semantics.
+Reconsider only with a concrete upstream repro; the file-picker `GWeakRef` is the only part that may stand alone.
+Optional X11/Xext linkage (`ad73d2b7`) was also removed: upstream has no `HUXERUI_LINUX_X11` consumer, so the switch belongs to the fork-only Linux placement and input-passthrough capability rather than a standalone fix.
 
 Windows application icon resources (`bcead3fe`) and RefreshBox `move_content` (`16323d5a`) were reclassified as capability work: both add API that upstream does not have, so their behavior cannot be a standalone upstream bug fix.
 `WindowTitleBar` brace initialization is style-only on current toolchains; do not submit it without an older-Clang repro.
