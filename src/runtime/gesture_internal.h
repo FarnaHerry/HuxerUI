@@ -15,10 +15,17 @@
 #include <huxerui/layer.h>
 #include <huxerui/modifier.h>
 
+namespace huxerui {
+
+class Environment;
+class UiWindow;
+
+} // namespace huxerui
+
 namespace huxerui::detail {
 
 struct MountedNode;
-class WindowDrag;
+struct UiExecutionState;
 
 struct PointerHoverState {
   std::int64_t pointer_id = 0;
@@ -213,6 +220,8 @@ struct ActiveDropTarget {
   }
 };
 
+class WindowDrag;
+
 struct DragDropSession {
   NodeExtensionHandle source;
   std::type_index payload_type = typeid(void);
@@ -226,6 +235,66 @@ struct DragDropSession {
   // Layer placement is window-relative, so the frozen source transform resolves the local grab point once.
   Point preview_grab_offset{};
   std::shared_ptr<WindowDrag> window_drag{};
+};
+
+/// Coordinates one recognized typed drag within the source Runtime after the platform takes over pointer delivery.
+/// The source PointerSession owns the drag. The platform retains the session identity, and HuxerUI keeps the payload.
+/// Deliver platform callbacks on the application thread after UiWindow::BeginApplicationDrag returns.
+class WindowDrag final : public std::enable_shared_from_this<WindowDrag> {
+public:
+  ~WindowDrag() = default;
+
+  /// Reports whether the source is live and the drag can still accept receiver updates.
+  bool Active() const noexcept;
+
+  /// Updates the receiver on pointer enter or motion. Position is in the receiving window's logical coordinates.
+  /// Returns true when a compatible target accepts the payload at that position.
+  bool Move(UiWindow& window, Point position);
+
+  /// Clears the current receiver's preview and sends Exited to its active target if the receiver matches window.
+  /// The source session can continue in another window.
+  void Leave(UiWindow& window);
+
+  /// Resolves the target again at the release position in the receiving window's logical coordinates.
+  /// On success, records the drop and withdraws the preview before delivering Dropped. Returns true once per drag.
+  bool Drop(UiWindow& window, Point position);
+
+  /// Ends platform delivery and completes the source session if it is still live. Duplicate completions are ignored.
+  /// Pass true for an explicit cancellation or platform failure. A normal release without a target reports
+  /// Ended with dropped set to false. Report a release outside the application only when the platform confirms it.
+  void Finish(bool canceled, bool released_outside_application = false);
+
+  /// Registers a nonthrowing callback to stop platform delivery if HuxerUI cancels the drag before a drop commits.
+  void SetPlatformCancel(std::function<void()> cancel);
+
+private:
+  WindowDrag(const std::shared_ptr<UiExecutionState>& source, const DragDropSession& drag,
+             std::function<View()> preview, std::shared_ptr<const Environment> environment);
+  bool UpdateReceiver(UiWindow& window, Point position, bool moved);
+  void Advance(const FrameInfo& frame);
+  void Dispatch(UiWindow& window, const ActiveDropTarget& target, DropTargetDispatch::Function function);
+  void ExitReceiver(bool notify);
+  void Cancel() noexcept;
+  void CancelAfterFailure() noexcept;
+
+  // The platform may retain the drag beyond either window's lifetime.
+  std::weak_ptr<UiExecutionState> source_;
+  std::weak_ptr<UiExecutionState> receiver_;
+  // Frozen at handoff for source events. Receiver events use position_ in the current receiver's coordinates.
+  DragEvent drag_;
+  std::type_index payload_type_;
+  std::shared_ptr<const void> payload_;
+  std::function<View()> preview_;
+  std::shared_ptr<const Environment> environment_;
+  Point grab_offset_;
+  Point position_;
+  std::optional<ActiveDropTarget> target_;
+  std::optional<LayerId> preview_layer_;
+  std::function<void()> cancel_platform_;
+  bool active_ = true;
+  bool dropped_ = false;
+
+  friend class PointerInteraction;
 };
 
 struct PointerSession {

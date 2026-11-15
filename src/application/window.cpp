@@ -34,7 +34,8 @@ void ValidateWindowOptions(const WindowOptions& options) {
   if (options.content_mode != WindowContentMode::SafeArea && options.content_mode != WindowContentMode::EdgeToEdge) {
     throw std::invalid_argument("HuxerUI window content mode is invalid");
   }
-  if (options.chrome_mode != WindowChromeMode::System && options.chrome_mode != WindowChromeMode::Custom) {
+  if (options.chrome_mode != WindowChromeMode::System && options.chrome_mode != WindowChromeMode::Custom &&
+      options.chrome_mode != WindowChromeMode::None) {
     throw std::invalid_argument("HuxerUI window chrome mode is invalid");
   }
   if (!std::isfinite(options.title_bar_height) || options.title_bar_height <= 0.0F) {
@@ -203,7 +204,8 @@ View MakeWindowControls(
   Composer::Guard guard(composer);
   return WindowControlsLayout {
     WindowControl(WindowCommand::Minimize, service, window, window->caption_labels),
-    WindowControl(WindowCommand::ToggleMaximize, service, window, window->caption_labels),
+    WindowControl(WindowCommand::ToggleMaximize, service, window, window->caption_labels)
+        .With(Enabled(window->resizable)),
     WindowControl(WindowCommand::Close, service, window, window->caption_labels),
   }.With(Enabled(visible), Semantics{.hidden = !visible});
 }
@@ -317,6 +319,7 @@ void WindowService::Request(WindowCommand command) {
   if (!IsOpen()) return;
   ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
   if ((command == WindowCommand::Minimize || command == WindowCommand::Close) && HandleRequest(command)) return;
+  if (command == WindowCommand::Activate && !ui_window_->state_->window_->activatable) command = WindowCommand::Show;
   if (ui_window_ && IsOpen()) ui_window_->RequestWindowCommand(command);
 }
 

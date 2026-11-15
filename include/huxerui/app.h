@@ -651,7 +651,7 @@ public:
   [[nodiscard]] ApplicationLifecycleState LifecycleState() const;
   /// @brief Returns the shared system clipboard for this application's Runtime.
   /// @return The same non-null instance on every call, including on hosts without clipboard support.
-  /// Clipboard::IsAvailable() reports synchronous plain-text support. Typed operations report their own results.
+  /// Clipboard::SupportsSynchronousText() reports synchronous plain-text support.
   ///
   /// This accessor does not require an active composition and may be called on a captured ApplicationHandle.
   /// Clipboard operations start on the owning application thread. After Runtime destruction, the returned
@@ -825,11 +825,6 @@ public:
   /// Requests the cursor represented by the PointerCursorKind argument on this native window.
   /// Called on the application thread; the default implementation ignores the request on hosts without pointer cursors.
   virtual void SetPointerCursor(PointerCursorKind) {}
-  /// Starts host transport for an accepted application-scoped mouse drag. Framework use only.
-  /// The retained operation belongs to the original Runtime; native callbacks use its private normalized contract.
-  /// Return false without retaining the operation when unsupported. Shared recognition and local delivery continue.
-  /// Native implementations must not synchronously complete the operation before returning.
-  virtual bool BeginWindowDrag(std::shared_ptr<detail::WindowDrag>) { return false; }
   /// @copydoc TextMeasurer::CreateTextLayout
   TextLayout CreateTextLayout(
       const AttributedText& text, const TextStyle& style, float width, const TextLayoutOptions& options = {}) final;
@@ -901,7 +896,7 @@ public:
   /// @param metrics Complete viewport, safe-area insets, and optional title-bar geometry in logical window-local units.
   /// Call on the application thread after successful initialization; native geometry is authoritative.
   void SetWindowMetrics(WindowMetrics metrics);
-  /// Queries the committed tree for a native title-bar drag hit.
+  /// Queries the committed tree for a native window drag hit in Custom or None chrome mode.
   /// @param position Point in logical window-local coordinates.
   /// @return True when a declared drag region claims the point and interactive descendants do not take precedence.
   /// Native non-client hit testing uses this result without rebuilding the UI tree.
@@ -1012,6 +1007,11 @@ public:
 
 protected:
   UiWindow();
+
+  /// Starts platform transport for an accepted typed mouse drag on this window's application thread.
+  /// A false result leaves the original pointer sequence in charge. Keep the operation for asynchronous delivery
+  /// only after accepting it. Deliver platform callbacks after the handoff returns.
+  virtual bool BeginApplicationDrag(std::shared_ptr<detail::WindowDrag>) { return false; }
 
   /// Requests a fullscreen transition from the native host. Unsupported attachments ignore the request.
   virtual void RequestFullscreen(bool) {}
@@ -1167,6 +1167,7 @@ private:
   friend class detail::SemanticTree;
   friend class detail::TextInteraction;
   friend class detail::VirtualMeasureSession;
+  friend class detail::WindowDrag;
   friend class detail::WindowService;
   friend struct detail::InternalAccess;
   Runtime* application_runtime_ = nullptr;

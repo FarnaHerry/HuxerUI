@@ -114,6 +114,7 @@ enum class WindowContentMode {
 enum class WindowChromeMode {
   System, ///< Retains the platform's ordinary title bar and decorations.
   Custom, ///< Lets application content occupy title-bar space while HuxerUI preserves native window behavior.
+  None,   ///< Omits window decorations and lets the application mark its own drag regions.
 };
 
 /// Selects ordinary desktop decoration or a borderless, non-resizable helper excluded from task switching.
@@ -228,7 +229,7 @@ struct WindowOptions {
   /// std::nullopt lets the platform place the window. Honored on X11 and Windows; other hosts may ignore placement.
   std::optional<Point> initial_position{};
 
-  /// The minimum logical client size for framework-owned resizable desktop windows. std::nullopt leaves it
+  /// The minimum logical client size for framework-owned desktop windows. std::nullopt leaves it
   /// unconstrained by HuxerUI; the platform may still enforce a larger native minimum.
   std::optional<Size> minimum_size{};
 
@@ -256,6 +257,9 @@ struct WindowOptions {
 
   /// Initial above-normal stacking preference, subsequently mutable through SetTopmost.
   bool topmost = false;
+
+  /// Allows the user to resize this desktop window in windowed mode. Display changes may still affect its geometry.
+  bool resizable = true;
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;
@@ -338,10 +342,10 @@ struct SafeAreaPadding {
   bool operator==(const SafeAreaPadding&) const = default;
 };
 
-/// Marks non-interactive client content as a native window drag region in Custom chrome mode.
+/// Marks non-interactive client content as a native window drag region in Custom or None chrome mode.
 ///
-/// Interactive descendants retain pointer input and take precedence over a marked ancestor. The marker has no effect
-/// when the platform does not submit custom title-bar metrics. WindowTitleBar applies it automatically.
+/// Interactive descendants retain pointer input and take precedence over a marked ancestor. Custom mode requires
+/// platform title-bar metrics. WindowTitleBar applies this modifier automatically.
 struct WindowDragRegion {
   /// Returns the property-modifier descriptor used by View::With().
   static const detail::ModifierDescriptor& Descriptor();
@@ -476,6 +480,7 @@ public:
   void HideKeyboard() const;
 
   /// Shows and brings the native window to the foreground when permitted by the platform.
+  /// Windows configured with WindowOptions::show_without_activation are only shown.
   void Activate() const;
 
   /// Requests the platform's minimized state after consulting the active minimize handler.

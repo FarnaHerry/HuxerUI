@@ -317,6 +317,19 @@ TEST_CASE("WindowMetricsRejectInvalidValues") {
   REQUIRE_THROWS_AS(invalid_appearance.BuildFrame(), std::invalid_argument);
 }
 
+TEST_CASE("Borderless windows honor drag regions without title-bar metrics") {
+  TestPlatform platform;
+  AppOptions options;
+  options.window.chrome_mode = WindowChromeMode::None;
+  options.show_debug_overlay = false;
+  UiWindow runtime(WindowTitleBarApp, platform, options);
+  runtime.SetWindowMetrics({.viewport = {300.0F, 100.0F}});
+  runtime.BuildFrame();
+
+  REQUIRE(runtime.IsWindowDragRegion({30.0F, 14.0F}));
+  REQUIRE_FALSE(runtime.IsWindowDragRegion({90.0F, 14.0F}));
+}
+
 TEST_CASE("WindowHandleForwardsCommandsToThePlatform") {
   window_handle.reset();
   TestPlatform platform;
@@ -1202,6 +1215,7 @@ public:
     if (command == WindowCommand::Close) huxerui::UiWindow::CloseWindow();
   }
   void Frame() { huxerui::UiWindow::BuildFrame(); }
+
 private:
   int& destroyed_;
 };

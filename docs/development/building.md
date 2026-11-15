@@ -215,7 +215,9 @@ cmake --build build --target example_ui_gallery
 
 [`example_shared_transition`](../../examples/shared_transition/main.cpp) demonstrates titles moving from a reading list to a detail page, covers growing from thumbnails, and descriptions crossfading with SharedBounds. A separate local card demonstrates expansion, an arc, and interrupted retargeting without navigation; its control stays outside the animated scope. Both modes offer slow playback. Keep participating regions fully in view. Build with `cmake --build build --target example_shared_transition`; Android selects `-PhuxeruiExample=shared_transition` and the iOS runner selects `HUXERUI_APP_TARGET=example_shared_transition`.
 
-[`example_multi_window`](../../examples/multi_window/main.cpp) opens independent desktop windows sharing an application counter, with local counters and observable close/reopen behavior. Build with `cmake --build build --target example_multi_window`; unsupported hosts disable the open-window command.
+[`example_multi_window`](../../examples/multi_window/main.cpp) demonstrates moving tabs between two open desktop windows. Build with `cmake --build build --target example_multi_window`. Hosts without multiple-window support disable the open-window command.
+
+[`example_desktop_lyrics`](../../examples/desktop_lyrics/main.cpp) demonstrates a borderless floating panel on Windows, macOS, and Linux. Build with `cmake --build build --target example_desktop_lyrics`. Open the panel, click **Next lyric** to replace its text, and drag a non-interactive part of the panel to move it. **Pass clicks through** lets you use the window below the lyrics. Use the main window to restore input or close the panel.
 
 Desktop binaries or application bundles are emitted under the configured build output.
 Android examples use `platform/android/example_runner`, and iOS examples use the repository platform runner.

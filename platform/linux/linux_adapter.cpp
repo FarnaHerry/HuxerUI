@@ -39,7 +39,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -65,14 +64,25 @@
 #include "application/platform_frame_internal.h"
 #include "application/window_internal.h"
 #include "resources/resource_internal.h"
+#include "runtime/gesture_internal.h"
 #include "text/text_internal.h"
-#include "runtime/window_drag_internal.h"
 #include "application/window_internal.h"
 #include "application/application_internal.h"
 #include "macros_internal.h"
 
 namespace huxerui::detail {
+
 namespace {
+
+constexpr char application_drag_format[] = "application/x-huxerui-window-drag";
+constexpr char application_drag_data[] = "huxerui-window-drag";
+
+std::shared_ptr<WindowDrag> LocalApplicationDrag(GdkDrop* drop) {
+  GdkDrag* source = gdk_drop_get_drag(drop);
+  if (!source) return {};
+  auto* drag = static_cast<std::shared_ptr<WindowDrag>*>(g_object_get_data(G_OBJECT(source), application_drag_data));
+  return drag ? *drag : nullptr;
+}
 
 constexpr float kDipsPerScrollStep = 40.0F;
 
@@ -612,29 +622,57 @@ GtkWidget* CreateHuxerUICanvas(
   return GTK_WIDGET(canvas);
 }
 
-const char** LinuxClipboardTypes(ClipboardKind kind) {
-  static const char* text[] = {"text/plain;charset=utf-8", "text/plain", nullptr};
-  static const char* rich[] = {
-      "text/html", "text/html;charset=utf-8", "text/plain;charset=utf-8", "text/plain", nullptr};
-  static const char* image[] = {"image/png", "image/jpeg", nullptr};
-  static const char* files[] = {"text/uri-list", "x-special/gnome-copied-files", nullptr};
-  switch (kind) {
-  case ClipboardKind::Text: return text;
-  case ClipboardKind::RichText: return rich;
-  case ClipboardKind::Image: return image;
-  case ClipboardKind::Files: return files;
-  }
-  return text;
-}
+const char* linux_clipboard_text[] = {"text/plain;charset=utf-8", "text/plain", nullptr};
+const char* linux_clipboard_html[] = {"text/html", "text/html;charset=utf-8", nullptr};
+const char* linux_clipboard_image[] = {"image/png", "image/jpeg", nullptr};
+const char* linux_clipboard_files[] = {"text/uri-list", "x-special/gnome-copied-files", nullptr};
 
-bool LinuxClipboardMayHave(GdkClipboard* clipboard, ClipboardKind kind) {
-  if (!clipboard) return false;
-  auto* formats = gdk_clipboard_get_formats(clipboard);
-  for (auto type = LinuxClipboardTypes(kind); *type; ++type) {
-    if (gdk_content_formats_contain_mime_type(formats, *type)) return true;
+bool LinuxClipboardMayHave(GdkContentFormats* formats, const char* const* types) {
+  for (; *types; ++types) {
+    if (gdk_content_formats_contain_mime_type(formats, *types)) return true;
   }
   return false;
 }
+
+class LinuxClipboardCapture {
+public:
+  explicit LinuxClipboardCapture(GdkClipboard* clipboard)
+      : clipboard_(GDK_CLIPBOARD(g_object_ref(clipboard)), g_object_unref),
+        formats_(gdk_content_formats_ref(gdk_clipboard_get_formats(clipboard)), gdk_content_formats_unref),
+        cancellable_(g_cancellable_new(), g_object_unref) {
+    changed_handler_ = g_signal_connect(clipboard, "changed", G_CALLBACK(+[](GdkClipboard*, gpointer data) {
+      auto& capture = *static_cast<LinuxClipboardCapture*>(data);
+      capture.changed = true;
+      g_cancellable_cancel(capture.Cancellable());
+    }), this);
+    timeout_ = g_timeout_add_seconds(10, [](gpointer data) -> gboolean {
+      auto& capture = *static_cast<LinuxClipboardCapture*>(data);
+      capture.timeout_ = 0;
+      capture.timed_out = true;
+      g_cancellable_cancel(capture.Cancellable());
+      return G_SOURCE_REMOVE;
+    }, this);
+  }
+
+  ~LinuxClipboardCapture() {
+    g_signal_handler_disconnect(clipboard_.get(), changed_handler_);
+    if (timeout_) g_source_remove(timeout_);
+  }
+
+  GdkClipboard* Clipboard() const noexcept { return clipboard_.get(); }
+  GdkContentFormats* Formats() const noexcept { return formats_.get(); }
+  GCancellable* Cancellable() const noexcept { return cancellable_.get(); }
+
+  bool changed = false;
+  bool timed_out = false;
+
+private:
+  std::unique_ptr<GdkClipboard, decltype(&g_object_unref)> clipboard_;
+  std::unique_ptr<GdkContentFormats, decltype(&gdk_content_formats_unref)> formats_;
+  std::unique_ptr<GCancellable, decltype(&g_object_unref)> cancellable_;
+  gulong changed_handler_ = 0;
+  guint timeout_ = 0;
+};
 
 struct LinuxClipboardData {
   std::string mime;
@@ -643,25 +681,17 @@ struct LinuxClipboardData {
 
 class LinuxClipboardRead final : public std::enable_shared_from_this<LinuxClipboardRead> {
 public:
-  LinuxClipboardRead(CallbackCompletion<IoResult<LinuxClipboardData>> completion, std::size_t limit)
-      : completion_(completion), limit_(limit) {}
+  LinuxClipboardRead(CallbackCompletion<IoResult<LinuxClipboardData>> completion, std::size_t limit,
+                     GCancellable* cancellable)
+      : completion_(completion), limit_(limit), cancellable_(G_CANCELLABLE(g_object_ref(cancellable))) {}
 
   ~LinuxClipboardRead() {
-    if (timeout_) g_source_remove(timeout_);
     if (stream_) g_object_unref(stream_);
     g_object_unref(cancellable_);
   }
 
-  void Start(GdkClipboard* clipboard, ClipboardKind kind) {
-    timeout_ = g_timeout_add_seconds(10, [](gpointer user_data) -> gboolean {
-      auto& read = *static_cast<LinuxClipboardRead*>(user_data);
-      read.timeout_ = 0;
-      read.timed_out_ = true;
-      read.Cancel();
-      return G_SOURCE_REMOVE;
-    }, this);
-    gdk_clipboard_read_async(clipboard, LinuxClipboardTypes(kind), G_PRIORITY_DEFAULT,
-                             cancellable_, Opened, Retain());
+  void Start(GdkClipboard* clipboard, const char** types) {
+    gdk_clipboard_read_async(clipboard, types, G_PRIORITY_DEFAULT, cancellable_, Opened, Retain());
   }
 
   void Cancel() { g_cancellable_cancel(cancellable_); }
@@ -675,7 +705,7 @@ private:
   }
 
   void Finish(const GError* error) {
-    auto code = timed_out_ ? IoErrorCode::Timeout : IoErrorCode::Io;
+    auto code = IoErrorCode::Io;
     if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED)) code = IoErrorCode::PermissionDenied;
     if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)) code = IoErrorCode::Unsupported;
     Finish(code);
@@ -735,91 +765,124 @@ private:
   CallbackCompletion<IoResult<LinuxClipboardData>> completion_;
   LinuxClipboardData data_;
   std::size_t limit_;
-  GCancellable* cancellable_ = g_cancellable_new();
+  GCancellable* cancellable_;
   GInputStream* stream_ = nullptr;
-  guint timeout_ = 0;
-  bool timed_out_ = false;
 };
 
-IoResult<ClipboardContent> ReadLinuxClipboardFiles(std::string_view text, bool includes_operation) {
+using LinuxClipboardFiles = std::vector<FileReference>;
+
+IoResult<LinuxClipboardFiles> ParseLinuxClipboardFiles(std::string_view text, bool includes_operation) {
   if (includes_operation) {
     const auto end = text.find('\n');
     const auto operation = text.substr(0, end);
     if (end == text.npos || (operation != "copy" && operation != "cut")) {
-      return ClipboardFailure(IoErrorCode::InvalidEncoding);
+      return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::InvalidEncoding);
     }
     text.remove_prefix(end + 1);
   }
-  std::vector<FileReference> references;
+  LinuxClipboardFiles references;
   while (!text.empty()) {
     const auto end = text.find('\n');
     auto line = text.substr(0, end);
     text.remove_prefix(end == text.npos ? text.size() : end + 1);
     if (line.ends_with('\r')) line.remove_suffix(1);
     if (line.empty() || line.starts_with('#')) continue;
-    if (references.size() == clipboard_max_files) return ClipboardFailure(IoErrorCode::TooLarge);
+    if (references.size() == clipboard_max_files) return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::TooLarge);
     auto uri = Uri::Parse(line);
-    if (!uri) return ClipboardFailure(IoErrorCode::InvalidEncoding);
-    if (uri->Scheme() != "file") return ClipboardFailure(IoErrorCode::Unsupported);
+    if (!uri) return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::InvalidEncoding);
+    if (uri->Scheme() != "file") return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::Unsupported);
     try {
       const File path(*uri);
       const auto stat = path.Stat();
       if (!stat.Succeeded()) {
         const auto code = stat.Error().code;
-        return ClipboardFailure(code == IoErrorCode::NotFound ? IoErrorCode::Io : code);
+        return ClipboardFailure<LinuxClipboardFiles>(code == IoErrorCode::NotFound ? IoErrorCode::Io : code);
       }
       auto file = MakeLinuxFileReference(path, stat.Value().type == FileType::Directory, false);
-      if (!file) return ClipboardFailure(IoErrorCode::Io);
+      if (!file) return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::Io);
       references.push_back(std::move(*file));
     } catch (const std::invalid_argument&) {
-      return ClipboardFailure(IoErrorCode::Unsupported);
+      return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::Unsupported);
     }
   }
-  if (references.empty()) return ClipboardFailure(IoErrorCode::NotFound);
-  return IoResult<ClipboardContent>(ClipboardContent{std::move(references)});
+  if (references.empty()) return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::NotFound);
+  return IoResult<LinuxClipboardFiles>(std::move(references));
 }
 
-Task<IoResult<ClipboardContent>> ReadLinuxClipboardAsync(std::shared_ptr<GdkClipboard> clipboard, ClipboardKind kind) {
-  if (!clipboard) co_return ClipboardFailure(IoErrorCode::Unsupported);
-  if (!LinuxClipboardMayHave(clipboard.get(), kind)) {
-    auto* formats = gdk_clipboard_get_formats(clipboard.get());
-    if (kind == ClipboardKind::Files &&
-        gdk_content_formats_contain_mime_type(formats, "application/vnd.portal.filetransfer")) {
-      co_return ClipboardFailure(IoErrorCode::Unsupported);
-    }
-    if (kind == ClipboardKind::Image) {
+Task<IoResult<LinuxClipboardData>> ReadLinuxClipboardData(LinuxClipboardCapture& capture, const char** types,
+                                                          std::size_t limit) {
+  using Read = IoResult<LinuxClipboardData>;
+  if (capture.changed) co_return Read::Failure(ClipboardChangedError());
+  if (capture.timed_out) co_return ClipboardFailure<LinuxClipboardData>(IoErrorCode::Timeout);
+  if (!LinuxClipboardMayHave(capture.Formats(), types)) {
+    co_return ClipboardFailure<LinuxClipboardData>(IoErrorCode::NotFound);
+  }
+  auto result = co_await AwaitCallback<Read>([&capture, types, limit](CallbackCompletion<Read> completion) {
+    auto read = std::make_shared<LinuxClipboardRead>(completion, limit, capture.Cancellable());
+    read->Start(capture.Clipboard(), types);
+    return [read = std::move(read)] { read->Cancel(); };
+  });
+  if (capture.changed) co_return Read::Failure(ClipboardChangedError());
+  if (capture.timed_out && !result.Succeeded()) co_return ClipboardFailure<LinuxClipboardData>(IoErrorCode::Timeout);
+  co_return std::move(result);
+}
+
+std::string LinuxClipboardString(const Bytes& bytes) {
+  if (bytes.empty()) return {};
+  return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+Task<IoResult<ClipboardItem>> ReadLinuxClipboardItem(std::unique_ptr<LinuxClipboardCapture> capture,
+                                                     ClipboardReadOptions options) {
+  ClipboardItemRead item;
+  const auto read_text = [&](const char** types) -> Task<IoResult<std::string>> {
+    auto captured = co_await ReadLinuxClipboardData(*capture, types, clipboard_max_text_bytes);
+    if (!captured.Succeeded()) co_return IoResult<std::string>::Failure(std::move(captured).Error());
+    co_return IoResult<std::string>(LinuxClipboardString(captured.Value().bytes));
+  };
+  if (options.text) item.SetText(&ClipboardItem::text, co_await read_text(linux_clipboard_text));
+  if (options.html) item.SetText(&ClipboardItem::html, co_await read_text(linux_clipboard_html));
+  if (options.image) {
+    auto image = co_await ReadLinuxClipboardData(*capture, linux_clipboard_image, clipboard_max_image_bytes);
+    if (image.Succeeded()) {
+      item.SetImage(ClipboardImage(std::move(image).Value().bytes));
+    } else if (image.Error().code == IoErrorCode::NotFound) {
       gsize count = 0;
-      const auto* types = gdk_content_formats_get_mime_types(formats, &count);
+      const auto* types = gdk_content_formats_get_mime_types(capture->Formats(), &count);
       for (gsize index = 0; index < count; ++index) {
         if (std::string_view(types[index]).starts_with("image/")) {
-          co_return ClipboardFailure(IoErrorCode::Unsupported);
+          item.RecordError(ClipboardError(IoErrorCode::Unsupported));
+          break;
         }
       }
+    } else {
+      item.RecordError(std::move(image).Error());
     }
-    co_return ClipboardFailure(IoErrorCode::NotFound);
   }
-  auto captured = co_await AwaitCallback<IoResult<LinuxClipboardData>>(
-      [clipboard, kind](CallbackCompletion<IoResult<LinuxClipboardData>> completion) {
-        const auto limit = kind == ClipboardKind::Image ? clipboard_max_image_bytes : clipboard_max_text_bytes;
-        auto read = std::make_shared<LinuxClipboardRead>(completion, limit);
-        read->Start(clipboard.get(), kind);
-        return [read = std::move(read)] { read->Cancel(); };
-      });
-  if (!captured.Succeeded()) co_return IoResult<ClipboardContent>::Failure(std::move(captured).Error());
+  for (const auto& mime : options.custom_mime_types) {
+    if (capture->changed) break;
+    const char* types[] = {mime.c_str(), nullptr};
+    auto data = co_await ReadLinuxClipboardData(*capture, types, item.RemainingCustomBytes());
+    if (data.Succeeded()) item.SetCustom(mime, IoResult<Bytes>(std::move(data).Value().bytes));
+    else item.RecordError(std::move(data).Error());
+  }
+  if (capture->changed) co_return IoResult<ClipboardItem>::Failure(ClipboardChangedError());
+  co_return std::move(item).Finish();
+}
+
+Task<IoResult<LinuxClipboardFiles>> ReadLinuxClipboardFiles(std::unique_ptr<LinuxClipboardCapture> capture) {
+  if (!LinuxClipboardMayHave(capture->Formats(), linux_clipboard_files) &&
+      gdk_content_formats_contain_mime_type(capture->Formats(), "application/vnd.portal.filetransfer")) {
+    co_return ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::Unsupported);
+  }
+  auto captured = co_await ReadLinuxClipboardData(*capture, linux_clipboard_files, clipboard_max_text_bytes);
+  if (!captured.Succeeded()) co_return IoResult<LinuxClipboardFiles>::Failure(std::move(captured).Error());
   auto payload = std::move(captured).Value();
-  if (kind == ClipboardKind::Image) co_return ClipboardImage(std::move(payload.bytes));
-  std::string text(payload.bytes.size(), '\0');
-  if (!text.empty()) std::memcpy(text.data(), payload.bytes.data(), text.size());
-  if (kind == ClipboardKind::Files) {
-    const bool includes_operation = payload.mime == "x-special/gnome-copied-files";
-    co_return co_await RunWorker([text = std::move(text), includes_operation] {
-      return ReadLinuxClipboardFiles(text, includes_operation);
-    });
-  }
-  if (payload.mime.starts_with("text/html")) {
-    co_return co_await RunWorker([text = std::move(text)] { return ReadClipboardHtml(text); });
-  }
-  co_return IoResult<ClipboardContent>(ClipboardContent{std::move(text)});
+  const bool includes_operation = payload.mime == "x-special/gnome-copied-files";
+  capture.reset();
+  co_return co_await RunWorker([text = LinuxClipboardString(payload.bytes), includes_operation] {
+    return ParseLinuxClipboardFiles(text, includes_operation);
+  });
 }
 
 GdkContentProvider* LinuxClipboardBytes(const char* mime, const void* data, std::size_t size) {
@@ -831,38 +894,42 @@ GdkContentProvider* LinuxClipboardText(std::string_view text) {
   return gdk_content_provider_new_typed(G_TYPE_STRING, text.data());
 }
 
-GdkContentProvider* LinuxClipboardProvider(const ClipboardContent& content) {
-  return std::visit([&](const auto& value) -> GdkContentProvider* {
-    using T = std::decay_t<decltype(value)>;
-    if constexpr (std::is_same_v<T, std::string>) {
-      return LinuxClipboardText(value);
-    } else if constexpr (std::is_same_v<T, AttributedText>) {
-      const auto html = ClipboardHtml(value);
-      if (html.empty() && !value.PlainText().empty()) return nullptr;
-      GdkContentProvider* providers[] = {
-          LinuxClipboardBytes("text/html", html.data(), html.size()), LinuxClipboardText(value.PlainText())};
-      return gdk_content_provider_new_union(providers, std::size(providers));
-    } else if constexpr (std::is_same_v<T, ImageAsset>) {
-      const char* mime = value.Format() == ImageFormat::Png ? "image/png" : "image/jpeg";
-      const auto bytes = value.EncodedBytes();
-      return LinuxClipboardBytes(mime, bytes.data(), bytes.size());
-    } else {
-      const auto files = ClipboardFilePaths(content);
-      if (!files) return nullptr;
-      std::string uri_list;
-      std::string copied = "copy\n";
-      for (const auto& file : *files) {
-        const auto uri = file.ToUri();
-        uri_list += uri.ToString() + "\r\n";
-        copied += uri.ToString() + '\n';
-      }
-      GdkContentProvider* providers[] = {
-          LinuxClipboardBytes("text/uri-list", uri_list.data(), uri_list.size()),
-          LinuxClipboardBytes("x-special/gnome-copied-files", copied.data(), copied.size()),
-          LinuxClipboardBytes("application/x-kde-cutselection", "0", 1)};
-      return gdk_content_provider_new_union(providers, std::size(providers));
-    }
-  }, content);
+GdkContentProvider* LinuxClipboardItemProvider(const ClipboardItem& item) {
+  std::vector<GdkContentProvider*> providers;
+  providers.reserve(item.custom_formats.size() + 3);
+  for (const auto& [mime, bytes] : item.custom_formats) {
+    providers.push_back(LinuxClipboardBytes(mime.c_str(), bytes.data(), bytes.size()));
+  }
+  if (item.html) providers.push_back(LinuxClipboardBytes("text/html", item.html->data(), item.html->size()));
+  if (item.image) {
+    const auto bytes = item.image->EncodedBytes();
+    const char* mime = item.image->Format() == ImageFormat::Png ? "image/png" : "image/jpeg";
+    providers.push_back(LinuxClipboardBytes(mime, bytes.data(), bytes.size()));
+  }
+  if (item.text) providers.push_back(LinuxClipboardText(*item.text));
+  return providers.size() == 1 ? providers.front() : gdk_content_provider_new_union(providers.data(), providers.size());
+}
+
+GdkContentProvider* LinuxClipboardFileProvider(const ClipboardFiles& content) {
+  const auto files = ClipboardFilePaths(content);
+  if (!files) return nullptr;
+  std::string uri_list;
+  std::string copied = "copy\n";
+  for (const auto& file : *files) {
+    const auto uri = file.ToUri();
+    uri_list += uri.ToString() + "\r\n";
+    copied += uri.ToString() + '\n';
+  }
+  GdkContentProvider* providers[] = {
+      LinuxClipboardBytes("text/uri-list", uri_list.data(), uri_list.size()),
+      LinuxClipboardBytes("x-special/gnome-copied-files", copied.data(), copied.size()),
+      LinuxClipboardBytes("application/x-kde-cutselection", "0", 1)};
+  return gdk_content_provider_new_union(providers, std::size(providers));
+}
+
+GdkClipboard* LinuxSystemClipboard() {
+  auto* display = gdk_display_get_default();
+  return display ? gdk_display_get_clipboard(display) : nullptr;
 }
 
 } // namespace
@@ -1076,31 +1143,43 @@ public:
     return true;
   }
 
-  bool WriteContent(ClipboardContent content) override {
-    GdkDisplay* display = gdk_display_get_default();
-    if (!display) return false;
+  bool WriteItem(ClipboardItem item) override {
+    auto* clipboard = LinuxSystemClipboard();
+    if (!clipboard) return false;
     const std::unique_ptr<GdkContentProvider, decltype(&g_object_unref)> provider(
-        LinuxClipboardProvider(content), g_object_unref);
+        LinuxClipboardItemProvider(item), g_object_unref);
+    return provider && gdk_clipboard_set_content(clipboard, provider.get());
+  }
+
+  Task<IoResult<ClipboardItem>> ReadItemAsync(ClipboardReadOptions options) override {
+    auto* clipboard = LinuxSystemClipboard();
+    if (!clipboard) return ClipboardResult(ClipboardFailure(IoErrorCode::Unsupported));
+    return ReadLinuxClipboardItem(std::make_unique<LinuxClipboardCapture>(clipboard), std::move(options));
+  }
+
+  bool WriteFiles(ClipboardFiles files) override {
+    auto* clipboard = LinuxSystemClipboard();
+    if (!clipboard) return false;
+    const std::unique_ptr<GdkContentProvider, decltype(&g_object_unref)> provider(
+        LinuxClipboardFileProvider(files), g_object_unref);
     if (!provider) return false;
-    if (auto* references = std::get_if<std::vector<FileReference>>(&content)) {
+    if (auto* references = std::get_if<std::vector<FileReference>>(&files)) {
       g_object_set_data_full(G_OBJECT(provider.get()), "huxerui-clipboard-references",
                              new std::vector<FileReference>(std::move(*references)),
                              [](gpointer value) { delete static_cast<std::vector<FileReference>*>(value); });
     }
-    return gdk_clipboard_set_content(gdk_display_get_clipboard(display), provider.get());
+    return gdk_clipboard_set_content(clipboard, provider.get());
   }
 
-  Task<IoResult<ClipboardContent>> ReadContentAsync(ClipboardKind kind) override {
-    GdkDisplay* display = gdk_display_get_default();
-    GdkClipboard* clipboard = display ? gdk_display_get_clipboard(display) : nullptr;
-    auto retained = clipboard ? std::shared_ptr<GdkClipboard>(GDK_CLIPBOARD(g_object_ref(clipboard)), g_object_unref)
-                              : nullptr;
-    return ReadLinuxClipboardAsync(std::move(retained), kind);
+  Task<IoResult<LinuxClipboardFiles>> ReadFilesAsync() override {
+    auto* clipboard = LinuxSystemClipboard();
+    if (!clipboard) return ClipboardResult(ClipboardFailure<LinuxClipboardFiles>(IoErrorCode::Unsupported));
+    return ReadLinuxClipboardFiles(std::make_unique<LinuxClipboardCapture>(clipboard));
   }
 
-  bool MayHaveContent(ClipboardKind kind) const noexcept override {
-    GdkDisplay* display = gdk_display_get_default();
-    return display && LinuxClipboardMayHave(gdk_display_get_clipboard(display), kind);
+  bool MayHaveText() const noexcept override {
+    auto* clipboard = LinuxSystemClipboard();
+    return clipboard && LinuxClipboardMayHave(gdk_clipboard_get_formats(clipboard), linux_clipboard_text);
   }
 
   std::filesystem::path ResourceRoot() const {
@@ -1271,6 +1350,28 @@ public:
             frame_coordinator_.Request(deadline, Now(), drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*scheduled);
     }
+  }
+
+  bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
+    if (!window_ || !pointer_device_ || platform_drag_ || pressed_buttons_ != PointerButton::Primary) return false;
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (!surface) return false;
+    GBytes* bytes = g_bytes_new_static("", 0);
+    GdkContentProvider* content = gdk_content_provider_new_for_bytes(application_drag_format, bytes);
+    g_bytes_unref(bytes);
+    platform_drag_ = gdk_drag_begin(surface, pointer_device_, content, GDK_ACTION_COPY, 0.0, 0.0);
+    g_object_unref(content);
+    if (!platform_drag_) return false;
+    g_object_set_data_full(G_OBJECT(platform_drag_), application_drag_data, new std::shared_ptr<WindowDrag>(drag),
+                           [](gpointer value) { delete static_cast<std::shared_ptr<WindowDrag>*>(value); });
+    g_signal_connect(platform_drag_, "cancel", G_CALLBACK(ApplicationDragCanceled), this);
+    g_signal_connect(platform_drag_, "dnd-finished", G_CALLBACK(ApplicationDragFinished), this);
+    GtkWidget* icon = gtk_drag_icon_get_for_drag(platform_drag_);
+    GtkWidget* empty = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_size_request(empty, 1, 1);
+    gtk_drag_icon_set_child(GTK_DRAG_ICON(icon), empty);
+    drag->SetPlatformCancel([this] { CancelApplicationDrag(); });
+    return true;
   }
 
   double Now() const noexcept override {
@@ -1501,7 +1602,7 @@ public:
   }
 
   WindowRequestResult RequestWindowMove() override {
-    if (!IsInitialized() || input_blocked_ || native_drag_ || window_ == nullptr ||
+    if (!IsInitialized() || input_blocked_ || window_ == nullptr ||
         gtk_window_is_fullscreen(window_)) {
       return WindowRequestResult::Rejected;
     }
@@ -1539,42 +1640,6 @@ public:
 #else
     return std::nullopt;
 #endif
-  }
-
-  bool BeginWindowDrag(std::shared_ptr<WindowDrag> transfer) override {
-    if (!IsInitialized() || input_blocked_ || native_drag_ || !pointer_device_ ||
-        pressed_buttons_ != PointerButton::Primary) return false;
-    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
-    if (!surface) return false;
-    GBytes* bytes = g_bytes_new_static("", 0);
-    GdkContentProvider* content = gdk_content_provider_new_for_bytes("application/x-huxerui-window-drag", bytes);
-    g_bytes_unref(bytes);
-    native_drag_ = gdk_drag_begin(surface, pointer_device_, content, GDK_ACTION_COPY, 0.0, 0.0);
-    g_object_unref(content);
-    if (!native_drag_) return false;
-    native_transfer_ = std::move(transfer);
-    g_object_set_data_full(
-        G_OBJECT(native_drag_), "huxerui-window-drag", new std::shared_ptr<WindowDrag>(native_transfer_),
-        [](gpointer value) { delete static_cast<std::shared_ptr<WindowDrag>*>(value); }
-    );
-    g_signal_connect(native_drag_, "cancel", G_CALLBACK(NativeDragCanceled), this);
-    g_signal_connect(native_drag_, "dnd-finished", G_CALLBACK(NativeDragFinished), this);
-    GtkWidget* icon = gtk_drag_icon_get_for_drag(native_drag_);
-    GtkWidget* empty = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_size_request(empty, 1, 1);
-    gtk_drag_icon_set_child(GTK_DRAG_ICON(icon), empty);
-    native_transfer_->SetNativeCancel([this] {
-      if (native_drag_) g_signal_emit_by_name(native_drag_, "cancel", GDK_DRAG_CANCEL_ERROR);
-    });
-    // Native capture replaces GTK's widget sequence, as it does for GtkDragSource.
-    GListModel* controllers = gtk_widget_observe_controllers(drawing_area_);
-    for (guint index = 0; index < g_list_model_get_n_items(controllers); ++index) {
-      auto* controller = GTK_EVENT_CONTROLLER(g_list_model_get_item(controllers, index));
-      gtk_event_controller_reset(controller);
-      g_object_unref(controller);
-    }
-    g_object_unref(controllers);
-    return true;
   }
 
   void RequestWindowCommand(WindowCommand command) override {
@@ -1648,90 +1713,6 @@ public:
 
 private:
 
-  void EndNativeDrag(bool canceled, bool success) noexcept {
-    GdkDrag* drag = std::exchange(native_drag_, nullptr);
-    auto transfer = std::move(native_transfer_);
-    if (!drag) return;
-    pressed_buttons_ = PointerButton::None;
-    suppress_pointer_release_ = false;
-    g_signal_handlers_disconnect_by_data(drag, this);
-    if (transfer) {
-      transfer->SetNativeCancel({});
-      try {
-        transfer->Finish(canceled);
-      } catch (...) {
-        runtime_->ReportFailure(std::current_exception());
-      }
-    }
-    gdk_drag_drop_done(drag, success);
-    g_object_unref(drag);
-  }
-
-  static std::shared_ptr<WindowDrag> NativeTransfer(GdkDrop* drop) {
-    GdkDrag* drag = gdk_drop_get_drag(drop);
-    if (!drag) return {};
-    auto* transfer = static_cast<std::shared_ptr<WindowDrag>*>(
-        g_object_get_data(G_OBJECT(drag), "huxerui-window-drag")
-    );
-    return transfer ? *transfer : nullptr;
-  }
-
-  static gboolean NativeDragAccept(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    const auto transfer = NativeTransfer(drop);
-    return self.IsInitialized() && !self.input_blocked_ && transfer && transfer->Active();
-  }
-
-  static GdkDragAction NativeDragMoved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    const auto transfer = NativeTransfer(drop);
-    try {
-      if (self.IsInitialized() && !self.input_blocked_ && transfer &&
-          transfer->Move(self, {static_cast<float>(x), static_cast<float>(y)})) return GDK_ACTION_COPY;
-    } catch (...) {
-      self.runtime_->ReportFailure(std::current_exception());
-    }
-    return static_cast<GdkDragAction>(0);
-  }
-
-  static void NativeDragLeft(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    try {
-      if (const auto transfer = NativeTransfer(drop)) transfer->Leave(self);
-    } catch (...) {
-      self.runtime_->ReportFailure(std::current_exception());
-    }
-  }
-
-  static gboolean NativeDragDropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    const auto transfer = NativeTransfer(drop);
-    try {
-      if (!self.IsInitialized() || self.input_blocked_ || !transfer ||
-          !transfer->Drop(self, {static_cast<float>(x), static_cast<float>(y)})) return FALSE;
-      // Let GTK retire its drop dispatch and release the native grab before acknowledging completion.
-      g_idle_add_full(G_PRIORITY_DEFAULT, [](gpointer value) -> gboolean {
-        gdk_drop_finish(GDK_DROP(value), GDK_ACTION_COPY);
-        return G_SOURCE_REMOVE;
-      }, g_object_ref(drop), g_object_unref);
-      return TRUE;
-    } catch (...) {
-      self.runtime_->ReportFailure(std::current_exception());
-      return FALSE;
-    }
-  }
-
-  static void NativeDragCanceled(GdkDrag*, GdkDragCancelReason reason, gpointer data) {
-    static_cast<LinuxUiWindow*>(data)->EndNativeDrag(reason != GDK_DRAG_CANCEL_NO_TARGET, false);
-  }
-
-  static void NativeDragFinished(GdkDrag*, gpointer data) {
-    static_cast<LinuxUiWindow*>(data)->EndNativeDrag(false, true);
-  }
-
   void CreateWindow(const WindowOptions& options, Size initial_size) {
     utility_window_ = options.presentation == WindowPresentation::Utility;
     transparent_surface_ = options.transparent_surface;
@@ -1739,6 +1720,7 @@ private:
     topmost_ = options.topmost;
     // Utility presentation is borderless by definition, so custom chrome has nothing to replace.
     custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
+    borderless_ = options.chrome_mode == WindowChromeMode::None;
     custom_title_bar_height_ = options.title_bar_height;
     minimum_size_ = options.minimum_size;
     window_ = GTK_WINDOW(gtk_window_new());
@@ -1748,10 +1730,8 @@ private:
         std::max(1, static_cast<int>(std::lround(initial_size.width))),
         std::max(1, static_cast<int>(std::lround(initial_size.height)))
     );
-    gtk_window_set_decorated(window_, !custom_chrome_ && !utility_window_);
-    if (utility_window_) {
-      gtk_window_set_resizable(window_, FALSE);
-    }
+    gtk_window_set_decorated(window_, !custom_chrome_ && !utility_window_ && !borderless_);
+    gtk_window_set_resizable(window_, options.resizable && !utility_window_);
     if (transparent_surface_) {
       ApplyTransparentBackground();
     }
@@ -1803,18 +1783,19 @@ private:
     g_signal_connect(motion, "leave", G_CALLBACK(PointerLeft), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), motion);
 
-    const char* drag_formats[] = {"application/x-huxerui-window-drag"};
-    GtkDropTargetAsync* drop = gtk_drop_target_async_new(gdk_content_formats_new(drag_formats, 1), GDK_ACTION_COPY);
-    g_signal_connect(drop, "accept", G_CALLBACK(NativeDragAccept), this);
-    g_signal_connect(drop, "drag-enter", G_CALLBACK(NativeDragMoved), this);
-    g_signal_connect(drop, "drag-motion", G_CALLBACK(NativeDragMoved), this);
-    g_signal_connect(drop, "drag-leave", G_CALLBACK(NativeDragLeft), this);
-    g_signal_connect(drop, "drop", G_CALLBACK(NativeDragDropped), this);
-    gtk_widget_add_controller(GTK_WIDGET(drawing_area_), GTK_EVENT_CONTROLLER(drop));
+    const char* formats[]{application_drag_format};
+    GtkDropTargetAsync* drop = gtk_drop_target_async_new(gdk_content_formats_new(formats, 1), GDK_ACTION_COPY);
+    g_signal_connect(drop, "accept", G_CALLBACK(ApplicationDragAccepted), this);
+    g_signal_connect(drop, "drag-enter", G_CALLBACK(ApplicationDragMoved), this);
+    g_signal_connect(drop, "drag-motion", G_CALLBACK(ApplicationDragMoved), this);
+    g_signal_connect(drop, "drag-leave", G_CALLBACK(ApplicationDragLeft), this);
+    g_signal_connect(drop, "drop", G_CALLBACK(ApplicationDragDropped), this);
+    gtk_widget_add_controller(drawing_area_, GTK_EVENT_CONTROLLER(drop));
 
-    GtkEventController* scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
-    gtk_event_controller_set_propagation_phase(scroll, GTK_PHASE_CAPTURE);
-    g_signal_connect(scroll, "scroll-begin", G_CALLBACK(ScrollBegan), this);
+    GtkEventController* scroll = gtk_event_controller_scroll_new(
+        static_cast<GtkEventControllerScrollFlags>(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES |
+                                                   GTK_EVENT_CONTROLLER_SCROLL_DISCRETE)
+    );
     g_signal_connect(scroll, "scroll", G_CALLBACK(Scrolled), this);
     g_signal_connect(scroll, "scroll-end", G_CALLBACK(ScrollEnded), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), scroll);
@@ -2064,17 +2045,14 @@ private:
     toplevel_ = toplevel;
     if (toplevel_ != nullptr) {
       minimized_ = (gdk_toplevel_get_state(toplevel_) & GDK_TOPLEVEL_STATE_MINIMIZED) != 0;
-      toplevel_state_handler_ =
-          g_signal_connect(toplevel_, "notify::state", G_CALLBACK(ToplevelStateChanged), this);
+      g_signal_connect(toplevel_, "notify::state", G_CALLBACK(ToplevelStateChanged), this);
+      g_signal_connect_after(surface, "layout", G_CALLBACK(ToplevelLayoutChanged), this);
     }
   }
 
   void DetachToplevelState() noexcept {
-    if (toplevel_ != nullptr && toplevel_state_handler_ != 0) {
-      g_signal_handler_disconnect(toplevel_, toplevel_state_handler_);
-    }
+    if (toplevel_ != nullptr) g_signal_handlers_disconnect_by_data(toplevel_, this);
     toplevel_ = nullptr;
-    toplevel_state_handler_ = 0;
     minimized_ = false;
   }
 
@@ -2093,7 +2071,7 @@ private:
   }
 
   std::optional<LinuxResizeEdge> HitTestResizeEdge(Point point) const noexcept {
-    if (!custom_chrome_ || window_ == nullptr || drawing_area_ == nullptr || !IsInitialized()) {
+    if ((!custom_chrome_ && !borderless_) || window_ == nullptr || drawing_area_ == nullptr || !IsInitialized()) {
       return std::nullopt;
     }
     return ResolveLinuxResizeEdge(
@@ -2119,7 +2097,7 @@ private:
   }
 
   bool BeginWindowOperation(GdkEvent* event, guint button, Point point) {
-    if (!custom_chrome_ || window_ == nullptr || !IsInitialized() || event == nullptr ||
+    if ((!custom_chrome_ && !borderless_) || window_ == nullptr || !IsInitialized() || event == nullptr ||
         gtk_window_is_fullscreen(window_)) {
       return false;
     }
@@ -2152,8 +2130,7 @@ private:
 
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
       PointerButton pressed_buttons = PointerButton::None, KeyModifiers modifiers = {}) {
-    if (native_drag_ && type != PointerEventType::Cancel) return;
-    if (!IsInitialized()) {
+    if (!IsInitialized() || platform_drag_) {
       return;
     }
     last_pointer_position_ = position;
@@ -2170,9 +2147,10 @@ private:
   }
 
   void CancelPointer() {
-    pointer_inside_ = false;
+    if (platform_drag_) return;
+    const bool was_inside = std::exchange(pointer_inside_, false);
     suppress_pointer_release_ = false;
-    if (pressed_buttons_ != PointerButton::None) {
+    if (was_inside || pressed_buttons_ != PointerButton::None) {
       pressed_buttons_ = PointerButton::None;
       SendPointer(PointerEventType::Cancel, last_pointer_position_);
     }
@@ -2242,7 +2220,7 @@ private:
     native_facilities_released_ = true;
     if (system_theme_) system_theme_->Stop();
     running_ = false;
-    EndNativeDrag(true, false);
+    CancelApplicationDrag();
     g_clear_object(&pointer_device_);
     if (platform_views_) {
       platform_views_->Shutdown();
@@ -2357,6 +2335,7 @@ private:
     self.ReleaseNativeFacilities();
     self.DetachCanvasCallbacks();
     if (self.window_) g_signal_handlers_disconnect_by_data(self.window_, &self);
+    self.toplevel_ = nullptr;
     self.window_ = nullptr;
     self.drawing_area_ = nullptr;
   }
@@ -2395,6 +2374,9 @@ private:
 
   static void WindowActiveChanged(GObject*, GParamSpec*, gpointer data) {
     static_cast<LinuxUiWindow*>(data)->UpdateLifecycleState();
+  }
+
+  static void ToplevelLayoutChanged(GdkSurface*, int, int, gpointer) {
   }
 
   static void ToplevelStateChanged(GObject*, GParamSpec*, gpointer data) {
@@ -2442,6 +2424,9 @@ private:
       suppress_pointer_release_ = true;
       return;
     }
+    GdkDevice* device = event ? gdk_event_get_device(event) : nullptr;
+    g_clear_object(&pointer_device_);
+    if (device && gdk_device_get_source(device) == GDK_SOURCE_MOUSE) pointer_device_ = g_object_ref(device);
     pressed_buttons_ |= button;
     if (event) {
       g_set_object(&pointer_device_, gdk_event_get_device(event));
@@ -2452,6 +2437,7 @@ private:
   }
 
   void ReleasePointer(GdkEvent* event, guint platform_button, Point position) {
+    if (platform_drag_) return;
     if (suppress_pointer_release_) {
       suppress_pointer_release_ = false;
       return;
@@ -2463,6 +2449,99 @@ private:
     pressed_buttons_ = RemovePointerButton(pressed_buttons_, button);
     SendPointer(PointerEventType::Up, position, button, pressed_buttons_,
         event ? TranslateModifiers(gdk_event_get_modifier_state(event)) : KeyModifiers{});
+  }
+
+  void CancelApplicationDrag() noexcept {
+    if (!platform_drag_) return;
+    auto* drag = GDK_DRAG(g_object_ref(platform_drag_));
+    g_signal_emit_by_name(drag, "cancel", GDK_DRAG_CANCEL_USER_CANCELLED);
+    g_object_unref(drag);
+  }
+
+  void EndApplicationDrag(bool canceled, bool success) noexcept {
+    GdkDrag* platform_drag = std::exchange(platform_drag_, nullptr);
+    if (!platform_drag) return;
+    pressed_buttons_ = PointerButton::None;
+    suppress_pointer_release_ = false;
+    g_signal_handlers_disconnect_by_data(platform_drag, this);
+    const auto* retained = static_cast<std::shared_ptr<WindowDrag>*>(
+        g_object_get_data(G_OBJECT(platform_drag), application_drag_data));
+    auto drag = retained ? *retained : nullptr;
+    g_object_set_data(G_OBJECT(platform_drag), application_drag_data, nullptr);
+    gdk_drag_drop_done(platform_drag, success);
+    g_object_unref(platform_drag);
+    if (drag) {
+      try {
+        drag->Finish(canceled);
+      } catch (...) {
+        static_cast<LinuxRuntime&>(ApplicationRuntime()).ReportFailure(std::current_exception());
+      }
+    }
+  }
+
+  static void ApplicationDragCanceled(GdkDrag*, GdkDragCancelReason reason, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    self.EndApplicationDrag(reason != GDK_DRAG_CANCEL_NO_TARGET, false);
+  }
+
+  static void ApplicationDragFinished(GdkDrag*, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    self.EndApplicationDrag(false, true);
+  }
+
+  static gboolean ApplicationDragAccepted(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
+    if (!gdk_content_formats_contain_mime_type(gdk_drop_get_formats(drop), application_drag_format)) return FALSE;
+    const auto drag = LocalApplicationDrag(drop);
+    return static_cast<LinuxUiWindow*>(data)->IsInitialized() && drag && drag->Active();
+  }
+
+  static GdkDragAction ApplicationDragMoved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    try {
+      const auto drag = LocalApplicationDrag(drop);
+      if (drag && drag->Move(self, {static_cast<float>(x), static_cast<float>(y)})) return GDK_ACTION_COPY;
+    } catch (...) {
+      static_cast<LinuxRuntime&>(self.ApplicationRuntime()).ReportFailure(std::current_exception());
+    }
+    return static_cast<GdkDragAction>(0);
+  }
+
+  static void ApplicationDragLeft(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    try {
+      if (const auto drag = LocalApplicationDrag(drop)) drag->Leave(self);
+    } catch (...) {
+      static_cast<LinuxRuntime&>(self.ApplicationRuntime()).ReportFailure(std::current_exception());
+    }
+  }
+
+  static gboolean ApplicationDragDropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    GdkDragAction action{};
+    try {
+      const auto drag = LocalApplicationDrag(drop);
+      if (drag && drag->Drop(self, {static_cast<float>(x), static_cast<float>(y)})) action = GDK_ACTION_COPY;
+    } catch (...) {
+      static_cast<LinuxRuntime&>(self.ApplicationRuntime()).ReportFailure(std::current_exception());
+    }
+    // A compositor may still deliver a drop after the local session has ended. Acknowledge both outcomes
+    // outside the GTK dispatch because finishing the drop can complete the source synchronously.
+    using PendingDrop = std::pair<GdkDrop*, GdkDragAction>;
+    g_idle_add_full(G_PRIORITY_DEFAULT, [](gpointer value) -> gboolean {
+      const auto& [drop, action] = *static_cast<PendingDrop*>(value);
+      gdk_drop_finish(drop, action);
+      return G_SOURCE_REMOVE;
+    }, new PendingDrop(g_object_ref(drop), action), [](gpointer value) {
+      auto* pending = static_cast<PendingDrop*>(value);
+      g_object_unref(pending->first);
+      delete pending;
+    });
+    return TRUE;
   }
 
   static gboolean PointerEventReceived(GtkEventControllerLegacy*, GdkEvent* event, gpointer data) {
@@ -2532,7 +2611,7 @@ private:
   static void PointerCanceled(GtkGesture*, GdkEventSequence*, gpointer data) {
     auto& self = *static_cast<LinuxUiWindow*>(data);
     ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    if (self.native_drag_) return;
+    if (self.platform_drag_) return;
     if (self.RoutePointerToHuxerUI(self.last_pointer_position_, PointerEventType::Cancel)) {
       self.CancelPointer();
     }
@@ -2638,6 +2717,10 @@ private:
     if (self.platform_views_ && self.platform_views_->HasPlatformFocus()) {
       return FALSE;
     }
+    if (key_value == GDK_KEY_Escape && self.platform_drag_) {
+      self.CancelApplicationDrag();
+      return TRUE;
+    }
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
     const LinuxKeyPressResult press =
         self.key_tracker_.Press(key_code, self.text_input_.FilterKeyEvent(event));
@@ -2679,14 +2762,10 @@ private:
   GtkWidget* drawing_area_ = nullptr;
   bool touchpad_scroll_active_ = false;
   GdkToplevel* toplevel_ = nullptr;
-  gulong toplevel_state_handler_ = 0;
   LinuxRenderer renderer_;
   LinuxTextInput text_input_;
   std::unique_ptr<LinuxPlatformViews> platform_views_;
   std::unique_ptr<LinuxFileDrop> file_drop_;
-  GdkDevice* pointer_device_ = nullptr;
-  GdkDrag* native_drag_ = nullptr;
-  std::shared_ptr<WindowDrag> native_transfer_;
   FrameCoordinator frame_coordinator_;
   const RenderFrame* committed_frame_ = nullptr;
   guint frame_source_ = 0;
@@ -2708,8 +2787,11 @@ private:
   bool input_passthrough_ = false;
   std::optional<Size> minimum_size_;
   guint32 pointer_press_time_ = 0;
+  bool borderless_ = false;
   float custom_title_bar_height_ = 0.0F;
   PointerButton pressed_buttons_ = PointerButton::None;
+  GdkDevice* pointer_device_ = nullptr;
+  GdkDrag* platform_drag_ = nullptr;
   bool suppress_pointer_release_ = false;
   Point last_pointer_position_;
   // Shared pointer routing only republishes changed requests, so retain the cursor hidden by resize feedback.

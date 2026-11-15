@@ -40,6 +40,7 @@
 #include "application/application_internal.h"
 #include "application/platform_frame_internal.h"
 #include "resources/resource_internal.h"
+#include "runtime/gesture_internal.h"
 #include "text/text_internal.h"
 #include "application/window_internal.h"
 #include "internal_access.h"
@@ -124,10 +125,7 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
 
 } // namespace
 
-@interface HuxerUIWindow : NSWindow {
-@public
-  huxerui::detail::MacUiWindow* huxeruiWindow;
-}
+@interface HuxerUIWindow : NSWindow
 @end
 
 /// Hosts passive-display and utility windows. NSPanel carries the nonactivating window style that keeps pointer input
@@ -139,7 +137,7 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
 }
 @end
 
-@interface HuxerUIView : NSView {
+@interface HuxerUIView : NSView <NSDraggingSource> {
 @public
   huxerui::detail::MacUiWindow* huxeruiWindow;
   NSPoint huxeruiPointerPosition;
@@ -148,6 +146,9 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
   __strong NSCursor* huxeruiPointerCursor;
   std::uint64_t huxeruiFileDropSession;
   BOOL huxeruiFileDropHover;
+  __strong NSEvent* huxeruiDragPress;
+  std::shared_ptr<huxerui::detail::WindowDrag> huxeruiOutgoingDrag;
+  std::shared_ptr<huxerui::detail::WindowDrag> huxeruiIncomingDrag;
 }
 - (void)sendPointerEvent:(NSEvent*)event type:(huxerui::PointerEventType)type;
 - (BOOL)sendKeyEvent:(NSEvent*)event type:(huxerui::KeyEventType)type;
@@ -277,84 +278,79 @@ void SetMacWindowAttachment(NSWindow* window, MacUiWindow* attached) {
 
 namespace {
 
-NSPasteboardType MacClipboardType(NSPasteboard* pasteboard, ClipboardKind kind) {
-  switch (kind) {
-  case ClipboardKind::Text: return [pasteboard availableTypeFromArray:@[NSPasteboardTypeString]];
-  case ClipboardKind::RichText:
-    return [pasteboard availableTypeFromArray:@[NSPasteboardTypeHTML, NSPasteboardTypeString]];
-  case ClipboardKind::Image:
-    return [pasteboard availableTypeFromArray:@[NSPasteboardTypePNG, @"public.jpeg", NSPasteboardTypeTIFF]];
-  case ClipboardKind::Files: return [pasteboard availableTypeFromArray:@[NSPasteboardTypeFileURL]];
-  }
-  return nil;
-}
-
 NSString* MacClipboardString(std::string_view text) {
   return [[NSString alloc] initWithBytes:text.data() length:text.size() encoding:NSUTF8StringEncoding];
 }
 
-bool WriteMacClipboard(NSPasteboard* pasteboard, const ClipboardContent& content) {
-  return std::visit([&](const auto& value) -> bool {
-    using T = std::decay_t<decltype(value)>;
-    NSPasteboardItem* item = [[NSPasteboardItem alloc] init];
-    if constexpr (std::is_same_v<T, std::string>) {
-      NSString* text = MacClipboardString(value);
-      if (!text || ![item setString:text forType:NSPasteboardTypeString]) return false;
-    } else if constexpr (std::is_same_v<T, AttributedText>) {
-      const auto fragment = ClipboardHtml(value);
-      if (fragment.empty() && !value.PlainText().empty()) return false;
-      NSString* html = MacClipboardString(fragment);
-      NSString* text = MacClipboardString(value.PlainText());
-      if (!html || !text || ![item setString:html forType:NSPasteboardTypeHTML] ||
-          ![item setString:text forType:NSPasteboardTypeString]) return false;
-    } else if constexpr (std::is_same_v<T, ImageAsset>) {
-      const auto bytes = value.EncodedBytes();
-      NSData* data = [NSData dataWithBytes:bytes.data() length:bytes.size()];
-      NSPasteboardType type = value.Format() == ImageFormat::Png ? NSPasteboardTypePNG : @"public.jpeg";
-      if (!data || ![item setData:data forType:type]) return false;
-    } else {
-      const auto files = ClipboardFilePaths(content);
-      if (!files) return false;
-      NSMutableArray<NSURL*>* urls = [NSMutableArray arrayWithCapacity:files->size()];
-      for (const auto& file : *files) {
-        NSString* path = MacClipboardString(file.Path());
-        if (!path) return false;
-        [urls addObject:[NSURL fileURLWithPath:path]];
-      }
-      [pasteboard clearContents];
-      return [pasteboard writeObjects:urls] == YES;
-    }
-    [pasteboard clearContents];
-    return [pasteboard writeObjects:@[item]] == YES;
-  }, content);
+bool WriteMacClipboardItem(NSPasteboard* pasteboard, const ClipboardItem& content) {
+  if (!pasteboard) return false;
+  NSPasteboardItem* item = [[NSPasteboardItem alloc] init];
+  if (content.text) {
+    NSString* text = MacClipboardString(*content.text);
+    if (!text || ![item setString:text forType:NSPasteboardTypeString]) return false;
+  }
+  if (content.html) {
+    NSString* html = MacClipboardString(*content.html);
+    if (!html || ![item setString:html forType:NSPasteboardTypeHTML]) return false;
+  }
+  if (content.image) {
+    const auto bytes = content.image->EncodedBytes();
+    NSData* data = [NSData dataWithBytes:bytes.data() length:bytes.size()];
+    NSPasteboardType type = content.image->Format() == ImageFormat::Png ? NSPasteboardTypePNG : @"public.jpeg";
+    if (!data || ![item setData:data forType:type]) return false;
+  }
+  for (const auto& [mime, bytes] : content.custom_formats) {
+    NSString* type = MacClipboardString(ClipboardTypeIdentifier(mime));
+    NSData* data = [NSData dataWithBytes:bytes.data() length:bytes.size()];
+    if (!type || !data || ![item setData:data forType:type]) return false;
+  }
+  [pasteboard clearContents];
+  return [pasteboard writeObjects:@[item]] == YES;
 }
 
-IoResult<ClipboardContent> ReadMacClipboardFiles(NSPasteboard* pasteboard) {
+bool WriteMacClipboardFiles(NSPasteboard* pasteboard, const ClipboardFiles& content) {
+  if (!pasteboard) return false;
+  const auto files = ClipboardFilePaths(content);
+  if (!files) return false;
+  NSMutableArray<NSURL*>* urls = [NSMutableArray arrayWithCapacity:files->size()];
+  for (const auto& file : *files) {
+    NSString* path = MacClipboardString(file.Path());
+    if (!path) return false;
+    [urls addObject:[NSURL fileURLWithPath:path]];
+  }
+  [pasteboard clearContents];
+  return [pasteboard writeObjects:urls] == YES;
+}
+
+using MacClipboardFiles = std::vector<FileReference>;
+
+IoResult<MacClipboardFiles> ReadMacClipboardFiles(NSPasteboard* pasteboard) {
+  if (!pasteboard) return ClipboardFailure<MacClipboardFiles>(IoErrorCode::Unsupported);
   const NSInteger revision = pasteboard.changeCount;
   std::size_t expected = 0;
   for (NSPasteboardItem* item in pasteboard.pasteboardItems) {
     if ([item.types containsObject:NSPasteboardTypeFileURL]) ++expected;
   }
-  if (expected > clipboard_max_files) return ClipboardFailure(IoErrorCode::TooLarge);
+  if (expected == 0) return ClipboardFailure<MacClipboardFiles>(IoErrorCode::NotFound);
+  if (expected > clipboard_max_files) return ClipboardFailure<MacClipboardFiles>(IoErrorCode::TooLarge);
   NSArray<NSURL*>* urls = [pasteboard readObjectsForClasses:@[NSURL.class]
                                                   options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
-  if (pasteboard.changeCount != revision || urls.count == 0 || urls.count != expected) {
-    return ClipboardFailure(IoErrorCode::Io);
-  }
-  std::vector<FileReference> files;
+  if (pasteboard.changeCount != revision) return IoResult<MacClipboardFiles>::Failure(ClipboardChangedError());
+  if (urls.count != expected) return ClipboardFailure<MacClipboardFiles>(IoErrorCode::Io);
+  MacClipboardFiles files;
   files.reserve(urls.count);
   try {
     for (NSURL* url in urls) {
       auto file = MakeMacFileReference(url, false);
       if (file.Type() != FileType::File && file.Type() != FileType::Directory) {
-        return ClipboardFailure(IoErrorCode::Unsupported);
+        return ClipboardFailure<MacClipboardFiles>(IoErrorCode::Unsupported);
       }
       files.push_back(std::move(file));
     }
   } catch (const std::exception&) {
-    return ClipboardFailure(IoErrorCode::Io);
+    return ClipboardFailure<MacClipboardFiles>(IoErrorCode::Io);
   }
-  return IoResult<ClipboardContent>::Success(ClipboardContent{std::move(files)});
+  return IoResult<MacClipboardFiles>::Success(std::move(files));
 }
 
 Bytes MacClipboardBytes(NSData* data) {
@@ -363,57 +359,103 @@ Bytes MacClipboardBytes(NSData* data) {
   return bytes;
 }
 
-Task<IoResult<ClipboardContent>> DecodeMacClipboardImageAsync(Bytes bytes) {
+Task<IoResult<ImageAsset>> DecodeMacClipboardImageAsync(Bytes bytes) {
   co_return co_await RunWorker([bytes = std::move(bytes)] {
     @autoreleasepool {
       NSData* data = [NSData dataWithBytes:bytes.data() length:bytes.size()];
       CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, nullptr);
-      if (!source) return ClipboardFailure(IoErrorCode::InvalidEncoding);
+      if (!source) return ClipboardFailure<ImageAsset>(IoErrorCode::InvalidEncoding);
       NSDictionary* properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr));
       const auto width = [properties[(__bridge NSString*)kCGImagePropertyPixelWidth] unsignedLongLongValue];
       const auto height = [properties[(__bridge NSString*)kCGImagePropertyPixelHeight] unsignedLongLongValue];
       CGImageRef image = ClipboardImageSizeAllowed(width, height)
           ? CGImageSourceCreateImageAtIndex(source, 0, nullptr) : nullptr;
       CFRelease(source);
-      if (!image) return ClipboardFailure(width && height ? IoErrorCode::TooLarge : IoErrorCode::InvalidEncoding);
+      if (!image) {
+        return ClipboardFailure<ImageAsset>(width && height ? IoErrorCode::TooLarge : IoErrorCode::InvalidEncoding);
+      }
       NSMutableData* png = [NSMutableData data];
       CGImageDestinationRef destination =
           CGImageDestinationCreateWithData((__bridge CFMutableDataRef)png, CFSTR("public.png"), 1, nullptr);
       if (!destination) {
         CGImageRelease(image);
-        return ClipboardFailure(IoErrorCode::Io);
+        return ClipboardFailure<ImageAsset>(IoErrorCode::Io);
       }
       CGImageDestinationAddImage(destination, image, nullptr);
       const bool written = CGImageDestinationFinalize(destination);
       CFRelease(destination);
       CGImageRelease(image);
-      if (!written) return ClipboardFailure(IoErrorCode::Io);
-      if (png.length > clipboard_max_image_bytes) return ClipboardFailure(IoErrorCode::TooLarge);
+      if (!written) return ClipboardFailure<ImageAsset>(IoErrorCode::Io);
+      if (png.length > clipboard_max_image_bytes) return ClipboardFailure<ImageAsset>(IoErrorCode::TooLarge);
       return ClipboardImage(MacClipboardBytes(png));
     }
   });
 }
 
-Task<IoResult<ClipboardContent>> ReadMacClipboardAsync(NSPasteboard* pasteboard, ClipboardKind kind) {
-  const auto type = MacClipboardType(pasteboard, kind);
-  if (!type) return ClipboardResult(ClipboardFailure(IoErrorCode::NotFound));
-  if (kind == ClipboardKind::Files) return ClipboardResult(ReadMacClipboardFiles(pasteboard));
-  if (kind == ClipboardKind::Image) {
-    NSData* data = [pasteboard dataForType:type];
-    if (!data) return ClipboardResult(ClipboardFailure(IoErrorCode::Io));
-    if (data.length > clipboard_max_image_bytes) return ClipboardResult(ClipboardFailure(IoErrorCode::TooLarge));
-    if ([type isEqualToString:NSPasteboardTypeTIFF]) return DecodeMacClipboardImageAsync(MacClipboardBytes(data));
-    return ClipboardResult(ClipboardImage(MacClipboardBytes(data)));
-  }
-  NSString* value = [pasteboard stringForType:type];
-  if (!value) return ClipboardResult(ClipboardFailure(IoErrorCode::Io));
+IoResult<std::string> ReadMacClipboardString(NSPasteboardItem* item, NSPasteboardType type) {
+  NSString* value = [item stringForType:type];
+  if (!value) return ClipboardFailure<std::string>(IoErrorCode::Io);
   const auto length = [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-  if (length > clipboard_max_text_bytes) return ClipboardResult(ClipboardFailure(IoErrorCode::TooLarge));
+  if (length > clipboard_max_text_bytes) return ClipboardFailure<std::string>(IoErrorCode::TooLarge);
   const char* utf8 = value.UTF8String;
-  if (!utf8) return ClipboardResult(ClipboardFailure(IoErrorCode::InvalidEncoding));
-  std::string text(utf8, length);
-  if ([type isEqualToString:NSPasteboardTypeHTML]) return ClipboardResult(ReadClipboardHtml(text));
-  return ClipboardResult(IoResult<ClipboardContent>::Success(ClipboardContent{std::move(text)}));
+  if (!utf8) return ClipboardFailure<std::string>(IoErrorCode::InvalidEncoding);
+  return IoResult<std::string>::Success(std::string(utf8, length));
+}
+
+Task<IoResult<ClipboardItem>> ReadMacClipboardItem(NSPasteboard* pasteboard, const ClipboardReadOptions& options) {
+  if (!pasteboard) return ClipboardResult(ClipboardFailure(IoErrorCode::Unsupported));
+  const auto revision = pasteboard.changeCount;
+  NSArray<NSPasteboardType>* image_types = @[NSPasteboardTypePNG, @"public.jpeg", NSPasteboardTypeTIFF];
+  NSMutableArray<NSPasteboardType>* custom_types = [NSMutableArray arrayWithCapacity:options.custom_mime_types.size()];
+  for (const auto& mime : options.custom_mime_types) {
+    [custom_types addObject:MacClipboardString(ClipboardTypeIdentifier(mime))];
+  }
+  for (NSPasteboardItem* source in pasteboard.pasteboardItems) {
+    const bool text = options.text && [source.types containsObject:NSPasteboardTypeString];
+    const bool html = options.html && [source.types containsObject:NSPasteboardTypeHTML];
+    NSPasteboardType image_type = options.image ? [source availableTypeFromArray:image_types] : nil;
+    if (!text && !html && !image_type && ![source availableTypeFromArray:custom_types]) continue;
+    ClipboardItemRead item;
+    if (text) item.SetText(&ClipboardItem::text, ReadMacClipboardString(source, NSPasteboardTypeString));
+    if (html) item.SetText(&ClipboardItem::html, ReadMacClipboardString(source, NSPasteboardTypeHTML));
+    for (std::size_t index = 0; index < options.custom_mime_types.size(); ++index) {
+      NSPasteboardType type = custom_types[index];
+      if (![source.types containsObject:type]) continue;
+      NSData* data = [source dataForType:type];
+      if (!data) item.RecordError(ClipboardError(IoErrorCode::Io));
+      else if (data.length > item.RemainingCustomBytes()) item.RecordError(ClipboardError(IoErrorCode::TooLarge));
+      else item.SetCustom(options.custom_mime_types[index], IoResult<Bytes>::Success(MacClipboardBytes(data)));
+    }
+    std::optional<Task<IoResult<ImageAsset>>> image;
+    if (image_type) {
+      NSData* data = [source dataForType:image_type];
+      if (!data) {
+        item.RecordError(ClipboardError(IoErrorCode::Io));
+      } else if (data.length > clipboard_max_image_bytes) {
+        item.RecordError(ClipboardError(IoErrorCode::TooLarge));
+      } else if ([image_type isEqualToString:NSPasteboardTypeTIFF]) {
+        image = DecodeMacClipboardImageAsync(MacClipboardBytes(data));
+      } else {
+        item.SetImage(ClipboardImage(MacClipboardBytes(data)));
+      }
+    }
+    if (pasteboard.changeCount != revision) {
+      return ClipboardResult(IoResult<ClipboardItem>::Failure(ClipboardChangedError()));
+    }
+    return FinishClipboardItemRead(std::move(item), std::move(image));
+  }
+  if (pasteboard.changeCount != revision) {
+    return ClipboardResult(IoResult<ClipboardItem>::Failure(ClipboardChangedError()));
+  }
+  return ClipboardResult(ClipboardFailure(IoErrorCode::NotFound));
+}
+
+NSString* const application_drag_type = @"org.huxerui.application-drag";
+
+std::shared_ptr<WindowDrag> LocalApplicationDrag(id<NSDraggingInfo> sender) {
+  id source = sender.draggingSource;
+  if (![source isKindOfClass:HuxerUIView.class]) return {};
+  return ((HuxerUIView*)source)->huxeruiOutgoingDrag;
 }
 
 } // namespace
@@ -674,21 +716,31 @@ public:
     return [pasteboard setString:value forType:NSPasteboardTypeString] == YES;
   }
 
-  bool WriteContent(ClipboardContent content) override {
-    if (!WriteMacClipboard([NSPasteboard generalPasteboard], content)) return false;
+  bool WriteItem(ClipboardItem item) override {
+    if (!WriteMacClipboardItem([NSPasteboard generalPasteboard], item)) return false;
     clipboard_references_.clear();
-    if (auto* references = std::get_if<std::vector<FileReference>>(&content)) {
+    return true;
+  }
+
+  Task<IoResult<ClipboardItem>> ReadItemAsync(ClipboardReadOptions options) override {
+    return ReadMacClipboardItem([NSPasteboard generalPasteboard], options);
+  }
+
+  bool WriteFiles(ClipboardFiles files) override {
+    if (!WriteMacClipboardFiles([NSPasteboard generalPasteboard], files)) return false;
+    clipboard_references_.clear();
+    if (auto* references = std::get_if<std::vector<FileReference>>(&files)) {
       clipboard_references_ = std::move(*references);
     }
     return true;
   }
 
-  Task<IoResult<ClipboardContent>> ReadContentAsync(ClipboardKind kind) override {
-    return ReadMacClipboardAsync([NSPasteboard generalPasteboard], kind);
+  Task<IoResult<MacClipboardFiles>> ReadFilesAsync() override {
+    return ClipboardResult(ReadMacClipboardFiles([NSPasteboard generalPasteboard]));
   }
 
-  bool MayHaveContent(ClipboardKind kind) const noexcept override {
-    return MacClipboardType([NSPasteboard generalPasteboard], kind) != nil;
+  bool MayHaveText() const noexcept override {
+    return [[NSPasteboard generalPasteboard] availableTypeFromArray:@[NSPasteboardTypeString]] != nil;
   }
 
 private:
@@ -771,12 +823,19 @@ public:
       utility_window_ = options.presentation == WindowPresentation::Utility;
       transparent_surface_ = options.transparent_surface;
       passive_display_ = options.show_without_activation;
+      activatable_ = !options.show_without_activation;
       custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
+      borderless_ = options.chrome_mode == WindowChromeMode::None;
       custom_title_bar_height_ = options.title_bar_height;
       minimum_size_ = options.minimum_size;
       renderer_->SetTransparentSurface(transparent_surface_);
-      NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
-                                NSWindowStyleMaskResizable;
+      NSWindowStyleMask style = NSWindowStyleMaskBorderless;
+      if (!borderless_) {
+        style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+        if (options.resizable) style |= NSWindowStyleMaskResizable;
+      } else if (options.resizable) {
+        style |= NSWindowStyleMaskResizable;
+      }
       if (custom_chrome_) {
         style |= NSWindowStyleMaskFullSizeContentView;
       }
@@ -847,7 +906,7 @@ public:
       SetMacWindowAttachment(window_, this);
       delegate_->huxeruiWindow = this;
       view_->huxeruiWindow = this;
-      [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+      [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL, application_drag_type]];
       [NSNotificationCenter.defaultCenter addObserver:view_
                                              selector:@selector(resourceConfigurationDidChange:)
                                                  name:NSCurrentLocaleDidChangeNotification
@@ -875,9 +934,12 @@ public:
     [view_ draggingExited:nil];
     if (view_ != nil) {
       view_->huxeruiWindow = nullptr;
+      view_->huxeruiOutgoingDrag.reset();
+      view_->huxeruiDragPress = nil;
     }
     if (window_ != nil) SetMacWindowAttachment(window_, nullptr);
     window_drag_event_ = nil;
+    if (delegate_ != nil) delegate_->huxeruiWindow = nullptr;
     [frame_scheduler_ shutdown];
     frame_scheduler_ = nil;
     scheduled_frame_deadline_.reset();
@@ -976,6 +1038,26 @@ public:
     }
   }
 
+  bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
+    if (view_ == nil || view_->huxeruiOutgoingDrag || !view_->huxeruiDragPress ||
+        !(NSEvent.pressedMouseButtons & 1U)) return false;
+    NSPasteboardItem* marker = [[NSPasteboardItem alloc] init];
+    if (![marker setData:NSData.data forType:application_drag_type]) return false;
+    NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:marker];
+    const NSPoint point = [view_ convertPoint:view_->huxeruiDragPress.locationInWindow fromView:nil];
+    NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(1, 1)];
+    [item setDraggingFrame:NSMakeRect(point.x, point.y, 1, 1) contents:image];
+    view_->huxeruiOutgoingDrag = std::move(drag);
+    NSDraggingSession* session = [view_ beginDraggingSessionWithItems:@[item] event:view_->huxeruiDragPress source:view_];
+    if (session == nil) {
+      view_->huxeruiOutgoingDrag.reset();
+      return false;
+    }
+    session.animatesToStartingPositionsOnCancelOrFail = NO;
+    view_->huxeruiDragPress = nil;
+    return true;
+  }
+
   void RequestFrameAt(double deadline) override {
     if (const std::optional<double> scheduled =
             frame_coordinator_.Request(deadline, Now(), frame_scheduler_ != nil && view_ != nil)) {
@@ -1027,10 +1109,15 @@ public:
       RequestFullscreen(false);
       break;
     case WindowCommand::Close:
-      CloseWindow();
+      if (borderless_) {
+        [window_ close];
+      } else {
+        CloseWindow();
+      }
       break;
     case WindowCommand::Show:
-      [window_ orderFront:nil];
+      if (activatable_) [window_ orderFront:nil];
+      else [window_ orderFrontRegardless];
       break;
     case WindowCommand::Hide:
       [window_ orderOut:nil];
@@ -1101,7 +1188,8 @@ public:
   }
 
   bool BeginWindowDrag(NSEvent* event) {
-    if (input_blocked_ || !custom_chrome_ || !IsInitialized() || view_ == nil || window_ == nil || event == nil) {
+    if (input_blocked_ || (!custom_chrome_ && !borderless_) || !IsInitialized() || view_ == nil || window_ == nil ||
+        event == nil || (window_.styleMask & NSWindowStyleMaskFullScreen) != 0) {
       return false;
     }
     const NSPoint point = [view_ convertPoint:event.locationInWindow fromView:nil];
@@ -1285,8 +1373,8 @@ public:
   }
 
   void DrawCommittedFrame(CGContextRef context, NSRect dirty_rect) {
-    if (const auto deadline =
-            platform_views_->DrawBase(context, NSRectToCGRect(dirty_rect), frame_scheduler_ != nil && view_ != nil)) {
+    if (const auto deadline = platform_views_->DrawBase(context, NSRectToCGRect(dirty_rect), window_.opaque,
+                                                       frame_scheduler_ != nil && view_ != nil)) {
       ScheduleFrame(*deadline);
     }
   }
@@ -1582,6 +1670,8 @@ private:
   bool passive_display_ = false;
   bool input_passthrough_ = false;
   std::optional<Size> minimum_size_;
+  bool borderless_ = false;
+  bool activatable_ = true;
   float custom_title_bar_height_ = 0.0F;
   __strong NSWindow* window_ = nil;
   __strong HuxerUIView* view_ = nil;
@@ -1664,6 +1754,14 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 @implementation HuxerUIWindow
 
+- (BOOL)canBecomeKeyWindow {
+  return (self.styleMask & NSWindowStyleMaskTitled) == 0 || [super canBecomeKeyWindow];
+}
+
+- (BOOL)canBecomeMainWindow {
+  return (self.styleMask & NSWindowStyleMaskTitled) == 0 || [super canBecomeMainWindow];
+}
+
 - (void)sendEvent:(NSEvent*)event {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
@@ -1743,6 +1841,25 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 @implementation HuxerUIView
 
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+  HUXERUI_UNUSED(session);
+  return context == NSDraggingContextWithinApplication && huxeruiOutgoingDrag && huxeruiOutgoingDrag->Active()
+             ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {
+  HUXERUI_UNUSED(session);
+  HUXERUI_UNUSED(point);
+  HUXERUI_UNUSED(operation);
+  auto drag = std::exchange(huxeruiOutgoingDrag, {});
+  if (drag) {
+    huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
+        huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+    try { drag->Finish(false); } catch (...) {}
+  }
+}
+
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
@@ -1752,6 +1869,17 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     return NSDragOperationNone;
   }
   const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
+  if (auto drag = huxerui::detail::LocalApplicationDrag(sender)) {
+    huxeruiIncomingDrag = drag;
+    try {
+      return drag->Move(*huxeruiWindow, {static_cast<float>(position.x), static_cast<float>(position.y)})
+                 ? NSDragOperationCopy : NSDragOperationNone;
+    } catch (...) {
+      [self draggingExited:nil];
+      return NSDragOperationNone;
+    }
+  }
+  if (![sender.draggingPasteboard.types containsObject:NSPasteboardTypeFileURL]) return NSDragOperationNone;
   huxeruiFileDropHover = YES;
   ++huxeruiFileDropSession;
   try {
@@ -1773,6 +1901,16 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     [self draggingExited:nil];
     return NSDragOperationNone;
   }
+  if (const auto drag = huxeruiIncomingDrag; drag && huxeruiWindow != nullptr) {
+    const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
+    try {
+      return drag->Move(*huxeruiWindow, {static_cast<float>(position.x), static_cast<float>(position.y)})
+                 ? NSDragOperationCopy : NSDragOperationNone;
+    } catch (...) {
+      [self draggingExited:nil];
+      return NSDragOperationNone;
+    }
+  }
   if (!huxeruiFileDropHover) {
     return [self draggingEntered:sender];
   }
@@ -1790,6 +1928,9 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)draggingExited:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+  if (auto drag = std::exchange(huxeruiIncomingDrag, {}); drag && huxeruiWindow != nullptr) {
+    try { drag->Leave(*huxeruiWindow); } catch (...) {}
+  }
   if (huxeruiFileDropHover && huxeruiWindow != nullptr) {
     huxeruiFileDropHover = NO;
     try {
@@ -1802,6 +1943,15 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+  if (auto drag = std::exchange(huxeruiIncomingDrag, {})) {
+    if (huxeruiWindow == nullptr || huxerui::detail::LocalApplicationDrag(sender) != drag) return NO;
+    const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
+    try {
+      return drag->Drop(*huxeruiWindow, {static_cast<float>(position.x), static_cast<float>(position.y)});
+    } catch (...) {
+      return NO;
+    }
+  }
   if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() || !huxeruiFileDropHover ||
       !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     [self draggingExited:nil];
@@ -2042,6 +2192,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     return;
   }
   huxeruiWindow->CaptureWindowDragEvent(nil);
+  huxeruiDragPress = nil;
+  if (huxeruiOutgoingDrag) return;
   huxeruiWindow->SendPointer({
       huxerui::PointerEventType::Cancel,
       0,
@@ -2065,6 +2217,10 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   return huxeruiWindow->SendKey(huxerui::detail::MakeMacKeyEvent(event, type));
 }
 
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
+  return [self.window isKindOfClass:HuxerUIPanel.class] || [super acceptsFirstMouse:event];
+}
+
 - (void)mouseDown:(NSEvent*)event {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
@@ -2074,7 +2230,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
       return;
     }
   }
-  [self.window makeFirstResponder:self];
+  huxeruiDragPress = event;
+  if (self.window.canBecomeKeyWindow) [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
 
@@ -2092,12 +2249,13 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 - (void)mouseUp:(NSEvent*)event {
   if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(nil);
+  huxeruiDragPress = nil;
   [self sendPointerEvent:event type:huxerui::PointerEventType::Up];
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
   if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(event);
-  [self.window makeFirstResponder:self];
+  if (self.window.canBecomeKeyWindow) [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
 
@@ -2112,7 +2270,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 - (void)otherMouseDown:(NSEvent*)event {
   if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(event);
-  [self.window makeFirstResponder:self];
+  if (self.window.canBecomeKeyWindow) [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
 

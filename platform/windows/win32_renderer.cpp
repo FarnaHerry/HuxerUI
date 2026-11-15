@@ -6,7 +6,16 @@
 #include <d2d1effects.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
+#if defined(HUXERUI_WINDOWS_7_COMPAT)
+// Expose the SDK declarations for runtime-loaded DirectComposition.
+#pragma push_macro("NTDDI_VERSION")
+#undef NTDDI_VERSION
+#define NTDDI_VERSION NTDDI_WIN8
+#endif
 #include <dcomp.h>
+#if defined(HUXERUI_WINDOWS_7_COMPAT)
+#pragma pop_macro("NTDDI_VERSION")
+#endif
 #include <dwrite.h>
 #include <dxgi1_2.h>
 #include <wincodec.h>
@@ -1460,7 +1469,7 @@ struct Win32Renderer::Impl {
       return false;
     }
     if (!EnsureDirectComposition()) {
-      throw std::logic_error("HuxerUI Windows PlatformView requires unavailable DirectComposition");
+      throw std::runtime_error("HuxerUI could not initialize DirectComposition for a Windows window");
     }
     RECT client{};
     GetClientRect(window_, &client);
@@ -3400,8 +3409,10 @@ std::vector<std::uint32_t> Win32Renderer::ReadPixels() {
   return pixels;
 }
 
-void Win32Renderer::Initialize() {
+void Win32Renderer::Initialize(bool transparent) {
   impl_->InitializeFactories();
+  impl_->transparent_surface_ = transparent;
+  impl_->platform_composition_ = transparent;
 }
 
 void Win32Renderer::SetTransparentSurface(bool transparent) {

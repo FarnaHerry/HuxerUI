@@ -72,7 +72,8 @@ export namespace huxerui {
     using huxerui::ClipChildren;
     using huxerui::ClipShape;
     using huxerui::Clipboard;
-    using huxerui::ClipboardContent;
+    using huxerui::ClipboardItem;
+    using huxerui::ClipboardReadOptions;
     using huxerui::Color;
     using huxerui::ColorScheme;
     using huxerui::Column;
@@ -104,6 +105,9 @@ export namespace huxerui {
     using huxerui::DockItem;
     using huxerui::DockLayout;
     using huxerui::DockPlacement;
+    using huxerui::DockTabBarContext;
+    using huxerui::DockTabBarItem;
+    using huxerui::DockTransferRequest;
     using huxerui::DockTree;
     using huxerui::DragDropResult;
     using huxerui::DragDropScope;
