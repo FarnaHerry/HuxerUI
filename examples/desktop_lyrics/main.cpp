@@ -42,7 +42,7 @@ View LyricsOverlay(State<std::size_t> line) {
 
 View App() {
   const auto application = UseApplication();
-  const auto support = application.WindowSupport();
+  const auto support = UseWindow().Capabilities();
   auto overlay = UseState(std::optional<WindowHandle>{});
   auto line = UseState(std::size_t{0});
   auto on_top = UseState(false);
@@ -67,13 +67,13 @@ View App() {
         overlay = application.OpenWindow([line] { return LyricsOverlay(line); }, {
             .title = "Lyrics overlay",
             .initial_size = {540.0F, 140.0F},
-            .chrome_mode = WindowChromeMode::None,
-            .transparent_background = support.transparent_background,
-            .always_on_top = support.always_on_top,
-            .activatable = !support.non_activating,
+            .presentation = WindowPresentation::Utility,
+            .transparent_surface = support.transparent_surface,
+            .show_without_activation = support.passive_display,
+            .topmost = support.topmost,
             .resizable = false,
         });
-        on_top = support.always_on_top;
+        on_top = support.topmost;
         pass_through = false;
       }),
       Button("Next lyric").OnClick([line] {
@@ -89,13 +89,13 @@ View App() {
       Button(pass_through ? "Restore pointer input" : "Pass clicks through").OnClick([overlay, pass_through] {
         const std::optional<WindowHandle>& window = overlay;
         const bool enabled = !pass_through;
-        if (window && window->SetPointerPassThrough(enabled)) pass_through = enabled;
-      }).With(Enabled(open && support.pointer_pass_through)),
+        if (window && window->SetInputPassthrough(enabled) == WindowRequestResult::Submitted) pass_through = enabled;
+      }).With(Enabled(open && support.input_passthrough)),
       Button(on_top ? "Use ordinary level" : "Keep on top").OnClick([overlay, on_top] {
         const std::optional<WindowHandle>& window = overlay;
         const bool enabled = !on_top;
-        if (window && window->SetAlwaysOnTop(enabled)) on_top = enabled;
-      }).With(Enabled(open && support.always_on_top)),
+        if (window && window->SetTopmost(enabled) == WindowRequestResult::Submitted) on_top = enabled;
+      }).With(Enabled(open && support.topmost)),
     }.With(Spacing(10.0F)),
   }.With(Padding(24.0F), Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch));
 }

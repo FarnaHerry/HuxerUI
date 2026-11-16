@@ -340,11 +340,11 @@ Hidden windows count, while initial windowless startup, failed creation, and ret
 
 Use `WindowChromeMode::None` to open an undecorated window. Mark an area with `WindowDragRegion{}` to make it draggable. Interactive descendants still receive pointer input. Set `WindowOptions::resizable` to false to disable user resizing in windowed mode.
 
-`application.WindowSupport()` reports transparent backgrounds, always-on-top windows, non-activating windows, and whole-window pointer pass-through. Request supported behaviors through `WindowOptions`. With `transparent_background`, unpainted client pixels reveal the desktop and translucent content blends with the surface underneath. With `activatable = false`, showing the window and using its pointer controls retain the current keyboard focus. `Activate()` shows a non-activating window.
+`WindowPresentation::Utility` selects a borderless, non-resizable helper excluded from task switching. Combine it with `transparent_surface`, `show_without_activation`, and `topmost` as needed. `UseWindow().Capabilities()` reports the host's transparency, utility presentation, passive display, stacking, geometry, native move, and input-passthrough support.
 
-`window.SetAlwaysOnTop(enabled)` and `window.SetPointerPassThrough(enabled)` change the open window and return whether the host accepted the request. Enabling pass-through cancels current pointer interaction in that window. Keep a control in another window to restore pointer input.
+`WindowHandle::SetTopmost`, `SetInputPassthrough`, `SetPosition`, `SetClientSize`, and `BeginMove` return `WindowRequestResult`. `Submitted` means the host accepted the request, `Unavailable` reports an unsupported operation, `Rejected` reports native refusal, and `Disconnected` reports a retired attachment. Enabling input passthrough cancels current pointer interaction in that window; keep a control in another window to restore pointer input.
 
-Windows and macOS provide all four optional behaviors on supported windowing environments. The GTK backend queries display support for transparency and pointer pass-through. It reports always-on-top and non-activating support as false. The [desktop lyrics example](../../examples/desktop_lyrics/main.cpp) uses the available capabilities to configure its overlay.
+The [desktop lyrics example](../../examples/desktop_lyrics/main.cpp) uses the available capabilities to configure its overlay. Linux GTK reports backend-specific support for utility presentation, transparency, stacking, placement, and input passthrough; see [Floating utility windows](../design/window-chrome.md#floating-utility-windows).
 
 ## Runtime model
 

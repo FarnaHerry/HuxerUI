@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -124,7 +125,10 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
 
 } // namespace
 
-@interface HuxerUIWindow : NSWindow
+@interface HuxerUIWindow : NSWindow {
+@public
+  huxerui::detail::MacUiWindow* huxeruiWindow;
+}
 @end
 
 /// Hosts passive-display and utility windows. NSPanel carries the nonactivating window style that keeps pointer input
@@ -140,7 +144,6 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
 /// routing used by multi-window ownership and cross-window drag, while the overrides below refuse key/main status.
 @interface HuxerUINonActivatingPanel : HuxerUIPanel
 @end
-
 @interface HuxerUIView : NSView <NSDraggingSource> {
 @public
   huxerui::detail::MacUiWindow* huxeruiWindow;
@@ -500,14 +503,6 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
-  WindowCapabilities QueryWindowSupport() const noexcept override {
-    return {
-        .transparent_background = true,
-        .always_on_top = true,
-        .non_activating = true,
-        .pointer_pass_through = true,
-    };
-  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
 
   void UpdateWindows();
@@ -762,10 +757,12 @@ private:
       deferred_native_tasks_.push_back(std::move(task));
       return;
     }
-    try {
-      task();
-    } catch (...) {
-      ReportFailure(std::current_exception());
+    @autoreleasepool {
+      try {
+        task();
+      } catch (...) {
+        ReportFailure(std::current_exception());
+      }
     }
   }
 
@@ -833,10 +830,9 @@ public:
       utility_window_ = options.presentation == WindowPresentation::Utility;
       transparent_surface_ = options.transparent_surface;
       passive_display_ = options.show_without_activation;
-      input_passthrough_ = options.pointer_pass_through;
+      activatable_ = !options.show_without_activation;
       custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
       borderless_ = options.chrome_mode == WindowChromeMode::None;
-      activatable_ = options.activatable;
       custom_title_bar_height_ = options.title_bar_height;
       minimum_size_ = options.minimum_size;
       renderer_->SetTransparentSurface(transparent_surface_);
@@ -875,12 +871,6 @@ public:
       }
       if (window_ == nil) throw std::runtime_error("HuxerUI could not create an AppKit window");
       window_.releasedWhenClosed = NO;
-      if (options.transparent_background) {
-        window_.opaque = NO;
-        window_.backgroundColor = NSColor.clearColor;
-      }
-      if (options.always_on_top) window_.level = NSFloatingWindowLevel;
-      window_.ignoresMouseEvents = options.pointer_pass_through;
       if (options.minimum_size.has_value()) {
         window_.contentMinSize = NSMakeSize(options.minimum_size->width, options.minimum_size->height);
       }
@@ -930,7 +920,7 @@ public:
                                                object:nil];
       if (options.initial_position) ApplyWindowContentOrigin(*options.initial_position);
       else [window_ center];
-      if (!passive_display_ && activatable_) [window_ makeFirstResponder:view_];
+      if (!passive_display_) [window_ makeFirstResponder:view_];
       UiWindow::UpdateResourceConfiguration(Configuration());
       RefreshSystemTheme();
       UpdateWindowLifecycleState();
@@ -1130,8 +1120,7 @@ public:
       if (borderless_) {
         [window_ close];
       } else {
-        performing_close_ = true;
-        [window_ performClose:nil];
+        CloseWindow();
       }
       break;
     case WindowCommand::Show:
@@ -1150,20 +1139,6 @@ public:
     UpdateWindowLifecycleState();
   }
 
-  bool SetWindowAlwaysOnTop(bool enabled) override {
-    if (window_ == nil) return false;
-    window_.level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
-    return true;
-  }
-
-  bool SetWindowPointerPassThrough(bool enabled) override {
-    if (window_ == nil || (enabled && view_ != nil && view_->huxeruiOutgoingDrag)) return false;
-    if (window_.ignoresMouseEvents == enabled && input_passthrough_ == enabled) return true;
-    input_passthrough_ = enabled;
-    ApplyMouseEvents();
-    if (enabled) [view_ cancelPointer];
-    return true;
-  }
 
   void RequestFullscreen(bool fullscreen) override {
     if (!IsInitialized()) return;
@@ -1744,16 +1719,32 @@ void MacRuntime::UpdateWindows() {
 }
 
 int RunPlatformApplication(const Application& application) {
+  std::exception_ptr failure;
   @autoreleasepool {
-    MacRuntime runtime;
-    runtime.Start(application);
-    if (application.options.create_initial_window) {
-      UseApplication().OpenWindow(application.root_factory, application.options.window);
+    try {
+      MacRuntime runtime;
+      // Startup callbacks can autorelease windows before AppKit starts draining event-loop pools.
+      @autoreleasepool {
+        try {
+          runtime.Start(application);
+          if (application.options.create_initial_window) {
+            UseApplication().OpenWindow(application.root_factory, application.options.window);
+          }
+        } catch (...) {
+          failure = std::current_exception();
+        }
+      }
+      if (!failure) {
+        [NSApplication.sharedApplication run];
+        runtime.RethrowFailure();
+      }
+    } catch (...) {
+      // An exception escaping @autoreleasepool would bypass its drain.
+      failure = std::current_exception();
     }
-    [NSApplication.sharedApplication run];
-    runtime.RethrowFailure();
-    return 0;
   }
+  if (failure) std::rethrow_exception(failure);
+  return 0;
 }
 
 } // namespace huxerui::detail
@@ -1781,24 +1772,21 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)sendEvent:(NSEvent*)event {
-  id<NSWindowDelegate> delegate = self.delegate;
-  auto* window = [(id)delegate isKindOfClass:HuxerUIWindowDelegate.class]
-      ? ((HuxerUIWindowDelegate*)delegate)->huxeruiWindow : nullptr;
-  huxerui::detail::ExecutionGuard guard(window == nullptr ? nullptr :
-      huxerui::detail::InternalAccess::WindowExecution(*window));
+  huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
+      huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
   std::optional<huxerui::detail::MacNativeInputGuard> input_guard;
-  if (window != nullptr) {
-    if (window->IsInputBlocked()) return;
-    input_guard.emplace(window->NativeRuntime());
+  if (huxeruiWindow != nullptr) {
+    if (huxeruiWindow->IsInputBlocked()) return;
+    input_guard.emplace(huxeruiWindow->NativeRuntime());
   }
-  if (window == nullptr || !window->BeginPlatformViewFocusTraversal(event)) {
+  if (huxeruiWindow == nullptr || !huxeruiWindow->BeginPlatformViewFocusTraversal(event)) {
     [super sendEvent:event];
     return;
   }
   @try {
     [super sendEvent:event];
   } @finally {
-    window->EndPlatformViewFocusTraversal();
+    if (huxeruiWindow != nullptr) huxeruiWindow->EndPlatformViewFocusTraversal();
   }
 }
 
@@ -1862,8 +1850,13 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 @implementation HuxerUINonActivatingPanel
 
-- (BOOL)canBecomeKeyWindow { return NO; }
-- (BOOL)canBecomeMainWindow { return NO; }
+- (BOOL)canBecomeKeyWindow {
+  return NO;
+}
+
+- (BOOL)canBecomeMainWindow {
+  return NO;
+}
 
 @end
 
@@ -2219,6 +2212,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   if (huxeruiWindow == nullptr || !huxeruiWindow->IsInitialized()) {
     return;
   }
+
   huxeruiDragPress = nil;
   huxeruiWindow->CaptureWindowDragEvent(nil);
   if (huxeruiOutgoingDrag) return;
@@ -2246,7 +2240,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (BOOL)acceptsFirstMouse:(NSEvent*)event {
-  return [self.window isKindOfClass:HuxerUINonActivatingPanel.class] || [super acceptsFirstMouse:event];
+  return [self.window isKindOfClass:HuxerUIPanel.class] || [super acceptsFirstMouse:event];
 }
 
 - (void)mouseDown:(NSEvent*)event {

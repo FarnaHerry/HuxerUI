@@ -90,6 +90,9 @@ The application-facing contract and platform availability are documented in [Nat
 
 ## Shutdown and failure
 
+The macOS runner drains startup autoreleased objects before entering the AppKit event loop, and queued native tasks drain their own autorelease pools before returning.
+Startup and application-loop exceptions are captured inside the runner's pools and rethrown only after normal pool exit and Runtime teardown, so failure propagation does not bypass native reference release.
+
 Closing the last framework-owned window requests application shutdown when `AppOptions::quit_on_last_window_closed` is true, its default.
 Hidden and minimized windows still count; initially windowless startup, rejected creation, and external attachment retirement do not trigger this policy.
 Set the option to false to keep application services, timers, and activation available after the last Close and open windows later.

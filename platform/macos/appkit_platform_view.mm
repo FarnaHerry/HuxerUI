@@ -496,10 +496,10 @@ std::optional<double> AppKitPlatformViews::DrawBase(
   if (impl_->base_slice.has_value()) {
     const RenderSlice& slice = *impl_->base_slice;
     impl_->renderer->DrawSlice(context, dirty_rect, impl_->frame, slice.first_command, slice.command_count,
-        draw_background, impl_->root != nil ? NSRectToCGRect(impl_->root.bounds) : CGRectNull);
+                              draw_background, impl_->root != nil ? NSRectToCGRect(impl_->root.bounds) : CGRectNull);
   } else {
     impl_->renderer->DrawSlice(context, dirty_rect, impl_->frame, 0, 0, draw_background,
-        impl_->root != nil ? NSRectToCGRect(impl_->root.bounds) : CGRectNull);
+                              impl_->root != nil ? NSRectToCGRect(impl_->root.bounds) : CGRectNull);
   }
   return impl_->frame_coordinator.EndPaint(platform_ready);
 }

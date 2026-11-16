@@ -1249,7 +1249,6 @@ bool IosRuntime::CanOpenWindow() const noexcept {
 std::function<void()> IosRuntime::RequestOpenWindow(ViewFactory content, WindowOptions options,
                                                     CallbackCompletion<WindowHandle> completion, IosUiWindow* source) {
   if (!CanOpenWindow()) throw std::runtime_error("HuxerUI host does not support creating another iOS window");
-  ValidateWindowSupport(options, {});
   NSString* request_id = NSUUID.UUID.UUIDString;
   const std::string id = request_id.UTF8String;
   NSUserActivity* activity = [[NSUserActivity alloc] initWithActivityType:scene_request_activity];

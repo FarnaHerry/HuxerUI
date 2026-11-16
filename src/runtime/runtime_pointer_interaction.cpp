@@ -546,6 +546,7 @@ void detail::PointerInteraction::CancelPointerTarget(PointerSession& session, co
   runtime_state_.owner_.RequestFrame();
 }
 
+
 std::optional<ActiveDropTarget> detail::PointerInteraction::ResolveDropTarget(
     std::type_index type, const void* payload, Point window_position, bool cross_window
 ) const {
@@ -824,7 +825,6 @@ void PointerInteraction::CompleteWindowDrag(WindowDrag& drag, bool canceled, boo
                                                          released_outside_application && !dropped});
   runtime_state_.owner_.RequestFrame();
 }
-
 void detail::PointerInteraction::BeginDragDrop(PointerSession& session, DragSourceRecognitionState& recognition) {
   const DragEvent drag = recognition.recognizer->CurrentEvent();
   session.drag_drop = DragDropSession{
@@ -879,8 +879,7 @@ void detail::PointerInteraction::BeginDragDrop(PointerSession& session, DragSour
   auto& active_drag = *current->second.drag_drop;
   if (transport) {
     active_drag.window_drag = transport;
-    if (runtime_state_.owner_.BeginWindowDrag(transport) ||
-        runtime_state_.owner_.BeginApplicationDrag(transport)) {
+    if (runtime_state_.owner_.BeginApplicationDrag(transport)) {
       if (auto preview = std::exchange(active_drag.preview_layer, std::nullopt)) {
         runtime_state_.layer_controller_.Dismiss(*preview);
       }
@@ -1027,7 +1026,6 @@ void detail::PointerInteraction::AdvanceDragDropSession(std::int64_t pointer_id,
   if (session.quarantined || !session.drag_drop || session.drag_drop->window_drag) {
     return;
   }
-  if (session.drag_drop->window_drag) return;
   const DragEvent drag = session.drag_drop->drag;
   UpdateDropTarget(session, drag, false);
   found = pointer_sessions_.find(pointer_id);
@@ -2513,11 +2511,7 @@ void detail::PointerInteraction::UpdateHoverRoute(detail::PointerHoverState next
   }
 
   for (const NodeExtensionHandle& handle : previous.extensions) {
-    // `find_if` rather than `find`: the 24-byte NodeExtensionHandle does not fit the sizes the
-    // MSVC STL vectorized search supports, and clang instantiates its static_assert for `find`.
-    if (std::ranges::find_if(current.extensions, [&](const NodeExtensionHandle& next) {
-          return next == handle;
-        }) != current.extensions.end()) {
+    if (std::ranges::find(current.extensions, handle) != current.extensions.end()) {
       continue;
     }
     if (NodeExtension* extension = FindExtension(*runtime_state_.mounted_root_, handle)) {
@@ -2538,9 +2532,7 @@ void detail::PointerInteraction::UpdateHoverRoute(detail::PointerHoverState next
   }
 
   for (const NodeExtensionHandle& handle : current.extensions) {
-    const bool entered = std::ranges::find_if(previous.extensions, [&](const NodeExtensionHandle& next) {
-                           return next == handle;
-                         }) == previous.extensions.end();
+    const bool entered = std::ranges::find(previous.extensions, handle) == previous.extensions.end();
     if (entered || moved) {
       if (NodeExtension* extension = FindExtension(*runtime_state_.mounted_root_, handle)) {
         if (detail::MountedNode* node = FindNode(*runtime_state_.mounted_root_, handle.node_identity)) {

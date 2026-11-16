@@ -1,7 +1,7 @@
 # Typed Drag-and-Drop Design
 
 This document defines in-process typed drag-and-drop between mounted HuxerUI nodes.
-It extends the shared gesture ownership path with optional platform transport between windows in one application Runtime, without adding public pointer capture, event propagation, a drag registry, or application-visible platform transfer formats.
+It extends the shared gesture ownership path with optional platform transport between windows in one application Runtime.
 
 The underlying recognizer and PointerSession rules remain defined by [Gesture Recognition and Arbitration](gestures.md).
 Layer ownership remains defined by [Architecture](architecture.md), and scrolling remains defined by [Incremental Layout and Rendering](incremental-rendering.md).
@@ -163,7 +163,7 @@ Independent PointerSessions may own independent transfers. An application-scoped
 Runtime discovers source and target behavior through private NodeExtension capabilities.
 It never branches on DragSourceExtension, DropTargetExtension, a component NodeKind, or the payload type.
 
-## Application-scoped transfers
+## Application scope
 
 `DragSource::Scope(DragDropScope::Application)` allows a mouse drag using the primary button to cross windows. A receiving target in another window must select the same scope and share the application's Runtime. Same-window matching accepts either scope. Platforms or pointer devices without this transport keep the window-local path.
 
@@ -173,17 +173,6 @@ Drop commits once and withdraws the preview before calling the target, followed 
 
 An application-scoped drag with no successful drop reports `released_outside_application` only when the platform confirms that the primary button was released outside the application's windows. The Windows adapter checks visible, non-minimized application windows at the release, including window chrome. A rejection or lack of a target alone gives no information about the release location. A committed drop takes precedence over the outside-release flag.
 
-Application scope permits native transport after the shared recognizer has accepted; it does not grant applications pointer injection or physical capture control.
-The original PointerSession still owns recognition and source lifetime.
-Runtime identity is checked through the existing application attachment state, so equal pointer or node identifiers in different windows cannot associate unrelated operations.
-There is no process-wide active-drag slot or public transfer registry.
-
-Linux implements mouse transport through GDK drag and GtkDropTargetAsync for both X11 and Wayland without requiring global window placement.
-The host advertises a private format and associates the native GdkDrag object with its retained in-process identity; foreign offers cannot reconstruct it from bytes.
-Application payloads are never serialized, and the native acknowledgement action does not mutate application data or define copy/move business semantics.
-External file drops keep their independent existing receiver and lifetime.
-Other backends and non-mouse devices retain ordinary window-local transfers until their native transport is implemented.
-Application scope expresses eligibility rather than a guarantee of native availability.
 
 ## Target selection
 
@@ -260,7 +249,6 @@ DebugOverlay remains above it at System level.
 The initial source-local grab point is transformed into a window-space offset before positioning the preview, so transformed sources do not jump the preview origin.
 Preview placement uses the internal Positioned layer policy: the host-window point plus offset is converted into layer-local coordinates without side selection or viewport clamping.
 Later movement updates Layer placement without recomposing preview content.
-Preview placement follows that grab offset even outside the viewport, without popover side flipping or viewport clamping.
 Terminal state, source invalidation, pointer-session quarantine, and UiWindow retirement dismiss the preview exactly once.
 
 ## Nested auto-scroll
@@ -299,7 +287,6 @@ Physical drag-and-drop must not be the only way to perform an essential operatio
 
 Runtime stores every ownership, target, preview, and terminal transition before invoking the corresponding application callback.
 An escaping predicate or event exception quarantines the PointerSession, dismisses preview content, prevents duplicate normal terminal events, and then rethrows the original exception.
-For application-scoped transfers, this also cancels native transport, including when an Exited callback throws while leaving a receiver.
 
 Quarantine attempts the ordinary single cancellation path, consistent with other accepted gestures; an exception from that cleanup does not replace the original exception.
 This preserves strong internal commit while ensuring later physical pointer events cannot resume the failed operation.
@@ -309,8 +296,7 @@ This preserves strong internal commit while ensuring later physical pointer even
 - `<huxerui/gesture.h>` owns public source, target, event, result, and payload-construction templates.
 - `src/runtime/gesture.cpp` owns source and target retained modifiers, erased payload dispatch, and the drag recognition state shared with DragGesture.
 - `src/runtime/gesture_internal.h` owns private source and target capability contracts and DragDropSession as part of PointerSession.
-- `src/runtime/runtime_pointer_interaction.cpp` owns target selection, preview coordination, auto-scroll, terminal ordering, quarantine, and shared cross-window coordination.
-- `src/runtime/gesture_internal.h` defines the retained private host-transport identity; Linux implements the native operation and receiver callbacks in its existing adapter.
+- `src/runtime/runtime_pointer_interaction.cpp` owns target selection, preview coordination, auto-scroll, terminal ordering, and quarantine.
 - Existing Layer and scrolling implementations remain generic and receive no DragSource or DropTarget branches.
 
 Focused tests cover exact type matching, predicates, nested target fallback, event order, source payload snapshots, target-local coordinates, preview exclusion and dismissal, compatible target updates, auto-scroll, and cancellation.

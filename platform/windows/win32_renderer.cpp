@@ -1934,9 +1934,8 @@ struct Win32Renderer::Impl {
       if (!backdrop_frame_) {
         device_context_->PushAxisAlignedClip(ToD2DRect(paint_bounds), D2D1_ANTIALIAS_MODE_ALIASED);
       }
-      if (transparent_surface_ || transparent_background_) {
-        // Clear damaged pixels even when the old drawing has disappeared from the retained scene.
-        device_context_->Clear(D2D1::ColorF(0.0F, 0.0F));
+      if (transparent_surface_) {
+        device_context_->Clear(D2D1::ColorF(0.0F, 0.0F, 0.0F, 0.0F));
       } else {
         SetBrushColor(Color::Rgb(247, 248, 250));
         device_context_->FillRectangle(ToD2DRect(client_bounds), brush_.Get());
@@ -3482,7 +3481,6 @@ struct Win32Renderer::Impl {
   float dpi_ = kDipsPerInch;
   bool force_full_repaint_ = true;
   bool supports_dirty_present_ = false;
-  bool transparent_background_ = false;
   bool platform_composition_ = false;
   bool transparent_surface_ = false;
   ComPtr<ID2D1Bitmap1> layered_readback_;
@@ -3559,10 +3557,10 @@ std::vector<std::uint32_t> Win32Renderer::ReadPixels() {
   return pixels;
 }
 
-void Win32Renderer::Initialize(bool transparent_background) {
+void Win32Renderer::Initialize(bool transparent) {
   impl_->InitializeFactories();
-  impl_->transparent_background_ = transparent_background;
-  impl_->platform_composition_ = transparent_background;
+  impl_->transparent_surface_ = transparent;
+  impl_->platform_composition_ = transparent;
 }
 
 void Win32Renderer::SetTransparentSurface(bool transparent) {
@@ -3575,7 +3573,6 @@ void Win32Renderer::Discard() noexcept {
   impl_->DiscardDeviceResources();
   impl_->pixel_textures_.clear();
   impl_->d3d11_textures_.clear();
-  impl_->transparent_background_ = false;
   impl_->platform_composition_ = false;
   impl_->transparent_surface_ = false;
   impl_->paragraph_locale_.clear();

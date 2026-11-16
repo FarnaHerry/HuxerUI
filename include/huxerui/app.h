@@ -528,9 +528,6 @@ protected:
   void Retire() noexcept;
   /// Reports whether this host can create additional native top-level windows on the application thread.
   virtual bool SupportsMultipleWindows() const noexcept;
-  /// Reports optional native desktop window behaviors on the application thread.
-  /// Hosts without top-level window creation use the empty capabilities returned by the default implementation.
-  virtual WindowCapabilities QueryWindowSupport() const noexcept;
   /// Creates an initialized, hidden window belonging to this Runtime without starting another event loop.
   /// Shared admission and configuration checks precede this call. Failure must release partial native facilities.
   virtual std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options);
@@ -637,9 +634,6 @@ public:
   /// Queries programmatic native top-level window support on the original application's thread.
   /// External UI attachments do not imply support. A stopped application reports false.
   [[nodiscard]] bool SupportsMultipleWindows() const;
-  /// Reports optional desktop window behaviors available on the original application's thread.
-  /// A disconnected application or a host without top-level window creation returns all flags false.
-  WindowCapabilities WindowSupport() const;
   /// Creates and presents an independently composed window sharing this application's services and State.
   /// The retained factory executes later in the new window's root scope, with a fresh root Environment.
   /// Requires the original application thread, outside composition and application/window installation.
@@ -851,11 +845,6 @@ public:
   /// Requests the cursor represented by the PointerCursorKind argument on this native window.
   /// Called on the application thread; the default implementation ignores the request on hosts without pointer cursors.
   virtual void SetPointerCursor(PointerCursorKind) {}
-  /// Starts host transport for an accepted application-scoped mouse drag. Framework use only.
-  /// The retained operation belongs to the original Runtime; native callbacks use its private normalized contract.
-  /// Return false without retaining the operation when unsupported. Shared recognition and local delivery continue.
-  /// Native implementations must not synchronously complete the operation before returning.
-  virtual bool BeginWindowDrag(std::shared_ptr<detail::WindowDrag>) { return false; }
   /// @copydoc TextMeasurer::CreateTextLayout
   TextLayout CreateTextLayout(
       const AttributedText& text, const TextStyle& style, float width, const TextLayoutOptions& options = {}) final;
@@ -914,12 +903,6 @@ public:
   /// Called on the application thread. The default ignores the request on hosts without native modality.
   virtual void ApplyWindowModalState([[maybe_unused]] bool modal, [[maybe_unused]] bool blocked) {}
 
-  /// Applies a native desktop window level on the application thread without changing activation or geometry.
-  /// @return Whether the host accepted the requested level. The default implementation returns false.
-  virtual bool SetWindowAlwaysOnTop(bool) { return false; }
-  /// Changes the native hit testing policy for the entire window on the application thread.
-  /// Enabling releases this window's pointer capture. The default implementation returns false.
-  virtual bool SetWindowPointerPassThrough(bool) { return false; }
   /// Updates native system-bar foreground contrast on the application thread.
   /// The first SystemBarContentBrightness argument describes the status bar; the second describes the navigation bar.
   /// The UI paints backgrounds separately. Hosts without these system bars may ignore the request.

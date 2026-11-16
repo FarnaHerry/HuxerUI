@@ -362,7 +362,6 @@ public:
   WindowHandle OpenWindow(ViewFactory content, WindowOptions options, const WindowRelationship& relationship) const;
   void Quit() const;
   [[nodiscard]] bool SupportsMultipleWindows() const;
-  WindowCapabilities WindowSupport() const;
   WindowHandle OpenWindow(ViewFactory content, WindowOptions options) const;
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_MACCATALYST
   bool CanOpenWindow() const;

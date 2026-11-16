@@ -25,7 +25,7 @@ class UiWindow;
 namespace huxerui::detail {
 
 struct MountedNode;
-class WindowDrag;
+
 struct UiExecutionState;
 
 struct PointerHoverState {

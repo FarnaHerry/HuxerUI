@@ -243,7 +243,7 @@ bool Near(float value, float expected, float margin) {
 
 TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[macos-native]") {
   FloatingScenario scenario;
-  const WindowCapabilities expected_capabilities{
+  const WindowNativeCapabilities expected_capabilities{
       .transparent_surface = true, .utility_presentation = true, .passive_display = true,
       .topmost = true, .geometry = true, .native_move = true, .input_passthrough = true,
   };
@@ -386,7 +386,7 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
       if (!checks.watches[0]->Released()) return false;
       checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Disconnected,
                    "a retired handle still performed native requests");
-      checks.Check(checks.pet->Capabilities() == WindowCapabilities{}, "a retired handle still reported capabilities");
+      checks.Check(checks.pet->Capabilities() == WindowNativeCapabilities{}, "a retired handle still reported capabilities");
       checks.pet = checks.application->OpenWindow([] { return FloatingPetContent(true); }, pet_options());
       checks.Watch("HuxerUI native pet");
       ++phase;

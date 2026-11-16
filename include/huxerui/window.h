@@ -258,44 +258,12 @@ struct WindowOptions {
   /// Initial above-normal stacking preference, subsequently mutable through SetTopmost.
   bool topmost = false;
 
-  /// Lets the desktop show through unpainted client pixels and blend with partially transparent content.
-  bool transparent_background = false;
-
-  /// Places this desktop window above ordinary windows. WindowHandle::SetAlwaysOnTop() can change it after creation.
-  bool always_on_top = false;
-
-  /// Allows this desktop window to take keyboard focus. If false, showing or clicking it preserves the current
-  /// keyboard focus while still allowing pointer interaction.
-  bool activatable = true;
-
-  /// Makes the entire desktop window pointer-transparent from its first presentation.
-  /// WindowHandle::SetPointerPassThrough() can change this independently of the background policy.
-  bool pointer_pass_through = false;
 
   /// Allows the user to resize this desktop window in windowed mode. Display changes may still affect its geometry.
   bool resizable = true;
 
   /// Compares all startup configuration fields exactly.
   bool operator==(const WindowOptions&) const = default;
-};
-
-/// Reports optional native behaviors for framework-owned desktop windows on the current host.
-/// See ApplicationHandle::WindowSupport(). OpenWindow() checks the requested configuration at creation time.
-struct WindowCapabilities {
-  /// Whether the host can present a window with a transparent client background.
-  bool transparent_background = false;
-
-  /// Whether a window can be placed above ordinary windows.
-  bool always_on_top = false;
-
-  /// Whether a window can be shown and accept pointer interaction without taking keyboard focus.
-  bool non_activating = false;
-
-  /// Whether the platform can pass pointer input through a whole window to the surface underneath.
-  bool pointer_pass_through = false;
-
-  /// Compares all reported capabilities.
-  bool operator==(const WindowCapabilities&) const = default;
 };
 
 /// Current platform-submitted window geometry in logical units.
@@ -514,19 +482,8 @@ public:
   void HideKeyboard() const;
 
   /// Shows and brings the native window to the foreground when permitted by the platform.
-  /// Windows configured with WindowOptions::activatable set to false are only shown.
+  /// Windows configured with WindowOptions::show_without_activation are only shown.
   void Activate() const;
-
-  /// Changes whether this desktop window is placed above ordinary windows on the application thread.
-  /// @param enabled True to place the window above ordinary windows, or false to restore its ordinary level.
-  /// @return Whether the platform accepted the request. Closed windows and unsupported hosts return false.
-  bool SetAlwaysOnTop(bool enabled) const;
-
-  /// Changes whole-window pointer pass-through on the application thread.
-  /// @param enabled True to pass pointer input to the window underneath, or false to restore interaction.
-  /// Enabling releases existing pointer capture for this window without changing keyboard focus or visibility.
-  /// @return Whether the platform accepted the request. Closed windows and unsupported hosts return false.
-  bool SetPointerPassThrough(bool enabled) const;
 
   /// Requests the platform's minimized state after consulting the active minimize handler.
   void Minimize() const;

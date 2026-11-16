@@ -21,7 +21,7 @@ struct ApplicationRuntimeState;
 
 void ValidateWindowOptions(const WindowOptions& options);
 int ResolveWindowPositionCoordinate(double coordinate, int minimum, int maximum);
-void ValidateWindowSupport(const WindowOptions& options, const WindowCapabilities& support);
+
 
 inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
   if (!options.minimum_size.has_value()) {
@@ -36,7 +36,7 @@ inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
 struct WindowState {
   explicit WindowState(const WindowOptions& options)
       : content_mode(options.content_mode), chrome_mode(options.chrome_mode), caption_labels(options.caption_labels),
-        activatable(options.activatable), resizable(options.resizable) {}
+        activatable(!options.show_without_activation), resizable(options.resizable) {}
 
   WindowContentMode content_mode = WindowContentMode::SafeArea;
   WindowChromeMode chrome_mode = WindowChromeMode::System;
@@ -73,8 +73,7 @@ public:
   /// @throws std::invalid_argument If the relationship is cyclic.
   /// @throws std::logic_error If the target or owner window has retired.
   void ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal);
-  bool SetAlwaysOnTop(bool enabled);
-  bool SetPointerPassThrough(bool enabled);
+
   void RequestKeyboard(bool show);
   void RequestFullscreen(bool fullscreen);
   void UpdateFullscreen(bool fullscreen);

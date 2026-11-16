@@ -1582,7 +1582,7 @@ In-process typed transfer builds on that ownership path and is specified in [Typ
 
 Application-scoped typed drag-and-drop retains the original PointerSession while a private host transport delivers target-relative updates to another attachment of the same Runtime.
 The receiver reuses its committed hit route and typed drop dispatch under its own execution context, without synthesizing physical pointer input or creating a second recognizer.
-Transport and source/receiver retirement rules are specified in [Typed Drag-and-Drop](drag-drop.md#application-scoped-transfers).
+Transport and source/receiver retirement rules are specified in [Typed Drag-and-Drop](drag-drop.md#application-scope).
 
 Pointer input follows one shared pipeline:
 

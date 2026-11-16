@@ -371,7 +371,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
   const double motion_scale = probe.MotionScale();
 
   FloatingScenario scenario;
-  WindowCapabilities capabilities{};
+  WindowNativeCapabilities capabilities{};
   std::optional<WindowHandle> floating;
   std::optional<WindowHandle> reopened;
   std::optional<WindowHandle> plain;
@@ -644,7 +644,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       floating->Close();
       ++stage;
     } else if (stage == 9) {
-      if (floating->Capabilities() != WindowCapabilities{}) {
+      if (floating->Capabilities() != WindowNativeCapabilities{}) {
         return false;
       }
       self.Check(floating->SetInputPassthrough(true) == WindowRequestResult::Disconnected,

@@ -793,7 +793,6 @@ private:
   }
 
   void UpdateCapability(const DropTarget& target) {
-    capability_.scope = target.scope_;
     capability_.payload_type = target.payload_type_;
     capability_.accepts = target.accepts_;
     capability_.dispatch = target.dispatch_;

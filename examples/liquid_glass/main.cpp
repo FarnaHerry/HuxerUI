@@ -155,6 +155,7 @@ View GlassPage(State<bool> diagnostics) {
   const auto activations = UseState(0);
   const auto note = UseState(TextEditingValue::FromText("Glass keeps editing state intact."));
   const auto popup = UsePopup();
+  const auto popup_target = UseViewHandle();
   const auto dialog = UseDialog();
   return Stack {
     ColorfulBackground(moved.Get()),
@@ -170,7 +171,9 @@ View GlassPage(State<bool> diagnostics) {
             Button(fused.Get() ? "Separate glass" : "Fuse glass")
                 .OnClick([fused] { fused = !fused.Get(); })
                 .With(LiquidGlass{}),
-            Button("Open popup").OnClick([popup] { popup.Show(GlassPopup); }).With(popup.Anchor(), LiquidGlass{}),
+            Button("Open popup")
+                .OnClick([popup, popup_target] { popup.Show(popup_target, GlassPopup); })
+                .With(popup_target, LiquidGlass{}),
             Button("Open dialog").OnClick([dialog] {
               dialog.Show("Glass dialog", "The dialog material comes from its Theme style.", "Done");
             }).With(LiquidGlass{}),

@@ -7,9 +7,10 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `df065105` (`fix(windows): render opaque emoji in color`).
-- Fork merge commit: `f45c19fd`.
-- Last audit date: 2026-11-14.
+- Last merged upstream commit: `c67c42c2` (`fix(windows): expose DirectComposition declarations for Win7`).
+- Fork merge commits: `d5c66a42` (through `bca06f08`) and `1aba61cb` (through `c67c42c2`).
+- Audited upstream HEAD: `c67c42c2`.
+- Last audit date: 2026-11-15.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -44,7 +45,7 @@ When a fork-only capability creates the state, the fix belongs with that capabil
 | Hidden virtual-subtree measurement invalidation | `3e16bf4c` (virtual-layout hunk) | Upstream `9f90e005` retains pending work inside unplaced subtrees; current `PropagateVirtualLayoutInvalidation` matches | Drop the shared fix. |
 | Drag preview grab-offset beyond viewport edges | `3e16bf4c` (drag-preview hunk) | Upstream `711a9eae` uses `LayerPlacementKind::Positioned` for preview placement; current fork has no residual `DragPreviewPlacement` difference | Drop the shared fix. |
 | Public paragraph layout | `554d9a54`, `TextParagraphLayout`, `TextMeasurer::LayoutText` | Upstream `1949e84e` added `TextLayout` and `TextMeasurer::CreateTextLayout`; the fork API and its module export were removed during merge `a559c788` | Do not reintroduce. The fork's `TextField::TextStyles` was removed separately; `TextField` uses the plain paragraph layout. |
-| Runtime multi-window API and platform creation hooks | `d6c13b6c`, `5c6198e8`, `eab74b07`, `0b289005` overlap conceptually | Upstream already declares `ApplicationHandle::OpenWindow`, `Runtime::OpenWindow`, `SupportsMultipleWindows`, and Windows/Linux/macOS `CreateUiWindow` overrides; `examples/multi_window` also exists | Do not propose "add multi-window". Propose only the remaining capabilities and fixes: relationships, windowless startup, utility/floating windows, native window requests, and cross-window drag. |
+| Runtime multi-window API and platform creation hooks | `d6c13b6c`, `5c6198e8`, `eab74b07`, `0b289005` overlap conceptually | Upstream already declares `ApplicationHandle::OpenWindow`, `Runtime::OpenWindow`, `SupportsMultipleWindows`, and Windows/Linux/macOS `CreateUiWindow` overrides; `examples/multi_window` also exists | Do not propose "add multi-window". Propose only the remaining fork capabilities: relationships, windowless startup, and any richer utility/geometry API the maintainer accepts. Cross-window drag is now upstream. |
 | patchelf 0.19 minimum for runtime deployment | `738fe88b` | Upstream `b51f7139` (#165) rejects older patchelf before rewriting staged binaries and pins SDK CI to the verified 0.19.2 archives | Drop the fork-only proposal; keep the merged upstream implementation. |
 | Windows DWM corner preference for custom chrome | `85a8ea5e` | Upstream `bdd0987b` requests `DWMWCP_ROUND` through `DWMWA_WINDOW_CORNER_PREFERENCE` after the custom frame is applied | Drop the fork patch; the merged `win32_adapter.cpp` keeps the upstream call with the fork's numeric attribute values so pre-Windows-11 SDK toolchains still compile. |
 | Windows PlatformView input-overlay window region | `e6b4ba83` | Upstream `38eb34dc` builds the overlay shield from mounted hit candidates, keeps covering controls shielded, honors custom input bounds, and covers `tests/platform/windows/platform_view.cpp` | Drop the fork patch; upstream's `BuildOverlayRegion` supersedes the container-rectangle holes. |
@@ -57,7 +58,9 @@ When a fork-only capability creates the state, the fix belongs with that capabil
 | Programmatic controller scroll on disabled containers | `db693dcd` | Upstream `d407f566` (PR [#174](https://github.com/HuxerUI/HuxerUI/pull/174)) accepts `ScrollSource::Programmatic` on disabled containers and keeps pending item alignment through layout; tests cover single-axis realization refinement, two-axis item movement, and rejected drags | Drop the fork fix; upstream now covers it. |
 | `ScrollView::FillViewport` | `12cd2215` | Upstream `df5f4ba0` (PR [#175](https://github.com/HuxerUI/HuxerUI/pull/175)) exposes the existing `ScrollFillViewport` measurement policy for short content, bounded and unbounded axes, horizontal, oversized, and two-axis content | Drop the fork public API; upstream now covers it. |
 | Windows fullscreen taskbar coverage | `6ebc6213`, `4b444b19` | Upstream `babf9f2a` implements F11 and `Window::SetFullscreen`, and `ApplyFullscreen()` leaves z-order unchanged. Verified on Windows 11 26300 at `124837c1`: entering fullscreen from the foreground makes the shell hide the taskbar, permanent `HWND_TOPMOST` only occluded the application selected after a focus switch | Drop the fork patch; `ApplyFullscreen()` matches upstream again. Do not re-add unconditional topmost. |
-| Pager settles on the controlled page when drag is disabled mid-gesture | `dbc28f3c` | Upstream `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)) targets `behavior_.selected_index` in the disabled-drag branch and adds `Pager returns to the controlled page when dragging is disabled mid-gesture` covering both `Dragging` and `AwaitingCommit` | Drop the fork patch at the next merge; keep the fork-only rebase and Cancel fixes for touchpad paging. |
+| Pager settles on the controlled page when drag is disabled mid-gesture | `dbc28f3c` | Upstream `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)) targets `behavior_.selected_index` in the disabled-drag branch and adds `Pager returns to the controlled page when dragging is disabled mid-gesture` covering both `Dragging` and `AwaitingCommit` | Integrated through `d5c66a42`; the duplicate fork change is identical to upstream. Keep the fork-only touchpad rebase and Cancel fixes. |
+| Application-scoped cross-window drag | `3ef0a74b` | Upstream `372d8afe` implements `BeginApplicationDrag`, the retained `WindowDrag` transport, GTK/AppKit/Win32 delivery, receiver hit testing, and `released_outside_application` | Adopted upstream and removed `window_drag_internal.h` and the fork's parallel transport during the `c67c42c2` merge. Do not resubmit. |
+| Windows 7 DirectComposition declarations | `14c5b996` | Upstream `c67c42c2` declares the DirectComposition types needed by the Windows 7 compatibility renderer | Drop the fork patch; the shared declaration now matches upstream. |
 
 Windows owns taskbar visibility for fullscreen windows.
 The shell hides the taskbar when a window enters fullscreen while it is already the foreground window, and keeps it hidden across later focus changes; a window that enters fullscreen while backgrounded leaves the taskbar visible and later activation does not re-evaluate.
@@ -67,8 +70,9 @@ That is a shell heuristic rather than a window state, so the framework cannot ma
 
 | Item | Upstream state | Residual fork work |
 |---|---|---|
-| macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. Still fork-only. |
-| iOS app-target link closure | Upstream `dde77cf9` walks the declared `HUXERUI_LIBRARIES` graph transitively through `_huxerui_collect_library_dependencies` with cycle detection and collects those packages for resources, but it still does not read the app target's raw `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, `LINK_ONLY` handling, alias resolution, `file(GENERATE)`, and `-framework CoreMedia`. Still fork-only. |
+| Desktop floating windows | Upstream `17ba114b` adds `WindowChromeMode::None`, `transparent_background`, `always_on_top`, `activatable`, `pointer_pass_through`, `resizable`, application-level `WindowSupport()`, and a desktop lyrics example | The fork keeps its richer per-window contract: `WindowPresentation::Utility`, `WindowRequestResult`, `WindowNativeCapabilities`, `initial_position`, `SetTopmost`, `SetPosition`, `SetClientSize`, `SetInputPassthrough`, `BeginMove`, and `WorkArea`. Upstream's example and tests were adapted to that API; do not submit the fork API wholesale without an ownership decision. |
+| macOS per-key-window text input | Upstream lifecycle uses `window_.keyWindow`, but `ApplicationActiveChanged(bool active)` still passes only application-level active state to text input | `373ebdad` adds `active && window_.keyWindow && !input_blocked_` and blocked drag/drop checks. An upstream port keeps only the key-window gating; `input_blocked_` and the drag/drop checks are fork-only, and a native regression test is still missing. |
+| iOS app-target link closure | Upstream `dde77cf9` walks the declared `HUXERUI_LIBRARIES` graph transitively through `_huxerui_collect_library_dependencies` with cycle detection and collects those packages for resources, but it still does not read the app target's raw `LINK_LIBRARIES`/`INTERFACE_LINK_LIBRARIES` | `8fd9d0e1` still adds the app target's `LINK_LIBRARIES` transitive closure, `LINK_ONLY` handling, alias resolution, and `file(GENERATE)`. Its `-framework CoreMedia` addition serves the separate Lib-Camera and must be dropped from any upstream patch. Still fork-only. |
 
 ## Superseded upstream
 
@@ -83,17 +87,15 @@ These items should not be resubmitted because an upstream design change owns the
 These items were checked at the baseline and remain absent from upstream.
 The list is a re-audit shortcut, not a roadmap or a promise to upstream every item.
 
-| Area | Fork evidence | Status at 2026-11-13 |
+| Area | Fork evidence | Status at 2026-11-15 |
 |---|---|---|
 | Linux custom-chrome resize band | `ResolveLinuxResizeEdge` | Fork-only interaction choice: 6-DIP band, 16-DIP corner directions within that band; upstream uses a 10-DIP band and 14-DIP square corners |
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
-| GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only |
+| GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only architecture: upstream lacks `DiscardHost`/`CanDiscardHost` and retires a Runtime-owned window from `MaintainWindows` before destroying it; `LinuxUiWindow::Cleanup` already resets text input and clears the canvas data pointer. Most of `99fd7ba2` depends on fork-only `ReleaseRetiredWindow`/`RetireOwned`. Recheck only with a concrete upstream repro; the file-picker `GWeakRef` is the only candidate that may stand alone. |
 | macOS native-input task and frame-commit deferral | `785eb892`, `7f0ffc9f` | Fork-only |
 | macOS native quit without `NSTerminateLater` | `ca6d413d` | Fork-only |
 | Windows application icon resource and handle lifetime | `bcead3fe`, `446a5a90` | Fork-only |
 | Window ownership and modality relationships | `6b34925e` and follow-up fixes | Fork-only capability |
-| Transparent utility windows and native window requests | `8e2adda1`, `3aef230b`, `317328c4` | Fork-only capability |
-| Application-scoped cross-window drag | `3ef0a74b` | Fork-only capability. A clean upstream port is blocked by fork-only multi-window prerequisites: `WindowIdentity`/`WindowOptions::key`, window relationship and modal blocking, the multi-window test harness, and Linux window lifecycle hooks. Feature request: [#177](https://github.com/HuxerUI/HuxerUI/issues/177). Wait for maintainer agreement on the API/scope before preparing a PR on upstream's `OpenWindow` API. |
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
 | Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability; do not prepare an upstream PR. The upstream author will own transparency and Gaussian blur centrally later (2026-11-13). |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
@@ -102,7 +104,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
-| Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only build fix |
+| Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only capability support: upstream has no `HUXERUI_LINUX_X11` consumer, so the build switch is not a standalone fix and belongs to the Linux placement and input-passthrough capability. |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
 
 Linux resize hit testing deliberately leaves the client interior outside its 6-DIP band interactive, including near corners. Hover and press use the same geometry.
@@ -118,17 +120,24 @@ When the upstream API becomes available, replace the constants with explicit per
 
 ## Remaining upstream bug-fix candidates
 
-Verified absent from `upstream/main` at `92ccb9cb`; the range since `124837c1` changes Linux CLI packaging, Windows text rendering and direction, resource packages, and the Pager disabled-drag branch, and does not change the behaviors below. These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
+Verified absent from `upstream/main` at `c67c42c2`.
+The six commits since `bca06f08` add application-scoped drag, dock-layout tab bars and cross-window docking, desktop floating window options, multi-format clipboard, callback-backed streams, and Win7 DirectComposition declarations; none covers the rows below.
+These are the bug fixes still worth a focused upstream PR; capability work stays in the table above.
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
-| High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()`. Upstream PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190) is open from `fix/macos-quit-modal-loop` on `92ccb9cb`. |
-| High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery |
-| High | GTK retired windows and callbacks | `99fd7ba2` | No weak window reference or canvas/toplevel callback detachment; the file picker can retain a destroyed window |
-| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow` and `input_blocked_` |
-| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES`; no `LINK_LIBRARIES` closure, alias handling, `file(GENERATE)`, or `CoreMedia` |
+| High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()`. Upstream PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190) is open from `fix/macos-quit-modal-loop` (head `ed7b0094` on `92ccb9cb`, mergeable and awaiting review). |
+| High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
+| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only |
+| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia` |
 | Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions |
-| Low | Optional X11/Xext linkage | `ad73d2b7` | `cmake/platform/Linux.cmake` always links without optional `x11`/`xext` discovery, and mcpp has no matching switch |
+| Low | Windows DWM corner attribute SDK portability | `e8be9126` | `win32_adapter.cpp` uses `DWMWCP_ROUND` and `DWMWA_WINDOW_CORNER_PREFERENCE`; pre-22000 Windows SDKs do not declare them, so older toolchains need numeric attribute values |
+
+GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after re-auditing `c67c42c2`.
+Upstream has no `DiscardHost`/`CanDiscardHost`; `Runtime::MaintainWindows` retires a Runtime-owned window in a posted task before destroying it, and `LinuxUiWindow::Cleanup` resets text input and clears the canvas data pointer before `gtk_window_destroy`.
+Most of the fork change depends on fork-only `ReleaseRetiredWindow`, `RetireOwned`, and `WindowHandle::Retire` semantics.
+Reconsider only with a concrete upstream repro; the file-picker `GWeakRef` is the only part that may stand alone.
+Optional X11/Xext linkage (`ad73d2b7`) was also removed: upstream has no `HUXERUI_LINUX_X11` consumer, so the switch belongs to the fork-only Linux placement and input-passthrough capability rather than a standalone fix.
 
 Windows application icon resources (`bcead3fe`) and RefreshBox `move_content` (`16323d5a`) were reclassified as capability work: both add API that upstream does not have, so their behavior cannot be a standalone upstream bug fix.
 `WindowTitleBar` brace initialization is style-only on current toolchains; do not submit it without an older-Clang repro.
@@ -147,8 +156,7 @@ They are not upstream bug-fix candidates until that capability is proposed.
 
 Continuous touchpad paging makes both states reachable in the fork.
 If that capability is proposed upstream, carry the rebase and Cancel fixes with it instead of opening standalone bug PRs.
-The mid-gesture disable fix is different: it was reachable upstream and merged as `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)).
-The next upstream merge can drop `dbc28f3c` and keep the shared code identical to upstream.
+The mid-gesture disable fix was reachable upstream and merged as `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)); it is integrated through `d5c66a42`, so `dbc28f3c` remains only as history and the shared code matches upstream.
 
 ## Procedure for the next upstream merge
 

@@ -39,7 +39,7 @@ PRs #139, #140, #138, and #118 were closed by the fork without an upstream equiv
 | #175 | `df5f4ba0` | `ScrollView::FillViewport()` exposes the existing fill-viewport measurement policy; the public header and guide document bounded and unbounded axes. |
 | #182 | `acfb154b` | Disabling direct drag during an active Pager gesture settles on the controlled page instead of the outgoing displayed page, for both `Dragging` and `AwaitingCommit`. |
 
-The coverage registry records all three as covered. The #174 and #175 commits are merged into `farna/main`; the merge commit is `d48d36d0`. PR #182 (`acfb154b`) is not merged yet: the next upstream merge drops the fork's duplicate `dbc28f3c` change.
+The coverage registry records all three as covered. Upstream merged all three; the #174 and #175 commits are also merged into `farna/main` through `d48d36d0`. PR #182 (`acfb154b`) is integrated through the `bca06f08` merge `d5c66a42`; the fork's duplicate `dbc28f3c` change is now identical to upstream.
 
 ## Upstreamed installer work
 
@@ -95,14 +95,11 @@ They are integrated in the `FarnaHerry/Lib-CodeEditor` fork instead (upstream re
 The Clash-Flux integration passes the incremental Linux Debug runtime and standalone-header builds, the Linux Release framework build, and all four common CTest suites, including 953 runtime cases.
 Focused regressions cover non-adjacent Pager reversal without a geometry jump, preview grab offsets beyond viewport edges, and hidden virtual-page measurement resuming on selection.
 
-Linux Debug and Release compilation, standalone public-header checks and focused shared HTTP/lifecycle tests passed.
-The full Debug CTest run passed 30 of 32 suites, with two existing failures reproduced in a clean checkout of the same official
-upstream baseline on this host:
+On 2026-11-15, the `c67c42c2` integration passed Linux Debug compilation and the full Debug CTest run passed 36 of 37 suites.
+The remaining failure is the documented `HuxerUILinuxTests` bidi caret Y mismatch (`0` versus `5`); it is a host limitation, not waived or weakened by the integration.
+`HuxerUIRuntimeDependencyTests` now passes.
+macOS, Windows, and iOS native execution was not verified for this merge on this Linux host.
 
-- `HuxerUILinuxTests`: `LinuxTextLayoutCaretHitTestingPreservesAlignedBidiGeometry`, caret Y `0` versus `5`.
-- `HuxerUIRuntimeDependencyTests`: the relocated dependency fixture segfaults during dynamic-library initialization.
-
-These assertions are retained. They are not waived or weakened by the integration.
 On 2026-10-07, direct ADB instrumentation passed **126 assertions** on OnePlus PJE110 / Android 16.
 The actual host focus check requires native HuxerUI because constructing HuxerUIView loads JNI. The test APK used
 matching ARM64 libhuxerui.so and libc++_shared.so from an application built against revision `b12080c`;
@@ -185,7 +182,8 @@ it is a straight port of the patch llm-switch CI already applies and validates o
 The multi-window API follows upstream's explicit content factories: `ApplicationHandle::OpenWindow(content, options)` creates a Runtime-owned window through the platform `CreateUiWindow` factory.
 Applications retain `WindowHandle` values and attach business metadata to their own models or factory captures.
 [Multi-Window Design](../design/multi-window.md) defines the ownership, per-window state, windowless startup, and last-window close policy.
-The downstream extensions retain windowless startup, floating utility presentation, window relationships, and cross-window drag support.
+The downstream extensions retain windowless startup, floating utility presentation, and window relationships.
+Cross-window drag uses upstream's `BeginApplicationDrag` transport; the fork removed its duplicate `WindowDrag` implementation during the `c67c42c2` merge.
 
 [Window Relationship Design](../design/window-relationship.md) defines ownership, modality, and child-first cascade through the same Runtime maintenance path.
 Windows and Linux implement native window creation; macOS remains a preview requiring its own CI and interactive validation.
