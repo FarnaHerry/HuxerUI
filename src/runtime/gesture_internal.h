@@ -15,10 +15,18 @@
 #include <huxerui/layer.h>
 #include <huxerui/modifier.h>
 
+namespace huxerui {
+
+class Environment;
+class UiWindow;
+
+} // namespace huxerui
+
 namespace huxerui::detail {
 
 struct MountedNode;
 class WindowDrag;
+struct UiExecutionState;
 
 struct PointerHoverState {
   std::int64_t pointer_id = 0;
@@ -213,6 +221,8 @@ struct ActiveDropTarget {
   }
 };
 
+class WindowDrag;
+
 struct DragDropSession {
   NodeExtensionHandle source;
   std::type_index payload_type = typeid(void);
@@ -226,6 +236,50 @@ struct DragDropSession {
   // Layer placement is window-relative, so the frozen source transform resolves the local grab point once.
   Point preview_grab_offset{};
   std::shared_ptr<WindowDrag> window_drag{};
+};
+
+/// Retained native transport identity for one existing PointerSession, never a second recognizer or public payload.
+/// All operations run on the original application thread. Native completion after disconnection is harmless.
+/// Coordinates one recognized typed drag within the source Runtime after the platform takes over pointer delivery.
+/// The source PointerSession owns the drag. The platform retains the session identity, and HuxerUI keeps the payload.
+class WindowDrag final : public std::enable_shared_from_this<WindowDrag> {
+public:
+  bool Move(UiWindow& window, Point position, bool moved = true);
+  void Leave(UiWindow& window);
+  bool Drop(UiWindow& window, Point position);
+  /// Pass true for an explicit cancellation or platform failure. `released_outside_application` is true only when the
+  /// platform confirms the primary button was released outside the application's windows.
+  void Finish(bool canceled, bool released_outside_application = false);
+  bool Active() const;
+  /// Registers a nonthrowing callback to stop platform delivery if HuxerUI cancels the drag before a drop commits.
+  void SetNativeCancel(std::function<void()> cancel);
+  void SetPlatformCancel(std::function<void()> cancel);
+
+private:
+  WindowDrag(UiWindow& source, const DragSourceRecognitionState& recognition, const DragDropSession& session);
+  void Refresh(bool moved, const FrameInfo* frame = nullptr);
+  void Dispatch(UiWindow& window, const ActiveDropTarget& target, DropTargetDispatch::Function function, Point position);
+  void Exit();
+  void ExitReceiver(bool notify);
+  void Cancel() noexcept;
+  void Close();
+
+  std::weak_ptr<UiExecutionState> source_;
+  std::weak_ptr<UiExecutionState> receiver_;
+  DragEvent source_event_;
+  std::type_index payload_type_ = typeid(void);
+  std::shared_ptr<const void> payload_;
+  std::function<View()> preview_;
+  std::shared_ptr<const Environment> environment_;
+  Point preview_grab_offset_;
+  Point position_;
+  std::optional<ActiveDropTarget> target_;
+  std::optional<LayerId> preview_layer_;
+  std::function<void()> cancel_native_;
+  bool active_ = true;
+  bool dropped_ = false;
+
+  friend class PointerInteraction;
 };
 
 struct PointerSession {

@@ -231,7 +231,7 @@ struct ViewProperties {
 };
 
 struct ImageProperties {
-  std::variant<ImageAsset, VectorAsset, std::shared_ptr<ExternalTexture>, ImageResource> source;
+  std::variant<ImageAsset, VectorAsset, std::shared_ptr<ExternalTexture>, ImageResource, Bitmap> source;
   ImageFit fit = ImageFit::Contain;
   HorizontalAlignment horizontal_alignment = HorizontalAlignment::Center;
   VerticalAlignment vertical_alignment = VerticalAlignment::Center;
@@ -274,7 +274,7 @@ struct ImageProperties {
     );
   }
 
-  void SetResolvedAsset(std::variant<ImageAsset, VectorAsset> value) {
+  void SetResolvedAsset(std::variant<ImageAsset, VectorAsset, Bitmap> value) {
     std::visit([this](auto&& image) { source = std::forward<decltype(image)>(image); }, std::move(value));
   }
 
@@ -328,6 +328,9 @@ struct ViewSpec {
   std::optional<SemanticPatch> author_semantics;
   std::vector<View> children;
   std::function<View()> scope_factory;
+#if defined(HUXERUI_ENABLE_PROFILING) && HUXERUI_ENABLE_PROFILING
+  ProfileSource profile_source;
+#endif
   CanvasPainter canvas_painter;
   ImageProperties image_properties;
   std::shared_ptr<const PlatformViewDeclaration> platform_view;
@@ -424,7 +427,8 @@ inline void ResolveComponentLabel(detail::ViewSpec& spec) {
 void PaintProgressCircle(PaintContext& context, Rect frame,
   const ProgressCircleStyle& style, std::optional<float> progress, float phase);
 void ValidateFocusRing(const FocusRing& focus_ring);
-std::optional<std::variant<ImageAsset, VectorAsset>> ResolveOptionalControlIcon(const std::optional<ImageVariant>& value);
+std::optional<std::variant<ImageAsset, VectorAsset, Bitmap>> ResolveOptionalControlIcon(
+    const std::optional<ImageVariant>& value);
 std::shared_ptr<ViewSpec> MakeContainerSpec(NodeKind kind, std::vector<View> children);
 
 } // namespace huxerui::detail

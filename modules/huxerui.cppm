@@ -50,6 +50,7 @@ export namespace huxerui {
     using huxerui::BackdropFilter;
     using huxerui::BackdropShape;
     using huxerui::Background;
+    using huxerui::Bitmap;
     using huxerui::Border;
     using huxerui::BottomSheetContext;
     using huxerui::BottomSheetFactory;
@@ -105,6 +106,9 @@ export namespace huxerui {
     using huxerui::DockItem;
     using huxerui::DockLayout;
     using huxerui::DockPlacement;
+    using huxerui::DockTabBarContext;
+    using huxerui::DockTabBarItem;
+    using huxerui::DockTransferRequest;
     using huxerui::DockTree;
     using huxerui::DragDropResult;
     using huxerui::DragDropScope;
@@ -205,6 +209,7 @@ export namespace huxerui {
     using huxerui::IconButtonStyle;
     using huxerui::Image;
     using huxerui::ImageAsset;
+    using huxerui::ImageEncodeOptions;
     using huxerui::ImageFill;
     using huxerui::ImageFit;
     using huxerui::ImageFormat;
@@ -624,6 +629,7 @@ export namespace huxerui {
     using huxerui::WindowHook;
     using huxerui::WindowLifecycleState;
     using huxerui::WindowMetrics;
+    using huxerui::WindowNativeCapabilities;
     using huxerui::WindowOptions;
     using huxerui::WindowPresentation;
     using huxerui::WindowRelationship;

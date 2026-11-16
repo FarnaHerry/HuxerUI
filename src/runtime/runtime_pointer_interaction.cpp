@@ -1,7 +1,6 @@
 #include "ui_window_internal.h"
 #include "internal_access.h"
 #include "runtime_pointer_internal.h"
-#include "window_drag_internal.h"
 #include "runtime_text_internal.h"
 #include "application/window_internal.h"
 #include "macros_internal.h"
@@ -548,7 +547,7 @@ void detail::PointerInteraction::CancelPointerTarget(PointerSession& session, co
 }
 
 std::optional<ActiveDropTarget> detail::PointerInteraction::ResolveDropTarget(
-    const DragDropSession& session, Point window_position, bool across_windows
+    std::type_index type, const void* payload, Point window_position, bool cross_window
 ) const {
   std::vector<detail::MountedNode*> route;
   const bool has_route =
@@ -566,9 +565,9 @@ std::optional<ActiveDropTarget> detail::PointerInteraction::ResolveDropTarget(
         continue;
       }
       const DropTargetCapability* capability = InternalAccess::GetDropTargetCapability(*entry.extension);
-      if (!capability || (across_windows && capability->scope != DragDropScope::Application) ||
-          capability->payload_type != session.payload_type || !capability->accepts ||
-          !capability->accepts(session.payload.get())) {
+      if (!capability || capability->payload_type != type ||
+          (cross_window && capability->scope != DragDropScope::Application) ||
+          !capability->accepts || !capability->accepts(payload)) {
         continue;
       }
       return ActiveDropTarget{
@@ -599,6 +598,17 @@ void WindowDrag::SetNativeCancel(std::function<void()> cancel) {
   cancel_native_ = std::move(cancel);
 }
 
+void WindowDrag::SetPlatformCancel(std::function<void()> cancel) {
+  SetNativeCancel(std::move(cancel));
+}
+
+void WindowDrag::Cancel() noexcept {
+  if (!std::exchange(active_, false)) return;
+  auto cancel = std::exchange(cancel_native_, {});
+  try { ExitReceiver(true); } catch (...) {}
+  if (cancel && !dropped_) cancel();
+}
+
 void WindowDrag::Dispatch(UiWindow& window, const ActiveDropTarget& target,
                           DropTargetDispatch::Function function, Point position) {
   if (!window.IsInitialized() || !function) return;
@@ -613,6 +623,10 @@ void WindowDrag::Dispatch(UiWindow& window, const ActiveDropTarget& target,
 }
 
 void WindowDrag::Exit() {
+  ExitReceiver(true);
+}
+
+void WindowDrag::ExitReceiver(bool notify) {
   const auto receiver = receiver_.lock();
   const auto previous = std::exchange(target_, std::nullopt);
   const auto preview = std::exchange(preview_layer_, std::nullopt);
@@ -622,8 +636,9 @@ void WindowDrag::Exit() {
   UiWindow& window = *receiver->ui_window;
   ExecutionGuard guard(window.state_->execution_);
   if (preview) window.state_->layer_controller_.Dismiss(*preview);
+  if (!notify || !previous) return;
   const auto source = source_.lock();
-  if (previous && source && source->ui_window && !source->ui_window->IsInitialized()) {
+  if (source && source->ui_window && !source->ui_window->IsInitialized()) {
     // Retiring a source must not re-enter application code before its mounted-tree teardown is complete.
     window.state_->application_->Post(
         [weak = std::weak_ptr<UiExecutionState>(receiver), target = *previous, payload = payload_,
@@ -641,7 +656,7 @@ void WindowDrag::Exit() {
     );
     return;
   }
-  if (previous) Dispatch(window, *previous, previous->dispatch.exited, position);
+  Dispatch(window, *previous, previous->dispatch.exited, position);
 }
 
 void WindowDrag::Close() {
@@ -733,12 +748,10 @@ void WindowDrag::Refresh(bool moved, const FrameInfo* frame) {
     Exit();
     return;
   }
-  DragDropSession offer;
-  offer.payload_type = payload_type_;
-  offer.payload = payload_;
   const auto next = window.HitTestPlatformView(position_)
                         ? std::nullopt
-                        : state.pointer_->ResolveDropTarget(offer, position_, source->ui_window != &window);
+                        : state.pointer_->ResolveDropTarget(payload_type_, payload_.get(), position_,
+                                                            source->ui_window != &window);
   const auto previous = std::exchange(target_, std::nullopt);
   if (previous != next && previous) Dispatch(window, *previous, previous->dispatch.exited, position_);
   if (!Active() || receiver_.lock() != receiver || !window.IsInitialized()) return;
@@ -771,7 +784,7 @@ bool WindowDrag::Drop(UiWindow& window, Point position) {
   }
 }
 
-void WindowDrag::Finish(bool canceled) {
+void WindowDrag::Finish(bool canceled, bool released_outside_application) {
   if (!active_) {
     return;
   }
@@ -782,28 +795,33 @@ void WindowDrag::Finish(bool canceled) {
   } catch (...) {
     if (source && source->ui_window && source->ui_window->IsInitialized()) {
       try {
-        source->ui_window->state_->pointer_->CompleteWindowDrag(*this, true, false);
+        source->ui_window->state_->pointer_->CompleteWindowDrag(*this, true, false, released_outside_application);
       } catch (...) {
       }
     }
     throw;
   }
   if (source && source->ui_window && source->ui_window->IsInitialized()) {
-    source->ui_window->state_->pointer_->CompleteWindowDrag(*this, canceled, dropped_);
+    source->ui_window->state_->pointer_->CompleteWindowDrag(*this, canceled, dropped_, released_outside_application);
   }
 }
 
-void PointerInteraction::CompleteWindowDrag(WindowDrag& drag, bool canceled, bool dropped) {
+void PointerInteraction::CompleteWindowDrag(WindowDrag& drag, bool canceled, bool dropped,
+                                            bool released_outside_application) {
   ExecutionGuard guard(runtime_state_.execution_);
   auto found = pointer_sessions_.find(drag.source_event_.pointer_id);
   if (found == pointer_sessions_.end() || !found->second.drag_drop ||
       found->second.drag_drop->window_drag.get() != &drag) return;
   const auto source = found->second.drag_drop->source;
   pointer_sessions_.erase(found);
+  if (!runtime_state_.mounted_root_) return;
   MountedNode* node = FindNode(*runtime_state_.mounted_root_, source.node_identity);
   if (!node || !FindExtension(*runtime_state_.mounted_root_, source)) return;
+  const InteractionOriginScope origin(runtime_state_.current_interaction_origin_, drag.source_event_.window_position, true);
   if (canceled) EmitEvent<DragSourceEvents::Canceled>(node->event_bindings, drag.source_event_);
-  else EmitEvent<DragSourceEvents::Ended>(node->event_bindings, DragDropResult{drag.source_event_, dropped});
+  else EmitEvent<DragSourceEvents::Ended>(node->event_bindings,
+                                          DragDropResult{drag.source_event_, dropped,
+                                                         released_outside_application && !dropped});
   runtime_state_.owner_.RequestFrame();
 }
 
@@ -816,12 +834,15 @@ void detail::PointerInteraction::BeginDragDrop(PointerSession& session, DragSour
       .drag = drag,
   };
   DragDropSession& drag_drop = *session.drag_drop;
+  std::shared_ptr<const Environment> preview_environment;
   if (recognition.source.preview) {
     const std::function<View()> preview = recognition.source.preview;
     detail::MountedNode* source = FindNode(*runtime_state_.mounted_root_, recognition.extension.node_identity);
     const Point transformed_origin = recognition.frozen_node_to_window.Apply({});
     const Point transformed_grab = recognition.frozen_node_to_window.Apply(drag.origin);
     drag_drop.preview_grab_offset = transformed_grab - transformed_origin;
+    preview_environment = recognition.environment ? recognition.environment :
+        (source ? source->environment : runtime_state_.root_environment_);
     drag_drop.preview_layer = InternalAccess::AttachCaptured(
         runtime_state_.layer_controller_,
         LayerOptions{.level = LayerLevel::Notification, .pointer_policy = LayerPointerPolicy::PassThrough},
@@ -831,42 +852,56 @@ void detail::PointerInteraction::BeginDragDrop(PointerSession& session, DragSour
               .hidden = true,
           });
         },
-        recognition.environment ? recognition.environment
-                                : (source ? source->environment : runtime_state_.root_environment_),
+        preview_environment,
         DragPreviewPlacement(drag.window_position, drag_drop.preview_grab_offset)
     );
   }
+  const bool can_cross = recognition.source.scope == DragDropScope::Application &&
+                         drag.device_kind == PointerDeviceKind::Mouse &&
+                         session.initiating_button == PointerButton::Primary &&
+                         (session.pressed_buttons == PointerButton::Primary ||
+                          session.pressed_buttons == PointerButton::None);
+  if (!can_cross) {
+    drag_drop.target = ResolveDropTarget(drag_drop.payload_type, drag_drop.payload.get(), drag.window_position);
+  }
+  const auto transport = can_cross
+      ? std::shared_ptr<WindowDrag>(new WindowDrag(runtime_state_.owner_, recognition, drag_drop))
+      : nullptr;
+
   if (detail::MountedNode* source = FindNode(*runtime_state_.mounted_root_, recognition.extension.node_identity)) {
     EmitEvent<DragSourceEvents::Started>(source->event_bindings, drag);
   }
-  if (!session.drag_drop.has_value()) return;
-  if (recognition.source.scope == DragDropScope::Application && drag.device_kind == PointerDeviceKind::Mouse) {
-    auto transport = std::shared_ptr<WindowDrag>(new WindowDrag(runtime_state_.owner_, recognition, drag_drop));
-    drag_drop.window_drag = transport;
-    if (runtime_state_.owner_.BeginWindowDrag(transport)) {
-      ClearHover();
-      UpdatePointerCursor(std::nullopt);
-      if (drag_drop.preview_layer.has_value()) {
-        runtime_state_.layer_controller_.Dismiss(*drag_drop.preview_layer);
-        drag_drop.preview_layer.reset();
-      }
-      return;
-    }
-    drag_drop.window_drag.reset();
-    transport->Close();
-  }
-  drag_drop.target = ResolveDropTarget(drag_drop, drag.window_position);
-  if (!session.drag_drop.has_value() || !session.drag_drop->target.has_value()) {
+  auto current = pointer_sessions_.find(drag.pointer_id);
+  if (current == pointer_sessions_.end() || &current->second != &session ||
+      !current->second.drag_drop || !runtime_state_.owner_.IsInitialized()) {
     return;
   }
-  session.drag_drop->target_entered = true;
-  const ActiveDropTarget active = *session.drag_drop->target;
+  auto& active_drag = *current->second.drag_drop;
+  if (transport) {
+    active_drag.window_drag = transport;
+    if (runtime_state_.owner_.BeginWindowDrag(transport) ||
+        runtime_state_.owner_.BeginApplicationDrag(transport)) {
+      if (auto preview = std::exchange(active_drag.preview_layer, std::nullopt)) {
+        runtime_state_.layer_controller_.Dismiss(*preview);
+      }
+      ClearHover();
+      UpdatePointerCursor(std::nullopt);
+      return;
+    }
+    active_drag.window_drag.reset();
+    active_drag.target = ResolveDropTarget(active_drag.payload_type, active_drag.payload.get(), drag.window_position);
+  }
+  if (!active_drag.target) {
+    return;
+  }
+  active_drag.target_entered = true;
+  const ActiveDropTarget active = *active_drag.target;
   const NodeExtensionHandle target_handle = active.extension;
   NodeExtension* extension = FindExtension(*runtime_state_.mounted_root_, target_handle);
   detail::MountedNode* target = FindNode(*runtime_state_.mounted_root_, target_handle.node_identity);
   if (target && extension && active.dispatch.entered) {
     active.dispatch.entered(
-        target->event_bindings, session.drag_drop->payload.get(), LocalDropEvent(*target, drag)
+        target->event_bindings, active_drag.payload.get(), LocalDropEvent(*target, drag)
     );
   }
   runtime_state_.owner_.RequestFrame();
@@ -905,7 +940,8 @@ void detail::PointerInteraction::UpdateDropTarget(PointerSession& session, const
   }
   const std::optional<ActiveDropTarget> previous =
       session.drag_drop->target_entered ? session.drag_drop->target : std::nullopt;
-  const std::optional<ActiveDropTarget> next = ResolveDropTarget(*session.drag_drop, drag.window_position);
+  const auto next = ResolveDropTarget(session.drag_drop->payload_type, session.drag_drop->payload.get(),
+                                     drag.window_position);
   const std::shared_ptr<const void> payload = session.drag_drop->payload;
   session.drag_drop->target = next;
   session.drag_drop->target_entered = false;
@@ -953,7 +989,7 @@ void detail::PointerInteraction::AdvanceDragDrop(const FrameInfo& frame) {
   std::vector<std::int64_t> pointer_ids;
   pointer_ids.reserve(pointer_sessions_.size());
   for (const auto& [pointer_id, session] : pointer_sessions_) {
-    if (!session.quarantined && session.drag_drop.has_value()) {
+    if (!session.quarantined && session.drag_drop && !session.drag_drop->window_drag) {
       pointer_ids.push_back(pointer_id);
     }
   }
@@ -988,7 +1024,7 @@ void detail::PointerInteraction::AdvanceDragDropSession(std::int64_t pointer_id,
     return;
   }
   PointerSession& session = found->second;
-  if (session.quarantined || !session.drag_drop.has_value()) {
+  if (session.quarantined || !session.drag_drop || session.drag_drop->window_drag) {
     return;
   }
   if (session.drag_drop->window_drag) return;
@@ -1073,7 +1109,8 @@ void detail::PointerInteraction::FinishDragDrop(PointerSession& session, const D
   }
   const std::optional<ActiveDropTarget> previous =
       session.drag_drop->target_entered ? session.drag_drop->target : std::nullopt;
-  const std::optional<ActiveDropTarget> target = ResolveDropTarget(*session.drag_drop, drag.window_position);
+  const auto target = ResolveDropTarget(session.drag_drop->payload_type, session.drag_drop->payload.get(),
+                                       drag.window_position);
   DragDropSession completed = std::move(*session.drag_drop);
   completed.target = target;
   session.drag_drop.reset();
@@ -1117,7 +1154,18 @@ void detail::PointerInteraction::CancelDragDrop(PointerSession& session, const D
   }
   DragDropSession canceled = std::move(*session.drag_drop);
   session.drag_drop.reset();
-  if (canceled.window_drag) canceled.window_drag->Close();
+  if (canceled.window_drag) {
+    const bool dropped = canceled.window_drag->dropped_;
+    canceled.window_drag->Cancel();
+    if (dropped) {
+      if (auto* source = runtime_state_.mounted_root_ ?
+              FindNode(*runtime_state_.mounted_root_, canceled.source.node_identity) : nullptr;
+          source && FindExtension(*runtime_state_.mounted_root_, canceled.source)) {
+        EmitEvent<DragSourceEvents::Ended>(source->event_bindings, DragDropResult{canceled.drag, true});
+      }
+      return;
+    }
+  }
   if (canceled.preview_layer.has_value()) {
     runtime_state_.layer_controller_.Dismiss(*canceled.preview_layer);
   }
@@ -1130,7 +1178,8 @@ void detail::PointerInteraction::CancelDragDrop(PointerSession& session, const D
       );
     }
   }
-  if (detail::MountedNode* source = FindNode(*runtime_state_.mounted_root_, canceled.source.node_identity)) {
+  if (auto* source = runtime_state_.mounted_root_ ?
+          FindNode(*runtime_state_.mounted_root_, canceled.source.node_identity) : nullptr) {
     EmitEvent<DragSourceEvents::Canceled>(source->event_bindings, drag);
   }
 }
@@ -1751,10 +1800,11 @@ void detail::PointerInteraction::HandlePointerEvent(const PointerEvent& input_ev
   }
 
   const PointerEvent event = NormalizePointerEvent(input_event);
-  const auto transported = pointer_sessions_.find(event.pointer_id);
-  if (transported != pointer_sessions_.end() && transported->second.drag_drop &&
-      transported->second.drag_drop->window_drag &&
-      (event.type == PointerEventType::Move || event.type == PointerEventType::Up)) return;
+  if (const auto active = pointer_sessions_.find(event.pointer_id);
+      active != pointer_sessions_.end() && active->second.drag_drop && active->second.drag_drop->window_drag &&
+      event.type != PointerEventType::Cancel) {
+    return;
+  }
   auto interaction_origin = InteractionOriginScope(runtime_state_.current_interaction_origin_, event.position, true);
   try {
     bool hover_moved = false;
@@ -2547,18 +2597,20 @@ void detail::PointerInteraction::ClearHover() {
 }
 
 void detail::PointerInteraction::Disconnect() noexcept {
-  for (const auto& weak : incoming_drags_) {
+  const auto incoming = incoming_drags_;
+  for (const auto& weak : incoming) {
     if (const auto drag = weak.lock()) {
-      try { drag->Leave(runtime_state_.owner_); } catch (...) {}
+      const auto receiver = drag->receiver_.lock();
+      if (receiver && receiver->ui_window == &runtime_state_.owner_) {
+        try { drag->ExitReceiver(false); } catch (...) {}
+      }
     }
   }
   incoming_drags_.clear();
-  for (auto& [id, session] : pointer_sessions_) {
-    if (session.drag_drop && session.drag_drop->window_drag) {
-      try { session.drag_drop->window_drag->Close(); } catch (...) {}
-    }
+  auto sessions = std::exchange(pointer_sessions_, {});
+  for (auto& [pointer_id, session] : sessions) {
+    if (session.drag_drop && session.drag_drop->window_drag) session.drag_drop->window_drag->Cancel();
   }
-  pointer_sessions_.clear();
   pointer_hover_.reset();
 }
 

@@ -235,7 +235,7 @@ struct InternalAccess {
 
 #pragma region SegmentedButtonItem
 
-  static std::optional<std::variant<ImageAsset, VectorAsset>> ResolveIcon(SegmentedButtonItem& item);
+  static std::optional<std::variant<ImageAsset, VectorAsset, Bitmap>> ResolveIcon(SegmentedButtonItem& item);
   static std::string ResolveLabel(SegmentedButtonItem& item);
   static bool ShowsLabel(const SegmentedButtonItem& item) noexcept;
   static bool HasIcon(const SegmentedButtonItem& item) noexcept;
@@ -246,7 +246,7 @@ struct InternalAccess {
 
 #pragma region TabItem
 
-  static std::optional<std::variant<ImageAsset, VectorAsset>> ResolveIcon(TabItem& item);
+  static std::optional<std::variant<ImageAsset, VectorAsset, Bitmap>> ResolveIcon(TabItem& item);
   static std::string ResolveLabel(TabItem& item);
   static bool ShowsLabel(const TabItem& item) noexcept;
   static bool IsEnabled(const TabItem& item) noexcept;
@@ -259,8 +259,8 @@ struct InternalAccess {
 #pragma region NavigationItem
 
   static std::string ResolveLabel(NavigationItem& item);
-  static std::optional<std::variant<ImageAsset, VectorAsset>> ResolveIcon(NavigationItem& item);
-  static std::optional<std::variant<ImageAsset, VectorAsset>> ResolveSelectedIcon(NavigationItem& item);
+  static std::optional<std::variant<ImageAsset, VectorAsset, Bitmap>> ResolveIcon(NavigationItem& item);
+  static std::optional<std::variant<ImageAsset, VectorAsset, Bitmap>> ResolveSelectedIcon(NavigationItem& item);
   static bool IsEnabled(const NavigationItem& item) noexcept;
   static bool HasIcon(const NavigationItem& item) noexcept;
   static bool HasSelectedIcon(const NavigationItem& item) noexcept;
@@ -296,6 +296,7 @@ struct InternalAccess {
 
   static ImageAsset ImageFromRaw(RawAsset asset, float scale);
   static std::uint64_t ImageIdentity(const ImageAsset& image) noexcept;
+  static std::uint64_t ImageIdentity(const Bitmap& bitmap) noexcept;
 
 #pragma endregion
 

@@ -317,6 +317,19 @@ TEST_CASE("WindowMetricsRejectInvalidValues") {
   REQUIRE_THROWS_AS(invalid_appearance.BuildFrame(), std::invalid_argument);
 }
 
+TEST_CASE("Borderless windows honor drag regions without title-bar metrics") {
+  TestPlatform platform;
+  AppOptions options;
+  options.window.chrome_mode = WindowChromeMode::None;
+  options.show_debug_overlay = false;
+  UiWindow runtime(WindowTitleBarApp, platform, options);
+  runtime.SetWindowMetrics({.viewport = {300.0F, 100.0F}});
+  runtime.BuildFrame();
+
+  REQUIRE(runtime.IsWindowDragRegion({30.0F, 14.0F}));
+  REQUIRE_FALSE(runtime.IsWindowDragRegion({90.0F, 14.0F}));
+}
+
 TEST_CASE("WindowHandleForwardsCommandsToThePlatform") {
   window_handle.reset();
   TestPlatform platform;
@@ -779,7 +792,7 @@ TEST_CASE("FloatingWindowRequestsReportUnavailableAndDisconnectWithoutRebinding"
     runtime.SetWindowMetrics({.viewport = {200.0F, 200.0F}});
     runtime.BuildFrame();
     REQUIRE(window_handle.has_value());
-    REQUIRE(window_handle->Capabilities() == WindowCapabilities{});
+    REQUIRE(window_handle->Capabilities() == WindowNativeCapabilities{});
     REQUIRE(window_handle->SetTopmost(true) == WindowRequestResult::Unavailable);
     REQUIRE(window_handle->SetPosition({-100.0F, 20.0F}) == WindowRequestResult::Unavailable);
     REQUIRE(window_handle->SetClientSize({120.0F, 80.0F}) == WindowRequestResult::Unavailable);
@@ -793,7 +806,7 @@ TEST_CASE("FloatingWindowRequestsReportUnavailableAndDisconnectWithoutRebinding"
     REQUIRE_THROWS_AS(window_handle->SetClientSize({120.0F, std::numeric_limits<float>::quiet_NaN()}),
         std::invalid_argument);
   }
-  REQUIRE(window_handle->Capabilities() == WindowCapabilities{});
+  REQUIRE(window_handle->Capabilities() == WindowNativeCapabilities{});
   REQUIRE(window_handle->SetTopmost(true) == WindowRequestResult::Disconnected);
   REQUIRE(window_handle->SetPosition({10.0F, 20.0F}) == WindowRequestResult::Disconnected);
   REQUIRE(window_handle->SetClientSize({100.0F, 80.0F}) == WindowRequestResult::Disconnected);
@@ -826,7 +839,7 @@ TEST_CASE("FloatingWindowRequestsPreserveNativeResultsAndRequireTheApplicationTh
   class NativePlatform final : public TestPlatform {
   public:
     int requests = 0;
-    WindowCapabilities NativeWindowCapabilities() const override { return {.geometry = true}; }
+    WindowNativeCapabilities NativeWindowCapabilities() const override { return {.geometry = true}; }
     WindowRequestResult RequestWindowPosition(Point position) override {
       ++requests;
       REQUIRE((position == Point{-120.0F, 40.0F}));
@@ -911,7 +924,7 @@ public:
   }
   ~PetModelWindow() override { ++destroyed_; }
 
-  WindowCapabilities NativeWindowCapabilities() const override {
+  WindowNativeCapabilities NativeWindowCapabilities() const override {
     return {.transparent_surface = true, .utility_presentation = true,
             .passive_display = passive_display_available_, .topmost = true, .geometry = true};
   }
@@ -1192,16 +1205,32 @@ public:
     huxerui::UiWindow::Retire();
     ++destroyed_;
   }
-  void Initialize(huxerui::Runtime& runtime, ViewFactory content, const WindowOptions& options) {
+
+  void Initialize(huxerui::Runtime& runtime, ViewFactory content, const WindowOptions& options,
+                  std::shared_ptr<detail::WindowService> service = {}) {
     InitializeWindow(runtime, std::move(content), options,
-                     ResourceConfiguration{Locale::FromLanguageTag("fr-FR"), 2.0F});
+                     ResourceConfiguration{Locale::FromLanguageTag("fr-FR"), 2.0F},
+                     WindowLifecycleState::Background, std::move(service));
     SetWindowMetrics({.viewport = options.initial_size});
   }
+
   void RequestWindowCommand(WindowCommand command) override {
     TestPlatform::RequestWindowCommand(command);
     if (command == WindowCommand::Close) huxerui::UiWindow::CloseWindow();
   }
+  bool SetWindowAlwaysOnTop(bool enabled) override {
+    always_on_top_requests.push_back(enabled);
+    return true;
+  }
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    pass_through_requests.push_back(enabled);
+    return true;
+  }
   void Frame() { huxerui::UiWindow::BuildFrame(); }
+
+  std::vector<bool> always_on_top_requests;
+  std::vector<bool> pass_through_requests;
+
 private:
   int& destroyed_;
 };
@@ -1211,6 +1240,7 @@ public:
   using TestPlatform::TestPlatform;
   ~OwnedWindowPlatform() override { huxerui::Runtime::Retire(); }
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override { return window_support; }
   std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
     ++creations;
     if (before_create) before_create();
@@ -1221,6 +1251,7 @@ public:
   }
   int creations = 0;
   int destroyed = 0;
+  WindowCapabilities window_support;
   std::function<void()> before_create;
   std::vector<OwnedTestWindow*> windows;
 };
@@ -1266,6 +1297,7 @@ TEST_CASE("Owned windows have independent content and local State while sharing 
   REQUIRE(hooks == 2);
   REQUIRE(first.IsOpen());
   REQUIRE(second.IsOpen());
+  REQUIRE(first != second);
   platform.windows[0]->Frame();
   platform.windows[1]->Frame();
   REQUIRE(first_value == 10);
@@ -1296,6 +1328,7 @@ TEST_CASE("Owned windows have independent content and local State while sharing 
   REQUIRE(platform.destroyed == 2);
   REQUIRE(platform.application_quit_requests == 1);
   REQUIRE_FALSE(app.SupportsMultipleWindows());
+  REQUIRE(app.WindowSupport() == WindowCapabilities{});
   REQUIRE_THROWS_AS(app.OpenWindow(EmptyOwnedWindow), std::logic_error);
   REQUIRE_NOTHROW(first.Close());
 }
@@ -1339,6 +1372,88 @@ TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
   REQUIRE_FALSE(child.IsOpen());
   REQUIRE_FALSE(grandchild.IsOpen());
   REQUIRE(platform.application_quit_requests == 0);
+}
+
+TEST_CASE("A host window session survives replacing its UI attachment") {
+  OwnedWindowPlatform platform;
+  Application application(EmptyOwnedWindow, {.show_debug_overlay = false});
+  RuntimeLifetime runtime(application, platform);
+  std::vector<WindowCommand> commands;
+  const auto service = std::make_shared<detail::WindowService>([&](WindowCommand command) {
+    commands.push_back(command);
+  });
+  const auto handle = service->Handle();
+  REQUIRE_FALSE(handle.IsOpen());
+
+  auto attachment = std::make_unique<OwnedTestWindow>(platform.destroyed);
+  attachment->Initialize(platform, EmptyOwnedWindow, {}, service);
+  attachment->UpdateWindowLifecycleState(WindowLifecycleState::Active);
+  REQUIRE(handle.IsOpen());
+  REQUIRE(handle.LifecycleState() == WindowLifecycleState::Active);
+  attachment.reset();
+
+  REQUIRE(handle.IsOpen());
+  REQUIRE(handle.LifecycleState() == WindowLifecycleState::Background);
+  REQUIRE_FALSE(handle.SetAlwaysOnTop(true));
+  handle.Activate();
+  REQUIRE(commands == std::vector{WindowCommand::Activate});
+
+  attachment = std::make_unique<OwnedTestWindow>(platform.destroyed);
+  attachment->Initialize(platform, EmptyOwnedWindow, {}, service);
+  REQUIRE(service->Handle() == handle);
+  REQUIRE(handle.IsOpen());
+  handle.Close();
+  REQUIRE(commands == std::vector{WindowCommand::Activate, WindowCommand::Close});
+  REQUIRE(handle.IsOpen());
+  service->EndSession();
+  attachment.reset();
+  REQUIRE_FALSE(handle.IsOpen());
+  handle.Close();
+  REQUIRE(commands.size() == 2);
+}
+
+TEST_CASE("Optional desktop window behavior uses host capabilities and the addressed window") {
+  OwnedWindowPlatform platform;
+  Application application(EmptyOwnedWindow, {.show_debug_overlay = false});
+  RuntimeLifetime runtime(application, platform);
+  const auto app = UseApplication();
+  REQUIRE(app.WindowSupport() == WindowCapabilities{});
+  REQUIRE_THROWS_WITH(app.OpenWindow(EmptyOwnedWindow, {.transparent_background = true}),
+                      "HuxerUI host does not support transparent window backgrounds");
+  REQUIRE_THROWS_WITH(app.OpenWindow(EmptyOwnedWindow, {.activatable = false}),
+                      "HuxerUI host does not support non-activating windows");
+  REQUIRE(platform.creations == 0);
+
+  platform.window_support = {
+      .transparent_background = true,
+      .always_on_top = true,
+      .non_activating = true,
+      .pointer_pass_through = true,
+  };
+  REQUIRE(app.WindowSupport() == platform.window_support);
+  const auto ordinary = app.OpenWindow(EmptyOwnedWindow);
+  const auto overlay = app.OpenWindow(EmptyOwnedWindow, {
+      .chrome_mode = WindowChromeMode::None,
+      .transparent_background = true,
+      .always_on_top = true,
+      .activatable = false,
+      .pointer_pass_through = true,
+      .resizable = false,
+  });
+  overlay.Activate();
+  REQUIRE(platform.windows[0]->window_commands == std::vector<WindowCommand>{WindowCommand::Activate});
+  REQUIRE(platform.windows[1]->window_commands == std::vector<WindowCommand>{WindowCommand::Show, WindowCommand::Show});
+  REQUIRE(overlay.SetAlwaysOnTop(false));
+  REQUIRE(overlay.SetPointerPassThrough(false));
+  REQUIRE(platform.windows[0]->always_on_top_requests.empty());
+  REQUIRE(platform.windows[0]->pass_through_requests.empty());
+  REQUIRE(platform.windows[1]->always_on_top_requests == std::vector<bool>{false});
+  REQUIRE(platform.windows[1]->pass_through_requests == std::vector<bool>{false});
+
+  overlay.Close();
+  REQUIRE_FALSE(overlay.SetAlwaysOnTop(true));
+  REQUIRE_FALSE(overlay.SetPointerPassThrough(true));
+  REQUIRE(ordinary.IsOpen());
 }
 
 TEST_CASE("Owned window closure is observable and waits for the outer UI callback") {
@@ -1771,7 +1886,7 @@ TEST_CASE("Relationships are installed before presentation and passive windows a
   class PresentationWindow final : public TestPlatform {
   public:
     bool presented_with_relationship = false;
-    WindowCapabilities NativeWindowCapabilities() const override { return {.passive_display = true}; }
+    WindowNativeCapabilities NativeWindowCapabilities() const override { return {.passive_display = true}; }
     void RequestWindowCommand(WindowCommand command) override {
       if (command == WindowCommand::Show || command == WindowCommand::Activate) {
         presented_with_relationship = !applied_owners.empty() && !applied_modal_states.empty();

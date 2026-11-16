@@ -326,7 +326,7 @@ struct SystemTrayOptions {
 ///   const auto tray = application.SystemTray();
 ///   tray.OnActivate([] { HandleTrayActivation(); });
 ///   tray.Show(
-///       ImageAsset::FromFile("tray.png"),
+///       ImageAsset::FromFile(File("tray.png")),
 ///       {.tooltip = "Demo", .menu = {MenuItem("Quit", [application] { application.Quit(); })}}
 ///   );
 /// }
@@ -338,10 +338,10 @@ public:
   /// @throws std::logic_error If called on the wrong application thread or from a different application context.
   [[nodiscard]] bool IsAvailable() const;
   /// Creates or replaces the application tray presentation.
-  /// @param icon Raster image asset or resource resolving to one; vector images are rejected.
+  /// @param icon Encoded raster image asset or resource resolving to one.
   /// @param options Tooltip and native menu resolved using the application's resource configuration.
   /// The desired presentation survives temporary host unavailability and UI retirement while the application is live.
-  /// @throws std::invalid_argument If the icon is empty, invalid, or resolves to a vector.
+  /// @throws std::invalid_argument If the icon is empty, invalid, or fails to resolve to an encoded raster image.
   /// @throws std::logic_error If the original application has expired or the application thread/context is wrong.
   void Show(ImageVariant icon, SystemTrayOptions options = {}) const;
   /// Removes the current application tray presentation and its desired contents.
@@ -528,6 +528,9 @@ protected:
   void Retire() noexcept;
   /// Reports whether this host can create additional native top-level windows on the application thread.
   virtual bool SupportsMultipleWindows() const noexcept;
+  /// Reports optional native desktop window behaviors on the application thread.
+  /// Hosts without top-level window creation use the empty capabilities returned by the default implementation.
+  virtual WindowCapabilities QueryWindowSupport() const noexcept;
   /// Creates an initialized, hidden window belonging to this Runtime without starting another event loop.
   /// Shared admission and configuration checks precede this call. Failure must release partial native facilities.
   virtual std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options);
@@ -591,6 +594,7 @@ private:
   [[nodiscard]] UiWindow* RemoveWindowRelations(UiWindow& window);
   /// Recomputes modal coverage for every live window, pushes native diffs, and reactivates the given owners.
   void RebuildWindowBlocking(const std::vector<UiWindow*>& reactivate);
+  void ValidateWindowCreation(const ViewFactory& content, const WindowOptions& options);
   WindowHandle OpenWindow(ViewFactory content, WindowOptions options);
   void CloseWindow(UiWindow& window);
   void OrderWindowRetirement(std::vector<UiWindow*>& windows) const;
@@ -633,6 +637,9 @@ public:
   /// Queries programmatic native top-level window support on the original application's thread.
   /// External UI attachments do not imply support. A stopped application reports false.
   [[nodiscard]] bool SupportsMultipleWindows() const;
+  /// Reports optional desktop window behaviors available on the original application's thread.
+  /// A disconnected application or a host without top-level window creation returns all flags false.
+  WindowCapabilities WindowSupport() const;
   /// Creates and presents an independently composed window sharing this application's services and State.
   /// The retained factory executes later in the new window's root scope, with a fresh root Environment.
   /// Requires the original application thread, outside composition and application/window installation.
@@ -640,6 +647,25 @@ public:
   /// failed native creation throws std::runtime_error. Success does not imply that the first frame has rendered.
   /// Discarding the returned handle leaves the window open. Options do not inherit from the opening window.
   WindowHandle OpenWindow(ViewFactory content, WindowOptions options = {}) const;
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_MACCATALYST
+  /// Reports whether the iOS host supports requesting another window scene.
+  /// Query on the application thread. UIKit can still reject an individual request.
+  /// @note Available only on iOS and iPadOS.
+  bool CanOpenWindow() const;
+
+  /// Requests another UIKit window.
+  /// @param content Owned factory for the new window's root composition and fresh Environment.
+  /// @param options Startup options; UIKit determines the window placement and size.
+  /// @return A lazy Task that yields the new handle on the application thread after UIKit connects the scene
+  /// and HuxerUI initializes its attachment.
+  /// @throws std::invalid_argument If the factory or options are invalid.
+  /// @throws std::logic_error If the application or requesting attachment is unavailable when started.
+  /// @throws std::runtime_error If UIKit rejects the request or the window cannot be initialized.
+  /// Start outside composition and installation. Canceling before initialization suppresses a late window.
+  /// @note Available only on iOS and iPadOS.
+  Task<WindowHandle> OpenWindowAsync(ViewFactory content, WindowOptions options = {}) const;
+#endif
+
   /// Reads the immutable activation that originally started this application.
   /// @return A service-owned optional value valid while this handle retains the service; empty for background-only
   /// startup.
@@ -862,7 +888,7 @@ public:
   /// native minimize/close callbacks still pass through HandleWindowRequest before applying their default operation.
   virtual void RequestWindowCommand(WindowCommand) {}
   /// Native floating-window capabilities; unsupported and embedded hosts retain explicit defaults.
-  virtual WindowCapabilities NativeWindowCapabilities() const { return {}; }
+  virtual WindowNativeCapabilities NativeWindowCapabilities() const { return {}; }
   /// Native requests run on the application thread; Submitted does not promise window-manager application.
   virtual WindowRequestResult RequestWindowTopmost(bool) { return WindowRequestResult::Unavailable; }
   virtual WindowRequestResult RequestWindowPosition(Point) { return WindowRequestResult::Unavailable; }
@@ -887,6 +913,13 @@ public:
   /// while any live modal window covers it; the Runtime computes both and pushes every change.
   /// Called on the application thread. The default ignores the request on hosts without native modality.
   virtual void ApplyWindowModalState([[maybe_unused]] bool modal, [[maybe_unused]] bool blocked) {}
+
+  /// Applies a native desktop window level on the application thread without changing activation or geometry.
+  /// @return Whether the host accepted the requested level. The default implementation returns false.
+  virtual bool SetWindowAlwaysOnTop(bool) { return false; }
+  /// Changes the native hit testing policy for the entire window on the application thread.
+  /// Enabling releases this window's pointer capture. The default implementation returns false.
+  virtual bool SetWindowPointerPassThrough(bool) { return false; }
   /// Updates native system-bar foreground contrast on the application thread.
   /// The first SystemBarContentBrightness argument describes the status bar; the second describes the navigation bar.
   /// The UI paints backgrounds separately. Hosts without these system bars may ignore the request.
@@ -901,7 +934,7 @@ public:
   /// @param metrics Complete viewport, safe-area insets, and optional title-bar geometry in logical window-local units.
   /// Call on the application thread after successful initialization; native geometry is authoritative.
   void SetWindowMetrics(WindowMetrics metrics);
-  /// Queries the committed tree for a native title-bar drag hit.
+  /// Queries the committed tree for a native window drag hit in Custom or None chrome mode.
   /// @param position Point in logical window-local coordinates.
   /// @return True when a declared drag region claims the point and interactive descendants do not take precedence.
   /// Native non-client hit testing uses this result without rebuilding the UI tree.
@@ -1013,6 +1046,11 @@ public:
 protected:
   UiWindow();
 
+  /// Starts platform transport for an accepted typed mouse drag on this window's application thread.
+  /// A false result leaves the original pointer sequence in charge. Keep the operation for asynchronous delivery
+  /// only after accepting it. Deliver platform callbacks after the handoff returns.
+  virtual bool BeginApplicationDrag(std::shared_ptr<detail::WindowDrag>) { return false; }
+
   /// Requests a fullscreen transition from the native host. Unsupported attachments ignore the request.
   virtual void RequestFullscreen(bool) {}
 
@@ -1040,11 +1078,13 @@ protected:
   /// @param options Independent startup geometry and chrome policy for this window.
   /// @param configuration Optional per-window resource overrides; absence uses application defaults.
   /// @param initial_lifecycle Initial native foreground state, visible to WindowHook before first composition.
+  /// @param window_service Optional service for a host window that can reconnect to a new UI attachment.
   /// Runs window_hooks, installs shared UI services, then admits native input. Failure retires partial UI state.
   /// @throws std::logic_error If initialized twice, the application is not running, or the calling thread differs.
   void InitializeWindow(Runtime& application, ViewFactory content, const WindowOptions& options,
                         std::optional<ResourceConfiguration> configuration = std::nullopt,
-                        WindowLifecycleState initial_lifecycle = WindowLifecycleState::Background);
+                        WindowLifecycleState initial_lifecycle = WindowLifecycleState::Background,
+                        std::shared_ptr<detail::WindowService> window_service = {});
   /// Builds the next frame, replacing the window's content with the built-in error page on composition failure.
   /// @param report_error Optional synchronous diagnostic sink. The UTF-8 message is borrowed during the call.
   /// Passing null uses standard error.

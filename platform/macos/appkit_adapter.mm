@@ -39,6 +39,7 @@
 #include "application/application_internal.h"
 #include "application/platform_frame_internal.h"
 #include "resources/resource_internal.h"
+#include "runtime/gesture_internal.h"
 #include "text/text_internal.h"
 #include "application/window_internal.h"
 #include "internal_access.h"
@@ -123,10 +124,7 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
 
 } // namespace
 
-@interface HuxerUIWindow : NSWindow {
-@public
-  huxerui::detail::MacUiWindow* huxeruiWindow;
-}
+@interface HuxerUIWindow : NSWindow
 @end
 
 /// Hosts passive-display and utility windows. NSPanel carries the nonactivating window style that keeps pointer input
@@ -138,7 +136,12 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
 }
 @end
 
-@interface HuxerUIView : NSView {
+/// Hosts windows created with activatable = false. Deriving from HuxerUIPanel keeps the attachment slot and event
+/// routing used by multi-window ownership and cross-window drag, while the overrides below refuse key/main status.
+@interface HuxerUINonActivatingPanel : HuxerUIPanel
+@end
+
+@interface HuxerUIView : NSView <NSDraggingSource> {
 @public
   huxerui::detail::MacUiWindow* huxeruiWindow;
   NSPoint huxeruiPointerPosition;
@@ -147,6 +150,9 @@ std::optional<NSRect> MacPrimaryScreenFrame() {
   __strong NSCursor* huxeruiPointerCursor;
   std::uint64_t huxeruiFileDropSession;
   BOOL huxeruiFileDropHover;
+  __strong NSEvent* huxeruiDragPress;
+  std::shared_ptr<huxerui::detail::WindowDrag> huxeruiOutgoingDrag;
+  std::shared_ptr<huxerui::detail::WindowDrag> huxeruiIncomingDrag;
 }
 - (void)sendPointerEvent:(NSEvent*)event type:(huxerui::PointerEventType)type;
 - (BOOL)sendKeyEvent:(NSEvent*)event type:(huxerui::KeyEventType)type;
@@ -448,6 +454,14 @@ Task<IoResult<ClipboardItem>> ReadMacClipboardItem(NSPasteboard* pasteboard, con
   return ClipboardResult(ClipboardFailure(IoErrorCode::NotFound));
 }
 
+NSString* const application_drag_type = @"org.huxerui.application-drag";
+
+std::shared_ptr<WindowDrag> LocalApplicationDrag(id<NSDraggingInfo> sender) {
+  id source = sender.draggingSource;
+  if (![source isKindOfClass:HuxerUIView.class]) return {};
+  return ((HuxerUIView*)source)->huxeruiOutgoingDrag;
+}
+
 } // namespace
 
 GestureSettings MacGestureDefaults() noexcept {
@@ -486,6 +500,14 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override {
+    return {
+        .transparent_background = true,
+        .always_on_top = true,
+        .non_activating = true,
+        .pointer_pass_through = true,
+    };
+  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
 
   void UpdateWindows();
@@ -811,24 +833,32 @@ public:
       utility_window_ = options.presentation == WindowPresentation::Utility;
       transparent_surface_ = options.transparent_surface;
       passive_display_ = options.show_without_activation;
+      input_passthrough_ = options.pointer_pass_through;
       custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
+      borderless_ = options.chrome_mode == WindowChromeMode::None;
+      activatable_ = options.activatable;
       custom_title_bar_height_ = options.title_bar_height;
       minimum_size_ = options.minimum_size;
       renderer_->SetTransparentSurface(transparent_surface_);
-      NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
-                                NSWindowStyleMaskResizable;
+      NSWindowStyleMask style = (utility_window_ || borderless_)
+          ? NSWindowStyleMaskBorderless
+          : NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+      if (options.resizable && !utility_window_) style |= NSWindowStyleMaskResizable;
       if (custom_chrome_) {
         style |= NSWindowStyleMaskFullSizeContentView;
       }
-      if (utility_window_) {
-        // A utility helper is a borderless, non-resizable surface without native title-bar metrics.
-        style = NSWindowStyleMaskBorderless;
-      }
-      if (passive_display_) {
+      if (passive_display_ || !activatable_) {
         // Nonactivating style is reserved for NSPanel and keeps pointer input from activating the application.
         style |= NSWindowStyleMaskNonactivatingPanel;
       }
-      if (utility_window_ || passive_display_) {
+      if (!activatable_) {
+        auto* panel = [[HuxerUINonActivatingPanel alloc] initWithContentRect:frame
+                                                                 styleMask:style | NSWindowStyleMaskNonactivatingPanel
+                                                                   backing:NSBackingStoreBuffered defer:NO];
+        panel.hidesOnDeactivate = NO;
+        window_ = panel;
+        if (window_ != nil) panel->huxeruiWindow = this;
+      } else if (utility_window_ || passive_display_) {
         HuxerUIPanel* panel = [[HuxerUIPanel alloc] initWithContentRect:frame
                                                                 styleMask:style
                                                                   backing:NSBackingStoreBuffered
@@ -845,6 +875,12 @@ public:
       }
       if (window_ == nil) throw std::runtime_error("HuxerUI could not create an AppKit window");
       window_.releasedWhenClosed = NO;
+      if (options.transparent_background) {
+        window_.opaque = NO;
+        window_.backgroundColor = NSColor.clearColor;
+      }
+      if (options.always_on_top) window_.level = NSFloatingWindowLevel;
+      window_.ignoresMouseEvents = options.pointer_pass_through;
       if (options.minimum_size.has_value()) {
         window_.contentMinSize = NSMakeSize(options.minimum_size->width, options.minimum_size->height);
       }
@@ -887,14 +923,14 @@ public:
       SetMacWindowAttachment(window_, this);
       delegate_->huxeruiWindow = this;
       view_->huxeruiWindow = this;
-      [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+      [view_ registerForDraggedTypes:@[NSPasteboardTypeFileURL, application_drag_type]];
       [NSNotificationCenter.defaultCenter addObserver:view_
                                              selector:@selector(resourceConfigurationDidChange:)
                                                  name:NSCurrentLocaleDidChangeNotification
                                                object:nil];
       if (options.initial_position) ApplyWindowContentOrigin(*options.initial_position);
       else [window_ center];
-      if (!passive_display_) [window_ makeFirstResponder:view_];
+      if (!passive_display_ && activatable_) [window_ makeFirstResponder:view_];
       UiWindow::UpdateResourceConfiguration(Configuration());
       RefreshSystemTheme();
       UpdateWindowLifecycleState();
@@ -915,9 +951,12 @@ public:
     [view_ draggingExited:nil];
     if (view_ != nil) {
       view_->huxeruiWindow = nullptr;
+      view_->huxeruiOutgoingDrag.reset();
+      view_->huxeruiDragPress = nil;
     }
     if (window_ != nil) SetMacWindowAttachment(window_, nullptr);
     window_drag_event_ = nil;
+    if (delegate_ != nil) delegate_->huxeruiWindow = nullptr;
     [frame_scheduler_ shutdown];
     frame_scheduler_ = nil;
     scheduled_frame_deadline_.reset();
@@ -1014,6 +1053,27 @@ public:
       runtime_->ReportFailure(std::current_exception());
       return true;
     }
+    }
+  }
+
+  bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
+    if (view_ == nil || view_->huxeruiOutgoingDrag || !view_->huxeruiDragPress ||
+        !(NSEvent.pressedMouseButtons & 1U)) return false;
+    NSPasteboardItem* marker = [[NSPasteboardItem alloc] init];
+    if (![marker setData:NSData.data forType:application_drag_type]) return false;
+    NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:marker];
+    const NSPoint point = [view_ convertPoint:view_->huxeruiDragPress.locationInWindow fromView:nil];
+    NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(1, 1)];
+    [item setDraggingFrame:NSMakeRect(point.x, point.y, 1, 1) contents:image];
+    view_->huxeruiOutgoingDrag = std::move(drag);
+    NSDraggingSession* session = [view_ beginDraggingSessionWithItems:@[item] event:view_->huxeruiDragPress source:view_];
+    if (session == nil) {
+      view_->huxeruiOutgoingDrag.reset();
+      return false;
+    }
+    session.animatesToStartingPositionsOnCancelOrFail = NO;
+    view_->huxeruiDragPress = nil;
+    return true;
   }
 
   void RequestFrameAt(double deadline) override {
@@ -1067,10 +1127,16 @@ public:
       RequestFullscreen(false);
       break;
     case WindowCommand::Close:
-      CloseWindow();
+      if (borderless_) {
+        [window_ close];
+      } else {
+        performing_close_ = true;
+        [window_ performClose:nil];
+      }
       break;
     case WindowCommand::Show:
-      [window_ orderFront:nil];
+      if (activatable_) [window_ orderFront:nil];
+      else [window_ orderFrontRegardless];
       break;
     case WindowCommand::Hide:
       [window_ orderOut:nil];
@@ -1082,6 +1148,21 @@ public:
       break;
     }
     UpdateWindowLifecycleState();
+  }
+
+  bool SetWindowAlwaysOnTop(bool enabled) override {
+    if (window_ == nil) return false;
+    window_.level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    return true;
+  }
+
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    if (window_ == nil || (enabled && view_ != nil && view_->huxeruiOutgoingDrag)) return false;
+    if (window_.ignoresMouseEvents == enabled && input_passthrough_ == enabled) return true;
+    input_passthrough_ = enabled;
+    ApplyMouseEvents();
+    if (enabled) [view_ cancelPointer];
+    return true;
   }
 
   void RequestFullscreen(bool fullscreen) override {
@@ -1141,7 +1222,8 @@ public:
   }
 
   bool BeginWindowDrag(NSEvent* event) {
-    if (input_blocked_ || !custom_chrome_ || !IsInitialized() || view_ == nil || window_ == nil || event == nil) {
+    if (input_blocked_ || (!custom_chrome_ && !borderless_) || !IsInitialized() || view_ == nil || window_ == nil ||
+        event == nil || (window_.styleMask & NSWindowStyleMaskFullScreen) != 0) {
       return false;
     }
     const NSPoint point = [view_ convertPoint:event.locationInWindow fromView:nil];
@@ -1162,7 +1244,7 @@ public:
     return utility_window_;
   }
 
-  WindowCapabilities NativeWindowCapabilities() const override {
+  WindowNativeCapabilities NativeWindowCapabilities() const override {
     // AppKit has no backend split: every attachment exposes the same native window operations.
     return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
             .topmost = true, .geometry = true, .native_move = true, .input_passthrough = true};
@@ -1325,8 +1407,8 @@ public:
   }
 
   void DrawCommittedFrame(CGContextRef context, NSRect dirty_rect) {
-    if (const auto deadline =
-            platform_views_->DrawBase(context, NSRectToCGRect(dirty_rect), frame_scheduler_ != nil && view_ != nil)) {
+    if (const auto deadline = platform_views_->DrawBase(context, NSRectToCGRect(dirty_rect), window_.opaque,
+                                                       frame_scheduler_ != nil && view_ != nil)) {
       ScheduleFrame(*deadline);
     }
   }
@@ -1622,6 +1704,8 @@ private:
   bool passive_display_ = false;
   bool input_passthrough_ = false;
   std::optional<Size> minimum_size_;
+  bool borderless_ = false;
+  bool activatable_ = true;
   float custom_title_bar_height_ = 0.0F;
   __strong NSWindow* window_ = nil;
   __strong HuxerUIView* view_ = nil;
@@ -1688,22 +1772,33 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 @implementation HuxerUIWindow
 
+- (BOOL)canBecomeKeyWindow {
+  return (self.styleMask & NSWindowStyleMaskTitled) == 0 || [super canBecomeKeyWindow];
+}
+
+- (BOOL)canBecomeMainWindow {
+  return (self.styleMask & NSWindowStyleMaskTitled) == 0 || [super canBecomeMainWindow];
+}
+
 - (void)sendEvent:(NSEvent*)event {
-  huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
-      huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+  id<NSWindowDelegate> delegate = self.delegate;
+  auto* window = [(id)delegate isKindOfClass:HuxerUIWindowDelegate.class]
+      ? ((HuxerUIWindowDelegate*)delegate)->huxeruiWindow : nullptr;
+  huxerui::detail::ExecutionGuard guard(window == nullptr ? nullptr :
+      huxerui::detail::InternalAccess::WindowExecution(*window));
   std::optional<huxerui::detail::MacNativeInputGuard> input_guard;
-  if (huxeruiWindow != nullptr) {
-    if (huxeruiWindow->IsInputBlocked()) return;
-    input_guard.emplace(huxeruiWindow->NativeRuntime());
+  if (window != nullptr) {
+    if (window->IsInputBlocked()) return;
+    input_guard.emplace(window->NativeRuntime());
   }
-  if (huxeruiWindow == nullptr || !huxeruiWindow->BeginPlatformViewFocusTraversal(event)) {
+  if (window == nullptr || !window->BeginPlatformViewFocusTraversal(event)) {
     [super sendEvent:event];
     return;
   }
   @try {
     [super sendEvent:event];
   } @finally {
-    if (huxeruiWindow != nullptr) huxeruiWindow->EndPlatformViewFocusTraversal();
+    window->EndPlatformViewFocusTraversal();
   }
 }
 
@@ -1765,7 +1860,33 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 @end
 
+@implementation HuxerUINonActivatingPanel
+
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
+
+@end
+
 @implementation HuxerUIView
+
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+  HUXERUI_UNUSED(session);
+  return context == NSDraggingContextWithinApplication && huxeruiOutgoingDrag && huxeruiOutgoingDrag->Active()
+             ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {
+  HUXERUI_UNUSED(session);
+  HUXERUI_UNUSED(point);
+  HUXERUI_UNUSED(operation);
+  auto drag = std::exchange(huxeruiOutgoingDrag, {});
+  if (drag) {
+    huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
+        huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+    try { drag->Finish(false); } catch (...) {}
+  }
+}
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
@@ -1776,6 +1897,17 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     return NSDragOperationNone;
   }
   const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
+  if (auto drag = huxerui::detail::LocalApplicationDrag(sender)) {
+    huxeruiIncomingDrag = drag;
+    try {
+      return drag->Move(*huxeruiWindow, {static_cast<float>(position.x), static_cast<float>(position.y)})
+                 ? NSDragOperationCopy : NSDragOperationNone;
+    } catch (...) {
+      [self draggingExited:nil];
+      return NSDragOperationNone;
+    }
+  }
+  if (![sender.draggingPasteboard.types containsObject:NSPasteboardTypeFileURL]) return NSDragOperationNone;
   huxeruiFileDropHover = YES;
   ++huxeruiFileDropSession;
   try {
@@ -1797,6 +1929,16 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
     [self draggingExited:nil];
     return NSDragOperationNone;
   }
+  if (const auto drag = huxeruiIncomingDrag; drag && huxeruiWindow != nullptr) {
+    const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
+    try {
+      return drag->Move(*huxeruiWindow, {static_cast<float>(position.x), static_cast<float>(position.y)})
+                 ? NSDragOperationCopy : NSDragOperationNone;
+    } catch (...) {
+      [self draggingExited:nil];
+      return NSDragOperationNone;
+    }
+  }
   if (!huxeruiFileDropHover) {
     return [self draggingEntered:sender];
   }
@@ -1814,6 +1956,9 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (void)draggingExited:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+  if (auto drag = std::exchange(huxeruiIncomingDrag, {}); drag && huxeruiWindow != nullptr) {
+    try { drag->Leave(*huxeruiWindow); } catch (...) {}
+  }
   if (huxeruiFileDropHover && huxeruiWindow != nullptr) {
     huxeruiFileDropHover = NO;
     try {
@@ -1826,6 +1971,15 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
+  if (auto drag = std::exchange(huxeruiIncomingDrag, {})) {
+    if (huxeruiWindow == nullptr || huxerui::detail::LocalApplicationDrag(sender) != drag) return NO;
+    const NSPoint position = [self convertPoint:sender.draggingLocation fromView:nil];
+    try {
+      return drag->Drop(*huxeruiWindow, {static_cast<float>(position.x), static_cast<float>(position.y)});
+    } catch (...) {
+      return NO;
+    }
+  }
   if (huxeruiWindow == nullptr || huxeruiWindow->IsInputBlocked() || !huxeruiFileDropHover ||
       !(sender.draggingSourceOperationMask & NSDragOperationCopy)) {
     [self draggingExited:nil];
@@ -2065,7 +2219,9 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   if (huxeruiWindow == nullptr || !huxeruiWindow->IsInitialized()) {
     return;
   }
+  huxeruiDragPress = nil;
   huxeruiWindow->CaptureWindowDragEvent(nil);
+  if (huxeruiOutgoingDrag) return;
   huxeruiWindow->SendPointer({
       huxerui::PointerEventType::Cancel,
       0,
@@ -2089,6 +2245,10 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
   return huxeruiWindow->SendKey(huxerui::detail::MakeMacKeyEvent(event, type));
 }
 
+- (BOOL)acceptsFirstMouse:(NSEvent*)event {
+  return [self.window isKindOfClass:HuxerUINonActivatingPanel.class] || [super acceptsFirstMouse:event];
+}
+
 - (void)mouseDown:(NSEvent*)event {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
@@ -2098,7 +2258,8 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
       return;
     }
   }
-  [self.window makeFirstResponder:self];
+  huxeruiDragPress = event;
+  if (self.window.canBecomeKeyWindow) [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
 
@@ -2115,13 +2276,14 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 }
 
 - (void)mouseUp:(NSEvent*)event {
+  huxeruiDragPress = nil;
   if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(nil);
   [self sendPointerEvent:event type:huxerui::PointerEventType::Up];
 }
 
 - (void)rightMouseDown:(NSEvent*)event {
   if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(event);
-  [self.window makeFirstResponder:self];
+  if (self.window.canBecomeKeyWindow) [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
 
@@ -2136,7 +2298,7 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 - (void)otherMouseDown:(NSEvent*)event {
   if (huxeruiWindow != nullptr) huxeruiWindow->CaptureWindowDragEvent(event);
-  [self.window makeFirstResponder:self];
+  if (self.window.canBecomeKeyWindow) [self.window makeFirstResponder:self];
   [self sendPointerEvent:event type:huxerui::PointerEventType::Down];
 }
 

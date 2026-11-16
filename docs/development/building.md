@@ -156,12 +156,22 @@ Cyan outlines show node bounds, amber marks padding and content bounds, pink mar
 
 For native Windows paint-resource comparisons, use the separate [Windows Paint Benchmark](windows-paint-benchmark.md), which measures submission and GPU timestamps without swap-chain presentation.
 
+To profile an application, select a HuxerUI source checkout with `--sdk` and pass `--profile` to `build`, `run`, or `package`.
+
+```bash
+huxerui run windows --config release --sdk ../HuxerUI --profile
+```
+
+The CLI uses a separate build directory where it owns the build cache. Android forwards the setting through the `huxeruiProfiling` Gradle property and iOS through the `HUXERUI_ENABLE_PROFILING` Xcode build setting. Existing Android and iOS projects need to forward those settings to CMake from `platform/android/app/build.gradle` and `platform/ios/Scripts/build_huxerui_core.sh`, respectively, as the current templates do. Both platform shells default to `OFF`.
+
+Profiling builds require a matching `hcg` for source metadata. The [host tool build scripts](sdk-packaging.md#host-tool-updates) can rebuild the tools from the checkout when the bundled versions are older.
+
 Source builds default to `HUXERUI_ENABLE_PROFILING=OFF`; explicitly enable the option to compile private Runtime diagnostics for source applications and repository examples.
 The option is independent of Debug and Release; use an optimized build for performance measurements.
 Existing build directories retain their cached value; pass `-DHUXERUI_ENABLE_PROFILING=OFF` explicitly to disable diagnostics in a directory previously configured with the option on.
 Defining a macro only on an application cannot add instrumentation to a precompiled SDK.
 With the option off, the recorder source is excluded and instrumentation macros do not evaluate their arguments; there is no added capture buffer, timer, environment lookup, or per-node profiling branch.
-Existing DebugOverlay metrics are separate and retain their current behavior.
+The DEBUG overlay provides live frame and process metrics in ordinary builds.
 
 ```bash
 cmake -S . -B build/profile -G Ninja -DCMAKE_BUILD_TYPE=Release -DHUXERUI_ENABLE_PROFILING=ON
@@ -169,34 +179,30 @@ cmake --build build/profile --target example_ui_gallery huxerui_runtime_tests --
 ctest --test-dir build/profile -R HuxerUIProfilingBuildTests --output-on-failure
 ```
 
-A profiling-enabled application records in `detailed` mode by default, including nested scope, factory, reconciliation, compilation, layout, paint-recording, and resource-resolution spans.
-The optional `HUXERUI_PROFILE` environment variable selects `overview` for frame stages and aggregate counters, `detailed` for the default detail level, or `off` to disable recording for that process.
-Leaving `HUXERUI_PROFILE` unset or empty uses `detailed`; with `off`, the compiled instrumentation still performs recorder checks but allocates no capture buffer and creates no output directory.
-Captures default to `traces/` under the current working directory, not the executable's directory.
-Set `HUXERUI_PROFILE_DIRECTORY` only to override that location; it does not change the recording mode.
-The output path is resolved when each Runtime is created, so a later working-directory change does not redirect its export.
-If the output directory cannot be resolved or created, HuxerUI reports a diagnostic and disables capture for that Runtime while allowing the application to continue.
+Profiling-enabled builds start idle. Open the DEBUG panel, select **Start recording**, reproduce the interaction, and select **Stop recording**. When the trace is ready, **Export trace** opens the window's file picker.
+The profiling build of UI Gallery shows the DEBUG ribbon in Release. Other Release applications can enable it with `AppOptions::show_debug_overlay = true`.
+Each capture belongs to the current window. If the buffer fills, recording stops automatically and **Prepare trace** makes the completed frames available for export.
+
+For scripted capture, set `HUXERUI_PROFILE=overview` for frame stages and aggregate counters or `HUXERUI_PROFILE=detailed` for nested scope, reconciliation, layout, paint recording, and resource spans. Each window records on startup and exports on normal retirement.
+The optional `HUXERUI_PROFILE_DIRECTORY` selects the automatic output directory, which defaults to `traces/` under the working directory at window creation. An unavailable directory reports a diagnostic.
 
 PowerShell, using the build above:
 
 ```powershell
+$env:HUXERUI_PROFILE = "detailed"
 & ./build/profile/bin/example_ui_gallery.exe
 ```
 
-To disable capture for a subsequent launch, set `$env:HUXERUI_PROFILE = "off"`; remove the variable to return to the default detailed capture.
+Unset `HUXERUI_PROFILE` to start idle and allow manual recording. Set it to `off` to disable recording for the process.
 
-Recording begins when each Runtime is created and exports a separate `runtime-<timestamp>-<identity>.json` file when that Runtime is destroyed during normal shutdown.
-The event buffer is limited to 8 MiB per recording Runtime; exhaustion stops recording and discards the incomplete final frame while preserving earlier complete frames and their counters.
-Frames aborted by exceptions are also discarded, and a stopped private recorder retains its buffer until restart or destruction.
-The capture contains framework event names, Runtime-local node identities, frame numbers, and counters; it does not collect application text, resource contents, file paths, or user-defined names.
-Scope flags identify initial composition, invalidation, and parent-driven recomposition; measure flags identify cache hits.
+The event and source storage share an 8 MiB budget per capture. Buffer exhaustion or a frame failure discards the incomplete frame. Earlier complete frames and counters remain available until the next recording or window retirement.
+Detailed captures include the composable's function name, project-relative file path, definition line, and the mounted component ID. Files outside the project use their basename. The event's node ID identifies the actual node measured or painted, including a descendant of that component. Scope events report the recomposition reason and measurement events mark cache hits.
+Capture data is limited to timings, counts, IDs, and source metadata.
 
 Open the JSON with [Perfetto](https://perfetto.dev/docs/getting-started/other-formats#chrome-json-format).
-Durations describe shared Runtime CPU-side work, including scene generation; they do not include GPU execution or native presentation.
+**Runtime frame** measures shared CPU-side frame construction in `UiWindow::BuildFrame()`. Paint spans measure drawing command recording, and nested spans report inclusive durations.
 The `huxerui` JSON field holds complete-frame counters and truncation information.
 Recording and export can affect performance, so use a profiling-disabled optimized build for the application timing baseline.
-The collector and test controls are private development tools, not an installed public API or a production capture facility.
-Capturing on platforms without a writable working directory requires an output-directory override or a source-level test harness; no platform launch integration is supplied here.
 
 SDK packaging scripts explicitly set `HUXERUI_ENABLE_PROFILING=OFF` for their target libraries, including both Windows configurations.
 Installing libraries or producing an SDK from a profiling-enabled host build is rejected; reconfigure with the option off and rebuild before packaging.
@@ -215,7 +221,9 @@ cmake --build build --target example_ui_gallery
 
 [`example_shared_transition`](../../examples/shared_transition/main.cpp) demonstrates titles moving from a reading list to a detail page, covers growing from thumbnails, and descriptions crossfading with SharedBounds. A separate local card demonstrates expansion, an arc, and interrupted retargeting without navigation; its control stays outside the animated scope. Both modes offer slow playback. Keep participating regions fully in view. Build with `cmake --build build --target example_shared_transition`; Android selects `-PhuxeruiExample=shared_transition` and the iOS runner selects `HUXERUI_APP_TARGET=example_shared_transition`.
 
-[`example_multi_window`](../../examples/multi_window/main.cpp) opens independent desktop windows sharing an application counter, with local counters and observable close/reopen behavior. Build with `cmake --build build --target example_multi_window`; unsupported hosts disable the open-window command.
+[`example_multi_window`](../../examples/multi_window/main.cpp) demonstrates moving tabs between two open desktop windows. Build with `cmake --build build --target example_multi_window`. Hosts without multiple-window support disable the open-window command.
+
+[`example_desktop_lyrics`](../../examples/desktop_lyrics/main.cpp) demonstrates a borderless floating panel on Windows, macOS, and Linux. Build with `cmake --build build --target example_desktop_lyrics`. Open the panel, click **Next lyric** to replace its text, and drag a non-interactive part of the panel to move it. **Pass clicks through** lets you use the window below the lyrics. Use the main window to restore input or close the panel.
 
 Desktop binaries or application bundles are emitted under the configured build output.
 Android examples use `platform/android/example_runner`, and iOS examples use the repository platform runner.

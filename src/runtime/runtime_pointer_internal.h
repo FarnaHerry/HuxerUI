@@ -27,7 +27,7 @@ public:
   void RefreshCursor();
 
 private:
-  void CompleteWindowDrag(WindowDrag& drag, bool canceled, bool dropped);
+  void CompleteWindowDrag(WindowDrag& drag, bool canceled, bool dropped, bool released_outside_application = false);
   void HandlePointerDown(const PointerEvent& event);
   void HandlePointerMove(const PointerEvent& event, bool hover_moved);
   void HandlePointerUp(const PointerEvent& event);
@@ -67,7 +67,7 @@ private:
   void UpdateDragDrop(PointerSession& session, const DragEvent& drag);
   void UpdateDropTarget(PointerSession& session, const DragEvent& drag, bool emit_moved);
   [[nodiscard]] std::optional<ActiveDropTarget>
-  ResolveDropTarget(const DragDropSession& session, Point window_position, bool across_windows = false) const;
+  ResolveDropTarget(std::type_index type, const void* payload, Point window_position, bool cross_window = false) const;
   void AdvanceDragDropSession(std::int64_t pointer_id, const FrameInfo& frame);
   void FinishDragDrop(PointerSession& session, const DragEvent& drag);
   void CancelDragDrop(PointerSession& session, const DragEvent& drag);

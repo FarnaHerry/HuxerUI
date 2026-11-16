@@ -41,6 +41,7 @@
 #include "internal_access.h"
 #include "application/platform_frame_internal.h"
 #include "resources/resource_internal.h"
+#include "runtime/gesture_internal.h"
 #include "text/text_internal.h"
 #include "win32_accessibility.h"
 #include "win32_application_internal.h"
@@ -64,10 +65,18 @@ namespace {
 constexpr UINT kRenderMessage = WM_APP + 1;
 constexpr UINT kWindowCommandMessage = WM_APP + 3;
 constexpr UINT kFullscreenMessage = WM_APP + 4;
+constexpr UINT kApplicationDragMessage = WM_APP + 5;
 constexpr UINT_PTR kFrameTimer = 1;
 constexpr UINT_PTR kTouchpadScrollTimer = 2;
 constexpr UINT kTouchpadScrollIdleMs = 120;
 constexpr float kDipsPerInch = 96.0F;
+constexpr DWORD pointer_pass_through_style = WS_EX_LAYERED | WS_EX_TRANSPARENT;
+#if defined(WS_EX_NOREDIRECTIONBITMAP)
+constexpr DWORD no_redirection_bitmap_style = WS_EX_NOREDIRECTIONBITMAP;
+#else
+// Win7-compatible builds can use this style on hosts where DirectComposition is available.
+constexpr DWORD no_redirection_bitmap_style = 0x00200000L;
+#endif
 
 // The Win7-compatible binary probes WinRT dynamically instead of importing newer OS entry points.
 class Win32SystemTheme final {
@@ -964,6 +973,21 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override {
+#if defined(HUXERUI_WINDOWS_7_COMPAT)
+    const HMODULE composition = LoadLibraryW(L"dcomp.dll");
+    const bool transparent_background = composition && GetProcAddress(composition, "DCompositionCreateDevice");
+    if (composition) FreeLibrary(composition);
+#else
+    constexpr bool transparent_background = true;
+#endif
+    return {
+        .transparent_background = transparent_background,
+        .always_on_top = true,
+        .non_activating = true,
+        .pointer_pass_through = true,
+    };
+  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
   int Run();
 
@@ -1213,7 +1237,7 @@ public:
   ~WindowsUiWindow() override { Retire(); Cleanup(); }
 
   void Initialize(Runtime& application, ViewFactory content, const WindowOptions& options) {
-    renderer_.Initialize();
+    renderer_.Initialize(options.transparent_background);
     instance_ = GetModuleHandleW(nullptr);
     CreateApplicationWindow(application, std::move(content), options);
     const auto execution = InternalAccess::WindowExecution(*this);
@@ -1330,6 +1354,13 @@ public:
     }
   }
 
+  bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
+    if (!window_ || !file_drop_ || pending_drag_ || transport_drag_) return false;
+    if (!PostMessageW(window_, kApplicationDragMessage, 0, 0)) return false;
+    pending_drag_ = std::move(drag);
+    return true;
+  }
+
   FontMetrics Metrics(const Font& font) override {
     return renderer_.Metrics(font);
   }
@@ -1364,7 +1395,7 @@ public:
     PostMessageW(window_, kWindowCommandMessage, static_cast<WPARAM>(command), 0);
   }
 
-  WindowCapabilities NativeWindowCapabilities() const override {
+  WindowNativeCapabilities NativeWindowCapabilities() const override {
     return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
             .topmost = true, .geometry = true, .native_move = true, .input_passthrough = transparent_surface_};
   }
@@ -1401,7 +1432,7 @@ public:
         1, std::numeric_limits<int>::max());
     ValidateTransparentSize(width, height);
     RECT frame{0, 0, width, height};
-    if (!utility_window_ && !custom_chrome_ &&
+    if (!utility_window_ && !custom_chrome_ && !borderless_ &&
         !win32_api_.AdjustWindowRectForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(window_, GWL_STYLE)), FALSE,
             static_cast<DWORD>(GetWindowLongPtrW(window_, GWL_EXSTYLE)), static_cast<UINT>(dpi_))) {
       return WindowRequestResult::Rejected;
@@ -1492,6 +1523,31 @@ public:
     return Point{static_cast<float>(origin.x) / scale, static_cast<float>(origin.y) / scale};
   }
 
+  bool SetWindowAlwaysOnTop(bool enabled) override {
+    return window_ && SetWindowPos(window_, enabled ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    if (!window_ || (enabled && transport_drag_)) return false;
+    const LONG_PTR previous = GetWindowLongPtrW(window_, GWL_EXSTYLE);
+    const auto flags = static_cast<LONG_PTR>(pointer_pass_through_style);
+    const LONG_PTR style = enabled ? previous | flags : previous & ~flags;
+    if (style == previous) return true;
+    if (!SetWindowStyle(style, GWL_EXSTYLE)) return false;
+
+    // The layered input style can use full opacity with either of the renderer's swap chains.
+    constexpr UINT frame_change = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER;
+    if ((enabled && !SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA)) ||
+        !SetWindowPos(window_, nullptr, 0, 0, 0, 0, frame_change)) {
+      HUXERUI_DISCARD(SetWindowStyle(previous, GWL_EXSTYLE));
+      if (!enabled) HUXERUI_DISCARD(SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA));
+      return false;
+    }
+    if (enabled) CancelPointer();
+    return true;
+  }
+
   void RequestFullscreen(bool fullscreen) override {
     if (window_ != nullptr) PostMessageW(window_, kFullscreenMessage, fullscreen, 0);
   }
@@ -1538,6 +1594,10 @@ private:
     transparent_surface_ = options.transparent_surface;
     passive_display_ = options.show_without_activation;
     custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
+    borderless_ = options.chrome_mode == WindowChromeMode::None;
+    transparent_background_ = options.transparent_background;
+    activatable_ = options.activatable;
+    resizable_ = options.resizable;
     renderer_.SetTransparentSurface(transparent_surface_);
     custom_title_bar_height_ = options.title_bar_height;
     minimum_size_ = options.minimum_size;
@@ -1550,12 +1610,17 @@ private:
         std::max(1L, static_cast<LONG>(std::lround(initial_size.width * scale))),
         std::max(1L, static_cast<LONG>(std::lround(initial_size.height * scale))),
     };
-    const DWORD style = utility_window_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
-    const DWORD extended_style = (utility_window_ ? WS_EX_TOOLWINDOW : 0) |
-                                 (transparent_surface_ ? WS_EX_LAYERED : 0) |
-                                 (passive_display_ ? WS_EX_NOACTIVATE : 0) |
-                                 (options.topmost ? WS_EX_TOPMOST : 0);
-    if (!utility_window_ && !custom_chrome_ &&
+    DWORD style = utility_window_ ? WS_POPUP
+        : (borderless_ ? WS_POPUP | WS_THICKFRAME | WS_MAXIMIZEBOX : WS_OVERLAPPEDWINDOW);
+    if (!resizable_ || utility_window_) style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    DWORD extended_style = (utility_window_ ? WS_EX_TOOLWINDOW : 0) |
+                           (transparent_surface_ ? WS_EX_LAYERED : 0) |
+                           (passive_display_ ? WS_EX_NOACTIVATE : 0);
+    if (!activatable_) extended_style |= WS_EX_NOACTIVATE;
+    if (options.topmost || options.always_on_top) extended_style |= WS_EX_TOPMOST;
+    if (transparent_background_) extended_style |= no_redirection_bitmap_style;
+    if (options.pointer_pass_through) extended_style |= pointer_pass_through_style;
+    if (!utility_window_ && !custom_chrome_ && !borderless_ &&
         !win32_api_.AdjustWindowRectForDpi(&frame, style, FALSE, extended_style, static_cast<UINT>(dpi_))) {
       throw std::runtime_error("HuxerUI could not calculate the Windows window size");
     }
@@ -1590,6 +1655,9 @@ private:
       throw std::runtime_error("HuxerUI could not create its Windows application window");
     }
     static_cast<WindowsRuntime&>(application).ApplyWindowIcons(window_);
+    if (options.pointer_pass_through && !SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA)) {
+      throw std::runtime_error("HuxerUI could not enable Windows window pointer pass-through");
+    }
     dpi_ = static_cast<float>(win32_api_.WindowDpi(window_));
     auto configuration = application.Resources()->Configuration();
     configuration.display_scale = DpiScale();
@@ -1814,7 +1882,7 @@ private:
   }
 
   LRESULT ResizeHitTest(LPARAM position) const noexcept {
-    if (window_ == nullptr || windowed_placement_ || IsZoomed(window_)) {
+    if (!resizable_ || utility_window_ || window_ == nullptr || windowed_placement_ || IsZoomed(window_)) {
       return HTCLIENT;
     }
     RECT bounds{};
@@ -1877,7 +1945,7 @@ private:
     }
     const float maximize_left = controls_left + button_width;
     const float maximize_right = maximize_left + button_width;
-    return point.x >= maximize_left && point.x < maximize_right ? HTMAXBUTTON : HTCLIENT;
+    return resizable_ && point.x >= maximize_left && point.x < maximize_right ? HTMAXBUTTON : HTCLIENT;
   }
 
   std::optional<RECT> PlatformViewInputBounds() const noexcept {
@@ -1887,7 +1955,7 @@ private:
     const float scale = DpiScale();
     const auto title_bar = QueryTitleBarMetrics(
         {static_cast<float>(client.right) / scale, static_cast<float>(client.bottom) / scale});
-    if (!IsZoomed(window_)) {
+    if (resizable_ && !IsZoomed(window_)) {
       const int horizontal = ResizeBorderX();
       const int vertical = ResizeBorderY();
       client.left += horizontal;
@@ -1903,6 +1971,7 @@ private:
 
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
                    PointerButton pressed_buttons = PointerButton::None) {
+    if (transport_drag_) return;
     last_pointer_position_ = position;
     // Disabling or re-enabling this window (modal blocking), destroying a capturing window, or other capture
     // changes can synchronously deliver WM_CANCELMODE or WM_CAPTURECHANGED while a pointer event is still being
@@ -1940,10 +2009,10 @@ private:
     if (!IsInitialized()) {
       return;
     }
+    if (transport_drag_) return;
     SendPointer(PointerEventType::Cancel, last_pointer_position_);
     pointer_down_ = false;
-    const HWND capture = GetCapture();
-    if (capture == window_ || (capture && IsChild(window_, capture))) {
+    if (const HWND captured = GetCapture(); captured == window_ || IsChild(window_, captured)) {
       ReleaseCapture();
     }
   }
@@ -2001,12 +2070,20 @@ private:
 
   std::optional<LRESULT> HandleClientPointerMessage(HWND source, UINT message, WPARAM w_param, LPARAM l_param) {
     switch (message) {
+    case WM_MOUSEACTIVATE:
+      if (!activatable_) return MA_NOACTIVATE;
+      return std::nullopt;
+#ifdef WM_POINTERACTIVATE
+    case WM_POINTERACTIVATE:
+      if (!activatable_) return PA_NOACTIVATE;
+      return std::nullopt;
+#endif
     case WM_CANCELMODE:
       CancelPointer();
       return 0;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
-      SetFocus(window_);
+      if (activatable_) SetFocus(window_);
       SetCapture(source);
       pointer_down_ = true;
       SendPointer(PointerEventType::Down, ClientPoint(source, l_param), SemanticMouseButton(true),
@@ -2014,7 +2091,7 @@ private:
       return 0;
     case WM_RBUTTONDOWN:
     case WM_RBUTTONDBLCLK:
-      SetFocus(window_);
+      if (activatable_) SetFocus(window_);
       SetCapture(source);
       pointer_down_ = true;
       SendPointer(PointerEventType::Down, ClientPoint(source, l_param), SemanticMouseButton(false),
@@ -2022,7 +2099,7 @@ private:
       return 0;
     case WM_MBUTTONDOWN:
     case WM_MBUTTONDBLCLK:
-      SetFocus(window_);
+      if (activatable_) SetFocus(window_);
       SetCapture(source);
       pointer_down_ = true;
       SendPointer(PointerEventType::Down, ClientPoint(source, l_param), PointerButton::Middle,
@@ -2030,7 +2107,7 @@ private:
       return 0;
     case WM_XBUTTONDOWN:
     case WM_XBUTTONDBLCLK: {
-      SetFocus(window_);
+      if (activatable_) SetFocus(window_);
       SetCapture(source);
       pointer_down_ = true;
       const PointerButton button = GET_XBUTTON_WPARAM(w_param) == XBUTTON1 ? PointerButton::Back
@@ -2105,7 +2182,7 @@ private:
   LRESULT HandleOverlayMessage(HWND source, UINT message, WPARAM w_param, LPARAM l_param) {
     ExecutionGuard guard(InternalAccess::WindowExecution(*this));
     if (message == WM_NCHITTEST) {
-      if (!custom_chrome_ || windowed_placement_) {
+      if ((!custom_chrome_ && !borderless_) || windowed_placement_) {
         return HTCLIENT;
       }
       if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
@@ -2168,9 +2245,9 @@ private:
     }
   }
 
-  bool SetWindowStyle(LONG_PTR style) {
+  bool SetWindowStyle(LONG_PTR style, int index = GWL_STYLE) {
     SetLastError(ERROR_SUCCESS);
-    return SetWindowLongPtrW(window_, GWL_STYLE, style) != 0 || GetLastError() == ERROR_SUCCESS;
+    return SetWindowLongPtrW(window_, index, style) != 0 || GetLastError() == ERROR_SUCCESS;
   }
 
   bool RestoreWindowedPlacement(const WindowedPlacement& saved) {
@@ -2229,15 +2306,35 @@ private:
   }
 
   LRESULT HandleMessage(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
+    if (message == kApplicationDragMessage) {
+      const auto drag = std::exchange(pending_drag_, {});
+      if (!drag || !drag->Active()) return 0;
+      const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+      if (!(GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000)) {
+        drag->Finish(false);
+        return 0;
+      }
+      transport_drag_ = true;
+      pointer_down_ = false;
+      if (GetCapture() == window) ReleaseCapture();
+      try {
+        RunWin32ApplicationDrag(drag, swapped);
+      } catch (...) {
+        transport_drag_ = false;
+        throw;
+      }
+      transport_drag_ = false;
+      return 0;
+    }
     if (!IsInitialized() && message != WM_NCCREATE && message != WM_CREATE && message != WM_DESTROY &&
         message != WM_NCCALCSIZE && message != WM_GETMINMAXINFO && message != WM_NCDESTROY) {
       return message == WM_CLOSE ? 0 : DefWindowProcW(window, message, w_param, l_param);
     }
     if (message == WM_MOUSEACTIVATE && passive_display_) return MA_NOACTIVATE;
     if (windowed_placement_ && message == WM_NCCALCSIZE) return 0;
-    if (custom_chrome_ && message == WM_NCCALCSIZE) {
+    if ((custom_chrome_ || borderless_) && message == WM_NCCALCSIZE) {
       // User32 must observe the first captioned-window calculation before the client takes ownership of the frame.
-      if (first_nc_calc_) {
+      if (custom_chrome_ && first_nc_calc_) {
         first_nc_calc_ = false;
         return DefWindowProcW(window, message, w_param, l_param);
       }
@@ -2265,9 +2362,10 @@ private:
       }
       const UINT dpi = std::max(1U, win32_api_.WindowDpi(window));
       SIZE frame_extent{};
-      if (!utility_window_ && !custom_chrome_) {
+      if (!utility_window_ && !custom_chrome_ && !borderless_) {
         RECT frame{};
-        if (win32_api_.AdjustWindowRectForDpi(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi)) {
+        if (win32_api_.AdjustWindowRectForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE)), FALSE,
+                                            static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE)), dpi)) {
           frame_extent = {frame.right - frame.left, frame.bottom - frame.top};
         }
       }
@@ -2280,7 +2378,7 @@ private:
     case WM_NCHITTEST:
       if (utility_window_) return HTCLIENT;
       if (windowed_placement_) return HTCLIENT;
-      if (custom_chrome_) {
+      if (custom_chrome_ || borderless_) {
         if (const std::optional<LRESULT> caption_control = CaptionControlHitTest(l_param)) {
           return *caption_control;
         }
@@ -2410,10 +2508,14 @@ private:
       } else {
         UpdateRuntimeViewport();
       }
+      // A window without a redirection bitmap can have an empty GDI paint clip even with pending damage.
+      RECT update_rect{};
+      if (transparent_background_) GetUpdateRect(window, &update_rect, FALSE);
       PAINTSTRUCT paint{};
       BeginPaint(window, &paint);
+      const RECT& paint_rect = transparent_background_ ? update_rect : paint.rcPaint;
       const auto render_result = committed_frame_ != nullptr
-          ? renderer_.Render(window_, dpi_, *committed_frame_, paint.rcPaint) : Win32RenderResult::Skipped;
+          ? renderer_.Render(window_, dpi_, *committed_frame_, paint_rect) : Win32RenderResult::Skipped;
       if (render_result == Win32RenderResult::Retry || render_result == Win32RenderResult::Recreate) {
         InvalidateFullWindow();
       }
@@ -2476,7 +2578,7 @@ private:
       return DefWindowProcW(window, message, w_param, l_param);
     case WM_NCLBUTTONDOWN:
       if (custom_chrome_ && w_param == HTMAXBUTTON) {
-        SetFocus(window);
+        if (activatable_) SetFocus(window);
         SetCapture(window);
         pointer_down_ = true;
         SendPointer(PointerEventType::Down, ScreenPoint(l_param));
@@ -2581,6 +2683,10 @@ private:
   bool utility_window_ = false;
   bool transparent_surface_ = false;
   bool passive_display_ = false;
+  bool borderless_ = false;
+  bool transparent_background_ = false;
+  bool activatable_ = true;
+  bool resizable_ = true;
   float custom_title_bar_height_ = 0.0F;
   std::optional<Size> minimum_size_;
   bool first_nc_calc_ = true;
@@ -2594,6 +2700,8 @@ private:
   bool touchpad_scroll_active_ = false;
   bool dispatching_pointer_event_ = false;
   bool pointer_cancel_deferred_ = false;
+  bool transport_drag_ = false;
+  std::shared_ptr<WindowDrag> pending_drag_;
   bool performing_close_ = false;
   bool input_blocked_ = false;
   bool enabled_before_input_block_ = true;

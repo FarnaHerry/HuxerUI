@@ -297,12 +297,16 @@ return Button("New window").OnClick([application, model] {
 ```
 
 The returned `WindowHandle` does not own the window; discarding it leaves the window open.
-Its `IsOpen()` method is observable during composition and becomes false when closure is accepted, even before native destruction completes.
+`IsOpen()` is observable during composition. On desktop it becomes false when HuxerUI accepts closure, before native destruction completes.
 Hidden and minimized windows remain open.
 Retained handles never target a replacement window; commands after closure are ignored.
 `Close()` preserves `OnCloseRequest()` interception; a handler returning true consumes the request.
 Minimize and close handlers may issue the other command; recursive requests for the same command are consumed.
 If a handler closes the window, the pending native operation is suppressed even when the handler returns false.
+
+On iOS and iPadOS, set `UIApplicationSupportsMultipleScenes` to `true` inside `UIApplicationSceneManifest` in `App/Info.plist`. Query `CanOpenWindow()` to offer the action and await `OpenWindowAsync(content, options)` on the application thread. It returns after UIKit connects the new scene and HuxerUI initializes the window. UIKit may still reject an individual request, for example on the outer display of iPhone Duo.
+
+On iOS, `Close()` consults the mounted close handler before requesting destruction, and `IsOpen()` becomes false when UIKit confirms permanent discard. A temporary disconnect keeps `IsOpen()` true and moves the window lifecycle to Background. Reconnecting the same session creates a fresh composition with an equal `WindowHandle`. Keep document and workspace data in application-owned state.
 
 Use `window.SetFullscreen(true)` or `window.SetFullscreen(false)` to request a fullscreen transition. `window.IsFullscreen()` is observable and updates after the host confirms entry or exit, including exits initiated by the host. Desktop windows return to their previous windowed placement, including maximized state, subject to the window manager. On Web, request entry directly from a user interaction callback. The browser controls whether the request succeeds. Android and iOS ignore fullscreen requests and report false.
 
@@ -330,7 +334,17 @@ Set `AppOptions::quit_on_last_window_closed = false` to keep application service
 Hidden windows count, while initial windowless startup, failed creation, and retirement of external UI attachments do not trigger this policy.
 `ApplicationHandle::Quit()` shuts down the entire application without invoking per-window close interception, retiring windows before application services.
 
-[Multiple-window example](../../examples/multi_window/main.cpp) demonstrates shared and local counters, observable closure, and reopening.
+[Multiple-window example](../../examples/multi_window/main.cpp) uses shared application state to move tabs between two open windows. Click **Open secondary**, then drag a tab onto the other window's tab bar to move and select it.
+
+### Desktop floating windows
+
+Use `WindowChromeMode::None` to open an undecorated window. Mark an area with `WindowDragRegion{}` to make it draggable. Interactive descendants still receive pointer input. Set `WindowOptions::resizable` to false to disable user resizing in windowed mode.
+
+`application.WindowSupport()` reports transparent backgrounds, always-on-top windows, non-activating windows, and whole-window pointer pass-through. Request supported behaviors through `WindowOptions`. With `transparent_background`, unpainted client pixels reveal the desktop and translucent content blends with the surface underneath. With `activatable = false`, showing the window and using its pointer controls retain the current keyboard focus. `Activate()` shows a non-activating window.
+
+`window.SetAlwaysOnTop(enabled)` and `window.SetPointerPassThrough(enabled)` change the open window and return whether the host accepted the request. Enabling pass-through cancels current pointer interaction in that window. Keep a control in another window to restore pointer input.
+
+Windows and macOS provide all four optional behaviors on supported windowing environments. The GTK backend queries display support for transparency and pointer pass-through. It reports always-on-top and non-activating support as false. The [desktop lyrics example](../../examples/desktop_lyrics/main.cpp) uses the available capabilities to configure its overlay.
 
 ## Runtime model
 

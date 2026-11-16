@@ -155,9 +155,17 @@ const Color rgba_accent = Color::Rgba32(0x6750A4FFU);
 const Color argb_accent = Color::Argb32(0xFF6750A4U);
 ```
 
-`ImageVariant` covers `ImageResource`, `ImageAsset`, and `VectorAsset`.
+`ImageVariant` covers `ImageResource`, `ImageAsset`, `VectorAsset`, and `Bitmap`.
 `Image` also accepts `std::shared_ptr<ExternalTexture>` through a separate overload because a live platform texture is not an application image value.
 Configure fit, alignment, sampling, and tint with typed methods.
+
+`ImageAsset` retains its PNG or JPEG bytes. Use `DecodeAsync()` to obtain a `Bitmap` with upright RGBA8 pixels and the asset's scale. `PixelWidth()` and `PixelHeight()` describe the pixel grid used by `Crop()`, `Resize()`, and `Transform()`. `IntrinsicSize()` divides those dimensions by `Scale()`, so a 400 × 200 bitmap at scale 2 occupies 200 × 100 logical units before fitting or layout constraints. Both `Image` and `PaintContext::DrawImage()` accept a bitmap directly.
+
+Use `ImageAsset::FromFile(file)` to read a local `File` synchronously. For `FileReference` or asynchronous reads, pass the result of `ReadBytesAsync()` to `ImageAsset::FromEncoded()`. To import existing sRGB pixels, use `Bitmap::FromRgba8()` for owned, tightly packed RGBA bytes or `Bitmap::CopyPixels()` for borrowed RGBA, BGRA, or ARGB rows with a stride.
+
+`ImageAsset::SaveAsync(file)` writes the original bytes. `Bitmap::SaveAsync(file, options)` encodes to the chosen format before writing. PNG preserves alpha, while JPEG composites against the opaque background in `ImageEncodeOptions`. Use `Bitmap::EncodeAsync()` when the encoded bytes are needed in memory. The [Bitmap example](../../examples/bitmap/main.cpp) opens a PNG or JPEG, previews a center crop, and saves a PNG in the application's temporary directory.
+
+`ExternalTexture::SnapshotAsync()` captures the latest frame available when called. It yields an empty optional before the first frame, and a finished producer still exposes its last frame. Use this operation when pixel data is needed for editing, encoding, or saving.
 
 `ImageAsset::FromEncoded(Bytes)` and `RawAsset::FromBytes(Bytes)` take ownership of encoded or arbitrary binary data.
 Use `CopyEncoded(std::span<const std::byte>)` and `CopyBytes(std::span<const std::byte>)` when the source is borrowed.
@@ -725,6 +733,9 @@ Removing the source node or retiring its window cancels the transfer; keep them 
 The optional preview follows the pointer over participating HuxerUI windows and disappears outside them.
 
 Use a long-press DragGesture configuration for reorder behavior inside scrolling content.
+To drag between Windows, macOS, or Linux windows in the same application, call `Scope(DragDropScope::Application)` on both `DragSource` and `DropTarget`. This supports the primary mouse button. The default `Window` scope keeps transfers in their source window.
+
+For an application-scoped drag, `DragSourceEvents::Ended` can report `DragDropResult::released_outside_application` when the platform confirms a mouse release outside the application's windows. Windows provides that confirmation. Use `dropped` to check whether a target received the drop.
 Typed DragSource/DropTarget transfers are in-process; native files, URLs, and PlatformView targets are not inferred from an application payload.
 Use [FileDropTarget](files.md#receiving-dropped-files) to receive external ordinary files through the separate host-owned file-drop lifecycle.
 See [Typed Drag-and-Drop Design](../design/drag-drop.md) for ownership, target selection, preview, and auto-scroll behavior.

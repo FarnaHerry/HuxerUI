@@ -582,16 +582,15 @@ bool Runtime::SupportsMultipleWindows() const noexcept {
   return false;
 }
 
+WindowCapabilities Runtime::QueryWindowSupport() const noexcept {
+  return {};
+}
+
 std::unique_ptr<UiWindow> Runtime::CreateUiWindow(ViewFactory, const WindowOptions&) {
   throw std::runtime_error("HuxerUI host does not support creating top-level windows");
 }
 
-WindowHandle Runtime::OpenWindow(ViewFactory content, WindowOptions options) {
-  return OpenWindow(std::move(content), std::move(options), {});
-}
-
-WindowHandle Runtime::OpenWindow(
-    ViewFactory content, WindowOptions options, const WindowRelationship& relationship) {
+void Runtime::ValidateWindowCreation(const ViewFactory& content, const WindowOptions& options) {
   state_->RequireThread();
   if (state_->phase != ApplicationRuntimeState::Phase::Running || state_->window_installations) {
     throw std::logic_error("HuxerUI cannot open a window during installation or shutdown");
@@ -602,11 +601,21 @@ WindowHandle Runtime::OpenWindow(
   }
   if (!content) throw std::invalid_argument("HuxerUI window content must not be empty");
   ValidateWindowOptions(options);
+}
+
+WindowHandle Runtime::OpenWindow(ViewFactory content, WindowOptions options) {
+  return OpenWindow(std::move(content), std::move(options), {});
+}
+
+WindowHandle Runtime::OpenWindow(
+    ViewFactory content, WindowOptions options, const WindowRelationship& relationship) {
+  ValidateWindowCreation(content, options);
   const auto owner_service = relationship.owner ? relationship.owner->service_ : nullptr;
   if (owner_service) static_cast<void>(RequireLiveWindow(*owner_service));
   if (!SupportsMultipleWindows()) {
     throw std::runtime_error("HuxerUI host does not support creating top-level windows");
   }
+  ValidateWindowSupport(options, QueryWindowSupport());
   ExecutionGuard application_guard(state_->execution);
   std::unique_ptr<UiWindow> window;
   ++state_->window_installations;
@@ -622,7 +631,7 @@ WindowHandle Runtime::OpenWindow(
   }
   --state_->window_installations;
   ResumeWindowMaintenance();
-  WindowHandle handle(window->state_->window_service_);
+  auto handle = window->state_->window_service_->Handle();
   auto* created = window.get();
   owned_windows_.push_back(std::move(window));
   try {
@@ -630,7 +639,9 @@ WindowHandle Runtime::OpenWindow(
     ApplyWindowRelationship(*created->state_->window_service_, owner_service.get(), relationship.modal);
     RebuildWindowBlocking({});
     if (created->IsInitialized()) {
-      created->RequestWindowCommand(options.show_without_activation ? WindowCommand::Show : WindowCommand::Activate);
+      created->RequestWindowCommand((options.show_without_activation || !options.activatable)
+                                        ? WindowCommand::Show
+                                        : WindowCommand::Activate);
     }
   } catch (...) {
     const auto found = std::find_if(owned_windows_.begin(), owned_windows_.end(),

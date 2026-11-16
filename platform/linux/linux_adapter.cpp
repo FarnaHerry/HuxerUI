@@ -64,14 +64,25 @@
 #include "application/platform_frame_internal.h"
 #include "application/window_internal.h"
 #include "resources/resource_internal.h"
+#include "runtime/gesture_internal.h"
 #include "text/text_internal.h"
-#include "runtime/window_drag_internal.h"
 #include "application/window_internal.h"
 #include "application/application_internal.h"
 #include "macros_internal.h"
 
 namespace huxerui::detail {
+
 namespace {
+
+constexpr char application_drag_format[] = "application/x-huxerui-window-drag";
+constexpr char application_drag_data[] = "huxerui-window-drag";
+
+std::shared_ptr<WindowDrag> LocalApplicationDrag(GdkDrop* drop) {
+  GdkDrag* source = gdk_drop_get_drag(drop);
+  if (!source) return {};
+  auto* drag = static_cast<std::shared_ptr<WindowDrag>*>(g_object_get_data(G_OBJECT(source), application_drag_data));
+  return drag ? *drag : nullptr;
+}
 
 constexpr float kDipsPerScrollStep = 40.0F;
 
@@ -932,10 +943,36 @@ public:
   ~LinuxRuntime() override {
     Retire();
     StopObservingLifecycle();
+    if (transparent_window_style_) {
+      gtk_style_context_remove_provider_for_display(transparent_window_display_,
+                                                     GTK_STYLE_PROVIDER(transparent_window_style_));
+      g_clear_object(&transparent_window_style_);
+      g_clear_object(&transparent_window_display_);
+    }
     dispatcher_->Shutdown();
   }
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override {
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) return {};
+    return {
+        .transparent_background = gdk_display_is_rgba(display) && gdk_display_is_composited(display),
+        .pointer_pass_through = gdk_display_supports_input_shapes(display) != FALSE,
+    };
+  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
+
+  void ApplyTransparentWindowStyle(GtkWidget* widget) {
+    if (!transparent_window_style_) {
+      transparent_window_display_ = GDK_DISPLAY(g_object_ref(gtk_widget_get_display(widget)));
+      transparent_window_style_ = gtk_css_provider_new();
+      gtk_css_provider_load_from_string(transparent_window_style_,
+          "window.huxerui-transparent-window { background-color: transparent; background-image: none; }");
+      gtk_style_context_add_provider_for_display(transparent_window_display_,
+          GTK_STYLE_PROVIDER(transparent_window_style_), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    gtk_widget_add_css_class(widget, "huxerui-transparent-window");
+  }
 
   void ReportFailure(std::exception_ptr failure) {
     if (!failure_) failure_ = std::move(failure);
@@ -1239,6 +1276,8 @@ private:
     stopped_ = true;
   }
   std::shared_ptr<LinuxUiThreadDispatcher> dispatcher_;
+  GdkDisplay* transparent_window_display_ = nullptr;
+  GtkCssProvider* transparent_window_style_ = nullptr;
   GListModel* windows_ = nullptr;
   std::vector<GObject*> observed_windows_;
   bool stopped_ = false;
@@ -1299,6 +1338,12 @@ public:
     renderer_.Initialize();
     const Size initial_size = ResolveInitialWindowSize(options);
     CreateWindow(options, initial_size);
+    if (options.transparent_background) {
+      static_cast<LinuxRuntime&>(application).ApplyTransparentWindowStyle(GTK_WIDGET(window_));
+    }
+    if (options.pointer_pass_through && !SetWindowPointerPassThrough(true)) {
+      throw std::runtime_error("HuxerUI could not enable GTK window pointer pass-through");
+    }
     RefreshTextDpi();
     auto configuration = runtime.Resources()->Configuration();
     configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
@@ -1339,6 +1384,28 @@ public:
             frame_coordinator_.Request(deadline, Now(), drawing_area_ != nullptr && running_)) {
       ScheduleFrame(*scheduled);
     }
+  }
+
+  bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
+    if (!window_ || !pointer_device_ || platform_drag_ || pressed_buttons_ != PointerButton::Primary) return false;
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (!surface) return false;
+    GBytes* bytes = g_bytes_new_static("", 0);
+    GdkContentProvider* content = gdk_content_provider_new_for_bytes(application_drag_format, bytes);
+    g_bytes_unref(bytes);
+    platform_drag_ = gdk_drag_begin(surface, pointer_device_, content, GDK_ACTION_COPY, 0.0, 0.0);
+    g_object_unref(content);
+    if (!platform_drag_) return false;
+    g_object_set_data_full(G_OBJECT(platform_drag_), application_drag_data, new std::shared_ptr<WindowDrag>(drag),
+                           [](gpointer value) { delete static_cast<std::shared_ptr<WindowDrag>*>(value); });
+    g_signal_connect(platform_drag_, "cancel", G_CALLBACK(ApplicationDragCanceled), this);
+    g_signal_connect(platform_drag_, "dnd-finished", G_CALLBACK(ApplicationDragFinished), this);
+    GtkWidget* icon = gtk_drag_icon_get_for_drag(platform_drag_);
+    GtkWidget* empty = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_size_request(empty, 1, 1);
+    gtk_drag_icon_set_child(GTK_DRAG_ICON(icon), empty);
+    drag->SetPlatformCancel([this] { CancelApplicationDrag(); });
+    return true;
   }
 
   double Now() const noexcept override {
@@ -1437,12 +1504,12 @@ public:
     gtk_window_set_modal(window_, modal ? TRUE : FALSE);
   }
 
-  WindowCapabilities NativeWindowCapabilities() const override {
+  WindowNativeCapabilities NativeWindowCapabilities() const override {
     // Wayland owns focus-on-map, stacking, and placement by protocol, so those operations stay
     // unavailable there; transparency, utility presentation, sizing, and interactive moves work
     // through GDK on both backends.
     const bool x11 = UsingX11SurfaceBackend();
-    WindowCapabilities capabilities;
+    WindowNativeCapabilities capabilities;
     capabilities.transparent_surface = true;
     capabilities.utility_presentation = true;
     capabilities.passive_display = x11;
@@ -1694,6 +1761,21 @@ public:
     }
   }
 
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    if (!window_ || (enabled && platform_drag_) ||
+        !gdk_display_supports_input_shapes(gtk_widget_get_display(GTK_WIDGET(window_)))) return false;
+    if (pointer_pass_through_ == enabled) return true;
+    // Realize the surface before the first show so initial pass-through is in effect at mapping.
+    gtk_widget_realize(GTK_WIDGET(window_));
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (!surface) return false;
+    pointer_pass_through_ = enabled;
+    UpdatePointerInputRegion(surface);
+    if (enabled) CancelPointer();
+    else gtk_widget_queue_allocate(GTK_WIDGET(window_));
+    return true;
+  }
+
   void RequestFullscreen(bool fullscreen) override {
     if (!IsInitialized() || window_ == nullptr) return;
     if (fullscreen) {
@@ -1735,63 +1817,6 @@ private:
     g_object_unref(drag);
   }
 
-  static std::shared_ptr<WindowDrag> NativeTransfer(GdkDrop* drop) {
-    GdkDrag* drag = gdk_drop_get_drag(drop);
-    if (!drag) return {};
-    auto* transfer = static_cast<std::shared_ptr<WindowDrag>*>(
-        g_object_get_data(G_OBJECT(drag), "huxerui-window-drag")
-    );
-    return transfer ? *transfer : nullptr;
-  }
-
-  static gboolean NativeDragAccept(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    const auto transfer = NativeTransfer(drop);
-    return self.IsInitialized() && !self.input_blocked_ && transfer && transfer->Active();
-  }
-
-  static GdkDragAction NativeDragMoved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    const auto transfer = NativeTransfer(drop);
-    try {
-      if (self.IsInitialized() && !self.input_blocked_ && transfer &&
-          transfer->Move(self, {static_cast<float>(x), static_cast<float>(y)})) return GDK_ACTION_COPY;
-    } catch (...) {
-      self.runtime_->ReportFailure(std::current_exception());
-    }
-    return static_cast<GdkDragAction>(0);
-  }
-
-  static void NativeDragLeft(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    try {
-      if (const auto transfer = NativeTransfer(drop)) transfer->Leave(self);
-    } catch (...) {
-      self.runtime_->ReportFailure(std::current_exception());
-    }
-  }
-
-  static gboolean NativeDragDropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
-    auto& self = *static_cast<LinuxUiWindow*>(data);
-    ExecutionGuard guard(InternalAccess::WindowExecution(self));
-    const auto transfer = NativeTransfer(drop);
-    try {
-      if (!self.IsInitialized() || self.input_blocked_ || !transfer ||
-          !transfer->Drop(self, {static_cast<float>(x), static_cast<float>(y)})) return FALSE;
-      // Let GTK retire its drop dispatch and release the native grab before acknowledging completion.
-      g_idle_add_full(G_PRIORITY_DEFAULT, [](gpointer value) -> gboolean {
-        gdk_drop_finish(GDK_DROP(value), GDK_ACTION_COPY);
-        return G_SOURCE_REMOVE;
-      }, g_object_ref(drop), g_object_unref);
-      return TRUE;
-    } catch (...) {
-      self.runtime_->ReportFailure(std::current_exception());
-      return FALSE;
-    }
-  }
-
   static void NativeDragCanceled(GdkDrag*, GdkDragCancelReason reason, gpointer data) {
     static_cast<LinuxUiWindow*>(data)->EndNativeDrag(reason != GDK_DRAG_CANCEL_NO_TARGET, false);
   }
@@ -1807,6 +1832,7 @@ private:
     topmost_ = options.topmost;
     // Utility presentation is borderless by definition, so custom chrome has nothing to replace.
     custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
+    borderless_ = options.chrome_mode == WindowChromeMode::None;
     custom_title_bar_height_ = options.title_bar_height;
     minimum_size_ = options.minimum_size;
     window_ = GTK_WINDOW(gtk_window_new());
@@ -1816,10 +1842,8 @@ private:
         std::max(1, static_cast<int>(std::lround(initial_size.width))),
         std::max(1, static_cast<int>(std::lround(initial_size.height)))
     );
-    gtk_window_set_decorated(window_, !custom_chrome_ && !utility_window_);
-    if (utility_window_) {
-      gtk_window_set_resizable(window_, FALSE);
-    }
+    gtk_window_set_decorated(window_, options.chrome_mode == WindowChromeMode::System && !utility_window_);
+    gtk_window_set_resizable(window_, options.resizable && !utility_window_);
     if (transparent_surface_) {
       ApplyTransparentBackground();
     }
@@ -1871,16 +1895,19 @@ private:
     g_signal_connect(motion, "leave", G_CALLBACK(PointerLeft), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), motion);
 
-    const char* drag_formats[] = {"application/x-huxerui-window-drag"};
-    GtkDropTargetAsync* drop = gtk_drop_target_async_new(gdk_content_formats_new(drag_formats, 1), GDK_ACTION_COPY);
-    g_signal_connect(drop, "accept", G_CALLBACK(NativeDragAccept), this);
-    g_signal_connect(drop, "drag-enter", G_CALLBACK(NativeDragMoved), this);
-    g_signal_connect(drop, "drag-motion", G_CALLBACK(NativeDragMoved), this);
-    g_signal_connect(drop, "drag-leave", G_CALLBACK(NativeDragLeft), this);
-    g_signal_connect(drop, "drop", G_CALLBACK(NativeDragDropped), this);
+    const char* formats[]{application_drag_format};
+    GtkDropTargetAsync* drop = gtk_drop_target_async_new(gdk_content_formats_new(formats, 1), GDK_ACTION_COPY);
+    g_signal_connect(drop, "accept", G_CALLBACK(ApplicationDragAccepted), this);
+    g_signal_connect(drop, "drag-enter", G_CALLBACK(ApplicationDragMoved), this);
+    g_signal_connect(drop, "drag-motion", G_CALLBACK(ApplicationDragMoved), this);
+    g_signal_connect(drop, "drag-leave", G_CALLBACK(ApplicationDragLeft), this);
+    g_signal_connect(drop, "drop", G_CALLBACK(ApplicationDragDropped), this);
     gtk_widget_add_controller(GTK_WIDGET(drawing_area_), GTK_EVENT_CONTROLLER(drop));
 
-    GtkEventController* scroll = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+    GtkEventController* scroll = gtk_event_controller_scroll_new(
+        static_cast<GtkEventControllerScrollFlags>(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES |
+                                                   GTK_EVENT_CONTROLLER_SCROLL_DISCRETE)
+    );
     gtk_event_controller_set_propagation_phase(scroll, GTK_PHASE_CAPTURE);
     g_signal_connect(scroll, "scroll-begin", G_CALLBACK(ScrollBegan), this);
     g_signal_connect(scroll, "scroll", G_CALLBACK(Scrolled), this);
@@ -2119,6 +2146,12 @@ private:
     });
   }
 
+  void UpdatePointerInputRegion(GdkSurface* surface) const {
+    cairo_region_t* region = pointer_pass_through_ ? cairo_region_create() : nullptr;
+    gdk_surface_set_input_region(surface, region);
+    if (region) cairo_region_destroy(region);
+  }
+
   void AttachToplevelState() {
     if (window_ == nullptr) {
       return;
@@ -2132,17 +2165,14 @@ private:
     toplevel_ = toplevel;
     if (toplevel_ != nullptr) {
       minimized_ = (gdk_toplevel_get_state(toplevel_) & GDK_TOPLEVEL_STATE_MINIMIZED) != 0;
-      toplevel_state_handler_ =
-          g_signal_connect(toplevel_, "notify::state", G_CALLBACK(ToplevelStateChanged), this);
+      g_signal_connect(toplevel_, "notify::state", G_CALLBACK(ToplevelStateChanged), this);
+      g_signal_connect_after(surface, "layout", G_CALLBACK(ToplevelLayoutChanged), this);
     }
   }
 
   void DetachToplevelState() noexcept {
-    if (toplevel_ != nullptr && toplevel_state_handler_ != 0) {
-      g_signal_handler_disconnect(toplevel_, toplevel_state_handler_);
-    }
+    if (toplevel_ != nullptr) g_signal_handlers_disconnect_by_data(toplevel_, this);
     toplevel_ = nullptr;
-    toplevel_state_handler_ = 0;
     minimized_ = false;
   }
 
@@ -2161,7 +2191,7 @@ private:
   }
 
   std::optional<LinuxResizeEdge> HitTestResizeEdge(Point point) const noexcept {
-    if (!custom_chrome_ || window_ == nullptr || drawing_area_ == nullptr || !IsInitialized()) {
+    if ((!custom_chrome_ && !borderless_) || window_ == nullptr || drawing_area_ == nullptr || !IsInitialized()) {
       return std::nullopt;
     }
     return ResolveLinuxResizeEdge(
@@ -2187,7 +2217,7 @@ private:
   }
 
   bool BeginWindowOperation(GdkEvent* event, guint button, Point point) {
-    if (!custom_chrome_ || window_ == nullptr || !IsInitialized() || event == nullptr ||
+    if ((!custom_chrome_ && !borderless_) || window_ == nullptr || !IsInitialized() || event == nullptr ||
         gtk_window_is_fullscreen(window_)) {
       return false;
     }
@@ -2221,7 +2251,7 @@ private:
   void SendPointer(PointerEventType type, Point position, PointerButton changed_button = PointerButton::None,
       PointerButton pressed_buttons = PointerButton::None, KeyModifiers modifiers = {}) {
     if (native_drag_ && type != PointerEventType::Cancel) return;
-    if (!IsInitialized()) {
+    if (!IsInitialized() || platform_drag_) {
       return;
     }
     last_pointer_position_ = position;
@@ -2238,9 +2268,10 @@ private:
   }
 
   void CancelPointer() {
-    pointer_inside_ = false;
+    if (platform_drag_) return;
+    const bool was_inside = std::exchange(pointer_inside_, false);
     suppress_pointer_release_ = false;
-    if (pressed_buttons_ != PointerButton::None) {
+    if (was_inside || pressed_buttons_ != PointerButton::None) {
       pressed_buttons_ = PointerButton::None;
       SendPointer(PointerEventType::Cancel, last_pointer_position_);
     }
@@ -2311,6 +2342,7 @@ private:
     if (system_theme_) system_theme_->Stop();
     running_ = false;
     EndNativeDrag(true, false);
+    CancelApplicationDrag();
     g_clear_object(&pointer_device_);
     if (platform_views_) {
       platform_views_->Shutdown();
@@ -2437,6 +2469,7 @@ private:
     self.AttachToplevelState();
     self.ApplyPendingInitialPosition();
     self.ApplyFloatingWindowMapState();
+    if (self.pointer_pass_through_ && self.toplevel_) self.UpdatePointerInputRegion(GDK_SURFACE(self.toplevel_));
     self.UpdateLifecycleState();
   }
 
@@ -2463,6 +2496,12 @@ private:
 
   static void WindowActiveChanged(GObject*, GParamSpec*, gpointer data) {
     static_cast<LinuxUiWindow*>(data)->UpdateLifecycleState();
+  }
+
+  static void ToplevelLayoutChanged(GdkSurface* surface, int, int, gpointer data) {
+    const auto& self = *static_cast<LinuxUiWindow*>(data);
+    // GTK can restore its decoration input region during a surface layout.
+    if (self.pointer_pass_through_) self.UpdatePointerInputRegion(surface);
   }
 
   static void ToplevelStateChanged(GObject*, GParamSpec*, gpointer data) {
@@ -2510,6 +2549,9 @@ private:
       suppress_pointer_release_ = true;
       return;
     }
+    GdkDevice* device = event ? gdk_event_get_device(event) : nullptr;
+    g_clear_object(&pointer_device_);
+    if (device && gdk_device_get_source(device) == GDK_SOURCE_MOUSE) pointer_device_ = g_object_ref(device);
     pressed_buttons_ |= button;
     if (event) {
       g_set_object(&pointer_device_, gdk_event_get_device(event));
@@ -2520,6 +2562,7 @@ private:
   }
 
   void ReleasePointer(GdkEvent* event, guint platform_button, Point position) {
+    if (platform_drag_) return;
     if (suppress_pointer_release_) {
       suppress_pointer_release_ = false;
       return;
@@ -2531,6 +2574,99 @@ private:
     pressed_buttons_ = RemovePointerButton(pressed_buttons_, button);
     SendPointer(PointerEventType::Up, position, button, pressed_buttons_,
         event ? TranslateModifiers(gdk_event_get_modifier_state(event)) : KeyModifiers{});
+  }
+
+  void CancelApplicationDrag() noexcept {
+    if (!platform_drag_) return;
+    auto* drag = GDK_DRAG(g_object_ref(platform_drag_));
+    g_signal_emit_by_name(drag, "cancel", GDK_DRAG_CANCEL_USER_CANCELLED);
+    g_object_unref(drag);
+  }
+
+  void EndApplicationDrag(bool canceled, bool success) noexcept {
+    GdkDrag* platform_drag = std::exchange(platform_drag_, nullptr);
+    if (!platform_drag) return;
+    pressed_buttons_ = PointerButton::None;
+    suppress_pointer_release_ = false;
+    g_signal_handlers_disconnect_by_data(platform_drag, this);
+    const auto* retained = static_cast<std::shared_ptr<WindowDrag>*>(
+        g_object_get_data(G_OBJECT(platform_drag), application_drag_data));
+    auto drag = retained ? *retained : nullptr;
+    g_object_set_data(G_OBJECT(platform_drag), application_drag_data, nullptr);
+    gdk_drag_drop_done(platform_drag, success);
+    g_object_unref(platform_drag);
+    if (drag) {
+      try {
+        drag->Finish(canceled);
+      } catch (...) {
+        static_cast<LinuxRuntime&>(ApplicationRuntime()).ReportFailure(std::current_exception());
+      }
+    }
+  }
+
+  static void ApplicationDragCanceled(GdkDrag*, GdkDragCancelReason reason, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    self.EndApplicationDrag(reason != GDK_DRAG_CANCEL_NO_TARGET, false);
+  }
+
+  static void ApplicationDragFinished(GdkDrag*, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    self.EndApplicationDrag(false, true);
+  }
+
+  static gboolean ApplicationDragAccepted(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
+    if (!gdk_content_formats_contain_mime_type(gdk_drop_get_formats(drop), application_drag_format)) return FALSE;
+    const auto drag = LocalApplicationDrag(drop);
+    return static_cast<LinuxUiWindow*>(data)->IsInitialized() && drag && drag->Active();
+  }
+
+  static GdkDragAction ApplicationDragMoved(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    try {
+      const auto drag = LocalApplicationDrag(drop);
+      if (drag && drag->Move(self, {static_cast<float>(x), static_cast<float>(y)})) return GDK_ACTION_COPY;
+    } catch (...) {
+      static_cast<LinuxRuntime&>(self.ApplicationRuntime()).ReportFailure(std::current_exception());
+    }
+    return static_cast<GdkDragAction>(0);
+  }
+
+  static void ApplicationDragLeft(GtkDropTargetAsync*, GdkDrop* drop, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    try {
+      if (const auto drag = LocalApplicationDrag(drop)) drag->Leave(self);
+    } catch (...) {
+      static_cast<LinuxRuntime&>(self.ApplicationRuntime()).ReportFailure(std::current_exception());
+    }
+  }
+
+  static gboolean ApplicationDragDropped(GtkDropTargetAsync*, GdkDrop* drop, double x, double y, gpointer data) {
+    auto& self = *static_cast<LinuxUiWindow*>(data);
+    ExecutionGuard guard(InternalAccess::WindowExecution(self));
+    GdkDragAction action{};
+    try {
+      const auto drag = LocalApplicationDrag(drop);
+      if (drag && drag->Drop(self, {static_cast<float>(x), static_cast<float>(y)})) action = GDK_ACTION_COPY;
+    } catch (...) {
+      static_cast<LinuxRuntime&>(self.ApplicationRuntime()).ReportFailure(std::current_exception());
+    }
+    // A compositor may still deliver a drop after the local session has ended. Acknowledge both outcomes
+    // outside the GTK dispatch because finishing the drop can complete the source synchronously.
+    using PendingDrop = std::pair<GdkDrop*, GdkDragAction>;
+    g_idle_add_full(G_PRIORITY_DEFAULT, [](gpointer value) -> gboolean {
+      const auto& [drop, action] = *static_cast<PendingDrop*>(value);
+      gdk_drop_finish(drop, action);
+      return G_SOURCE_REMOVE;
+    }, new PendingDrop(g_object_ref(drop), action), [](gpointer value) {
+      auto* pending = static_cast<PendingDrop*>(value);
+      g_object_unref(pending->first);
+      delete pending;
+    });
+    return TRUE;
   }
 
   static gboolean PointerEventReceived(GtkEventControllerLegacy*, GdkEvent* event, gpointer data) {
@@ -2706,6 +2842,10 @@ private:
     if (self.platform_views_ && self.platform_views_->HasPlatformFocus()) {
       return FALSE;
     }
+    if (key_value == GDK_KEY_Escape && self.platform_drag_) {
+      self.CancelApplicationDrag();
+      return TRUE;
+    }
     GdkEvent* event = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
     const LinuxKeyPressResult press =
         self.key_tracker_.Press(key_code, self.text_input_.FilterKeyEvent(event));
@@ -2747,7 +2887,6 @@ private:
   GtkWidget* drawing_area_ = nullptr;
   bool touchpad_scroll_active_ = false;
   GdkToplevel* toplevel_ = nullptr;
-  gulong toplevel_state_handler_ = 0;
   LinuxRenderer renderer_;
   LinuxTextInput text_input_;
   std::unique_ptr<LinuxPlatformViews> platform_views_;
@@ -2776,8 +2915,11 @@ private:
   bool input_passthrough_ = false;
   std::optional<Size> minimum_size_;
   guint32 pointer_press_time_ = 0;
+  bool borderless_ = false;
+  bool pointer_pass_through_ = false;
   float custom_title_bar_height_ = 0.0F;
   PointerButton pressed_buttons_ = PointerButton::None;
+  GdkDrag* platform_drag_ = nullptr;
   bool suppress_pointer_release_ = false;
   Point last_pointer_position_;
   // Shared pointer routing only republishes changed requests, so retain the cursor hidden by resize feedback.

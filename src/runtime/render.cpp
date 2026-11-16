@@ -195,7 +195,8 @@ void PaintImage(const ImageProperties& properties, PaintContext& context, Rect c
     std::visit(
         [&](const auto& asset) {
           using Asset = std::decay_t<decltype(asset)>;
-          if constexpr (std::same_as<Asset, ImageAsset> || std::same_as<Asset, std::shared_ptr<ExternalTexture>>) {
+          if constexpr (std::same_as<Asset, ImageAsset> || std::same_as<Asset, Bitmap> ||
+                        std::same_as<Asset, std::shared_ptr<ExternalTexture>>) {
             context.DrawImageRect(asset, source, destination, properties.sampling, opacity);
           } else if constexpr (std::same_as<Asset, VectorAsset>) {
             context.DrawImageRect(asset, source, destination, vector_tint, opacity);
@@ -869,6 +870,7 @@ void RecordNodePaint(MountedNode& node) {
 void PaintNodeWithinClip(huxerui::ViewNode& mounted_node, const Rect& clip, const Rect& capture_extent,
                          const RenderNode* extra_child) {
   auto& node = static_cast<detail::MountedNode&>(mounted_node);
+  HUXERUI_PROFILE_COMPONENT(node);
   RenderNode& render_node = node.render_node;
   const Transform2D& local_transform = node.presentation.local_transform;
   const Transform2D children_transform = ResolveChildrenTransform(node);
@@ -1023,6 +1025,7 @@ std::shared_ptr<FrozenScene> CaptureRenderSubtree(MountedNode& source, bool reco
   auto scene = std::make_shared<FrozenScene>();
   bool supported = true;
   const auto capture = [&](auto&& self, MountedNode& node, bool root) -> const RenderNode* {
+    HUXERUI_PROFILE_COMPONENT(node);
     if (!node.participates_in_layout) { return nullptr; }
     if (node.kind == NodeKind::PlatformView || !node.presentation.children_fragments.empty()) {
       supported = false;

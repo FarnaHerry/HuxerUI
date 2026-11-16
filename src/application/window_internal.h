@@ -21,6 +21,7 @@ struct ApplicationRuntimeState;
 
 void ValidateWindowOptions(const WindowOptions& options);
 int ResolveWindowPositionCoordinate(double coordinate, int minimum, int maximum);
+void ValidateWindowSupport(const WindowOptions& options, const WindowCapabilities& support);
 
 inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
   if (!options.minimum_size.has_value()) {
@@ -34,11 +35,14 @@ inline Size ResolveInitialWindowSize(const WindowOptions& options) noexcept {
 
 struct WindowState {
   explicit WindowState(const WindowOptions& options)
-      : content_mode(options.content_mode), chrome_mode(options.chrome_mode), caption_labels(options.caption_labels) {}
+      : content_mode(options.content_mode), chrome_mode(options.chrome_mode), caption_labels(options.caption_labels),
+        activatable(options.activatable), resizable(options.resizable) {}
 
   WindowContentMode content_mode = WindowContentMode::SafeArea;
   WindowChromeMode chrome_mode = WindowChromeMode::System;
   WindowCaptionLabels caption_labels;
+  bool activatable;
+  bool resizable;
   WindowMetrics metrics;
   SystemBarsAppearance appearance = SystemBarsAppearance::Default();
   Color caption_foreground = Color::Rgb(32, 32, 32);
@@ -49,6 +53,12 @@ struct WindowState {
 class WindowService : public std::enable_shared_from_this<WindowService> {
 public:
   explicit WindowService(UiWindow& ui_window);
+  explicit WindowService(std::function<void(WindowCommand)> session_command);
+  WindowHandle Handle();
+
+  void Attach(UiWindow& ui_window);
+  void Disconnect() noexcept;
+  void EndSession() noexcept;
 
   [[nodiscard]] bool IsOpen() const;
   bool IsFullscreen() const;
@@ -63,6 +73,8 @@ public:
   /// @throws std::invalid_argument If the relationship is cyclic.
   /// @throws std::logic_error If the target or owner window has retired.
   void ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal);
+  bool SetAlwaysOnTop(bool enabled);
+  bool SetPointerPassThrough(bool enabled);
   void RequestKeyboard(bool show);
   void RequestFullscreen(bool fullscreen);
   void UpdateFullscreen(bool fullscreen);
@@ -74,7 +86,7 @@ public:
   [[nodiscard]] std::function<void()>
   ConnectRequest(WindowCommand command, std::function<bool()> handler);
   void ClearHandlers() noexcept;
-  void Disconnect() noexcept;
+
   /// Reads the current native window state and subscribes active composition.
   /// @return This window's state, independent of application foreground aggregation.
   [[nodiscard]] WindowLifecycleState LifecycleState() const;
@@ -99,7 +111,7 @@ private:
   RequestHandler& Handler(WindowCommand command);
   void DisconnectRequest(WindowCommand command, std::uint64_t connection) noexcept;
 
-  UiWindow* ui_window_;
+  UiWindow* ui_window_ = nullptr;
   State<bool> open_{false};
   State<bool> fullscreen_{false};
   bool handling_minimize_request_ = false;
@@ -111,6 +123,7 @@ private:
   State<WindowLifecycleState> lifecycle_state_{WindowLifecycleState::Background};
   std::map<std::uint64_t, std::function<void(WindowLifecycleState)>> lifecycle_handlers_;
   std::weak_ptr<ApplicationRuntimeState> application_;
+  std::function<void(WindowCommand)> session_command_;
 };
 
 View MakeWindowControls(

@@ -252,6 +252,8 @@ An asynchronous stream backend owns its operation reservation, EOF or close stat
 The public handle provides move-only ownership while a suspended Task can retain the backend until completion.
 Only one operation may be outstanding per asynchronous endpoint; an input and output may be reserved together by `CopyToAsync()`.
 
+`FromReader()` and `FromWriter()` wrap owned callbacks in private backends and reuse the stream's operation and lifetime rules. Task cancellation signals the pending callback's stop token before destroying its coroutine frame. Releasing a stream can also signal its pending callback, and an output invokes its optional abort callback on release before successful close. When a copy is canceled during a write, a callback reader remains usable from its advanced position. Persistent transports such as HTTP still cancel the transfer.
+
 Native local async streams use `WorkerSequence` so one open descriptor is never accessed concurrently and blocking calls stay off the Runtime thread.
 File inputs and packaged-resource inputs share one adapter over a synchronous `InputStream`. The input backend performs synchronous reads and releases its underlying handle.
 This worker adaptation is specific to inherently blocking sources; HTTP, browser, and other natively asynchronous transports do not route through `RunWorker()`.
@@ -880,8 +882,8 @@ Emscripten glue owns IDBFS mounting and synchronization, the Web adapter publish
 
 ## Integration with existing APIs
 
-`ImageAsset::FromFile(const std::filesystem::path&)` should migrate to `ImageAsset::FromFile(const File&)` with the rest of the approved public breaking change.
-Asynchronous image loading may read bytes through `ReadBytesAsync()` and construct the existing encoded `ImageAsset` without adding an image-specific file transport.
+`ImageAsset::FromFile(const File&)` reads local files through `File::ReadBytes()`.
+For asynchronous image loading, read bytes from a `File` or `FileReference` through `ReadBytesAsync()` and pass the result to `ImageAsset::FromEncoded()`.
 
 HTTP response streams can copy into file streams without a dedicated file-download API.
 Request bodies remain owned `Bytes`; a future upload contract may accept `File` or `FileReference` explicitly.

@@ -1,7 +1,7 @@
 # Typed Drag-and-Drop Design
 
 This document defines in-process typed drag-and-drop between mounted HuxerUI nodes.
-It extends the shared gesture ownership path without adding public pointer capture, event propagation, a drag registry, or application-visible platform transfer formats.
+It extends the shared gesture ownership path with optional platform transport between windows in one application Runtime, without adding public pointer capture, event propagation, a drag registry, or application-visible platform transfer formats.
 
 The underlying recognizer and PointerSession rules remain defined by [Gesture Recognition and Arbitration](gestures.md).
 Layer ownership remains defined by [Architecture](architecture.md), and scrolling remains defined by [Incremental Layout and Rendering](incremental-rendering.md).
@@ -75,6 +75,7 @@ struct DropEvent {
 struct DragDropResult {
   DragEvent drag;
   bool dropped = false;
+  bool released_outside_application = false;
 };
 
 struct DragSourceEvents {
@@ -157,48 +158,25 @@ PointerSession
 ```
 
 DragDropSession coordinates the accepted operation but does not own or transfer the physical pointer.
-There is no Runtime-wide active-drag slot, target registry, or second route.
-Independent PointerSessions may own independent transfers.
+Independent PointerSessions may own independent transfers. An application-scoped mouse session can hand transport to the platform after the recognizer wins. The source still owns the session and its immutable payload.
 
 Runtime discovers source and target behavior through private NodeExtension capabilities.
 It never branches on DragSourceExtension, DropTargetExtension, a component NodeKind, or the payload type.
 
 ## Application-scoped transfers
 
-`DragSource::Scope(DragDropScope::Application)` allows an accepted source to reach application-scoped DropTargets in other UiWindows of the same Runtime.
-`DropTarget::Scope(DragDropScope::Application)` opts a receiver into those transfers.
-Both default to Window, and either scope remains eligible for ordinary same-window transfers.
-The source snapshots scope at Down with its payload and recognition configuration; target scope is evaluated against the current committed declaration.
-Invalid enum values throw std::invalid_argument before mounting.
+`DragSource::Scope(DragDropScope::Application)` allows a mouse drag using the primary button to cross windows. A receiving target in another window must select the same scope and share the application's Runtime. Same-window matching accepts either scope. Platforms or pointer devices without this transport keep the window-local path.
+
+The transport carries one local session identity. The receiver uses its current hit route, window context, target declarations, and edge scrolling. It does not start pointer recognition. The preview uses the captured source Environment and is mounted in the window currently receiving the drag. Drop coordinates are relative to the receiver; the source keeps its latest source-window drag snapshot.
+
+Drop commits once and withdraws the preview before calling the target, followed by the source result if it remains live. Closing a receiver clears only that receiver; closing the source cancels the session. Late notifications cannot revive it. AppKit completion without an explicit cancellation reason reports an unsuccessful Ended event.
+
+An application-scoped drag with no successful drop reports `released_outside_application` only when the platform confirms that the primary button was released outside the application's windows. The Windows adapter checks visible, non-minimized application windows at the release, including window chrome. A rejection or lack of a target alone gives no information about the release location. A committed drop takes precedence over the outside-release flag.
 
 Application scope permits native transport after the shared recognizer has accepted; it does not grant applications pointer injection or physical capture control.
 The original PointerSession still owns recognition and source lifetime.
-Its private WindowDrag retains weak source and receiver execution identities, the immutable payload, preview declaration, and the latest receiver-local transport position.
-A receiver keeps weak references only for stationary target refresh and edge scrolling.
 Runtime identity is checked through the existing application attachment state, so equal pointer or node identifiers in different windows cannot associate unrelated operations.
 There is no process-wide active-drag slot or public transfer registry.
-
-Native transport clears the source hover and cursor projection after acceptance.
-Native arrival dispatches only typed drop events; it creates no PointerSession or gesture recognizer in the receiver.
-The receiver's existing hit route, clipping, layers, enabled state, exact payload matching, predicate, and auto-scroll rules select its current target.
-Cross-window callbacks run with the receiver's execution context; source output keeps the original source context.
-Leaving a receiver closes its target and preview before another window is entered.
-Successful drop emits Dropped once, then native completion emits source Ended with dropped set to true.
-Ordinary release without a target emits Ended with dropped set to false; explicit cancellation emits Canceled if the source remains mounted.
-
-DropEvent.position and window_position describe the receiving node and receiving window respectively.
-Its pointer_id belongs to the original source sequence and is not a receiver pointer-session identifier.
-Native transport may stop reporting source-window pointer positions; it does not fabricate Changed events or convert receiver coordinates into source coordinates.
-The terminal DragDropResult.drag or Canceled argument retains the latest valid source-window snapshot from recognition.
-Applications use DropEvents for cross-window movement and target-relative feedback.
-
-Preview content is attached to the currently visited HuxerUI window as an ordinary pass-through Layer with captured source Environment and the original grab offset.
-It disappears while the native pointer is outside participating HuxerUI windows.
-The native transport icon is transparent so it cannot duplicate the HuxerUI preview.
-Source unmount, incompatible replacement, disabling, or retirement cancels transport, exits a still-mounted receiver, and dismisses its preview.
-Source retirement invokes no source application callback and queues a still-mounted receiver's Exited after teardown; receiver retirement clears only that receiver and leaves the original transfer available for other live windows.
-No stale native completion can revive either attachment or produce a second terminal event.
-Immediate source destruction with continued dragging is not part of this contract.
 
 Linux implements mouse transport through GDK drag and GtkDropTargetAsync for both X11 and Wayland without requiring global window placement.
 The host advertises a private format and associates the native GdkDrag object with its retained in-process identity; foreign offers cannot reconstruct it from bytes.
@@ -332,7 +310,7 @@ This preserves strong internal commit while ensuring later physical pointer even
 - `src/runtime/gesture.cpp` owns source and target retained modifiers, erased payload dispatch, and the drag recognition state shared with DragGesture.
 - `src/runtime/gesture_internal.h` owns private source and target capability contracts and DragDropSession as part of PointerSession.
 - `src/runtime/runtime_pointer_interaction.cpp` owns target selection, preview coordination, auto-scroll, terminal ordering, quarantine, and shared cross-window coordination.
-- `src/runtime/window_drag_internal.h` defines the retained private host-transport identity; Linux implements the native operation and receiver callbacks in its existing adapter.
+- `src/runtime/gesture_internal.h` defines the retained private host-transport identity; Linux implements the native operation and receiver callbacks in its existing adapter.
 - Existing Layer and scrolling implementations remain generic and receive no DragSource or DropTarget branches.
 
 Focused tests cover exact type matching, predicates, nested target fallback, event order, source payload snapshots, target-local coordinates, preview exclusion and dismissal, compatible target updates, auto-scroll, and cancellation.

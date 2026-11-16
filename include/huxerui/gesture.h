@@ -161,7 +161,8 @@ struct DragEvents {
 
 // Describes one target-relative update during a typed drag-and-drop session.
 struct DropEvent {
-  // Original source pointer sequence, not a pointer-session identifier in the receiving window.
+  // Original source pointer sequence, including when the target is in another window. It is never a
+  // pointer-session identifier in the receiving window.
   std::int64_t pointer_id = 0;
   // Device kind reported by the owning pointer sequence.
   PointerDeviceKind device_kind = PointerDeviceKind::Mouse;
@@ -173,11 +174,16 @@ struct DropEvent {
   bool operator==(const DropEvent&) const = default;
 };
 
-// Describes normal completion of a drag source, including whether a target accepted the drop.
+/// Describes normal completion of a drag source.
 struct DragDropResult {
-  // Latest valid source-window snapshot; native cross-window transport may not report later source coordinates.
+  /// Latest valid source-window snapshot. Platform drag transport, including native cross-window transport, may
+  /// provide no further source positions.
   DragEvent drag;
+  /// Whether a compatible target received the drop.
   bool dropped = false;
+  /// Whether the platform confirmed that an application-scoped mouse drag ended outside the application's windows.
+  /// Always false after a successful drop or when the platform cannot confirm the release location.
+  bool released_outside_application = false;
 
   bool operator==(const DragDropResult&) const = default;
 };
@@ -233,9 +239,12 @@ public:
 
   static const detail::ModifierDescriptor& Descriptor();
 
-  /// Allows this source to reach application-scoped targets in other windows of the same Runtime.
-  /// Window is the default. Hosts without cross-window transport retain ordinary window-local behavior.
-  /// Each pointer sequence snapshots this declaration at Down; changing it affects subsequent sequences.
+  /// Selects the transfer scope. The default is Window.
+  /// Allows this source to reach application-scoped targets in other windows of the same Runtime; hosts without
+  /// cross-window transport retain ordinary window-local behavior.
+  /// Each pointer sequence snapshots this declaration at Down, so the active sequence retains its original value and
+  /// a change only affects subsequent sequences.
+  /// @throws std::invalid_argument If scope is not a declared DragDropScope value.
   DragSource&& Scope(DragDropScope scope) &&;
 
 private:
@@ -289,8 +298,11 @@ public:
 
   static const detail::ModifierDescriptor& Descriptor();
 
-  /// Allows this target to receive application-scoped transfers from other windows of the same Runtime.
-  /// Window is the default. This declaration never changes ordinary same-window eligibility.
+  /// Allows this target to receive application-scoped transfers from other windows of the same Runtime when both the
+  /// source and this target declare Application.
+  /// The default is Window. Same-window matching accepts either scope, so this declaration never changes ordinary
+  /// same-window eligibility.
+  /// @throws std::invalid_argument If scope is not a declared DragDropScope value.
   DropTarget&& Scope(DragDropScope scope) &&;
 
 private:

@@ -34,7 +34,8 @@ void ValidateWindowOptions(const WindowOptions& options) {
   if (options.content_mode != WindowContentMode::SafeArea && options.content_mode != WindowContentMode::EdgeToEdge) {
     throw std::invalid_argument("HuxerUI window content mode is invalid");
   }
-  if (options.chrome_mode != WindowChromeMode::System && options.chrome_mode != WindowChromeMode::Custom) {
+  if (options.chrome_mode != WindowChromeMode::System && options.chrome_mode != WindowChromeMode::Custom &&
+      options.chrome_mode != WindowChromeMode::None) {
     throw std::invalid_argument("HuxerUI window chrome mode is invalid");
   }
   if (!std::isfinite(options.title_bar_height) || options.title_bar_height <= 0.0F) {
@@ -203,7 +204,8 @@ View MakeWindowControls(
   Composer::Guard guard(composer);
   return WindowControlsLayout {
     WindowControl(WindowCommand::Minimize, service, window, window->caption_labels),
-    WindowControl(WindowCommand::ToggleMaximize, service, window, window->caption_labels),
+    WindowControl(WindowCommand::ToggleMaximize, service, window, window->caption_labels)
+        .With(Enabled(window->resizable)),
     WindowControl(WindowCommand::Close, service, window, window->caption_labels),
   }.With(Enabled(visible), Semantics{.hidden = !visible});
 }
@@ -225,8 +227,53 @@ bool IsValidSystemBarsAppearance(const SystemBarsAppearance& appearance) noexcep
          valid_brightness(appearance.status_bar_content) && valid_brightness(appearance.navigation_bar_content);
 }
 
+void ValidateWindowSupport(const WindowOptions& options, const WindowCapabilities& support) {
+  if (options.transparent_background && !support.transparent_background) {
+    throw std::runtime_error("HuxerUI host does not support transparent window backgrounds");
+  }
+  if (options.always_on_top && !support.always_on_top) {
+    throw std::runtime_error("HuxerUI host does not support always-on-top windows");
+  }
+  if (!options.activatable && !support.non_activating) {
+    throw std::runtime_error("HuxerUI host does not support non-activating windows");
+  }
+  if (options.pointer_pass_through && !support.pointer_pass_through) {
+    throw std::runtime_error("HuxerUI host does not support window pointer pass-through");
+  }
+}
+
 WindowService::WindowService(UiWindow& ui_window)
     : ui_window_(&ui_window), application_(CurrentApplicationRuntime()) {}
+
+WindowService::WindowService(std::function<void(WindowCommand)> session_command)
+    : application_(CurrentApplicationRuntime()), session_command_(std::move(session_command)) {}
+
+WindowHandle WindowService::Handle() {
+  return WindowHandle{shared_from_this()};
+}
+
+void WindowService::Attach(UiWindow& ui_window) {
+  if (ui_window_ || !session_command_) {
+    throw std::logic_error("HuxerUI window requires a live session without a UI attachment");
+  }
+  ui_window_ = &ui_window;
+}
+
+void WindowService::Disconnect() noexcept {
+  if (!ui_window_) return;
+  if (session_command_) {
+    lifecycle_state_ = WindowLifecycleState::Background;
+  } else {
+    BeginClose();
+  }
+  ui_window_ = nullptr;
+  ClearHandlers();
+}
+
+void WindowService::EndSession() noexcept {
+  session_command_ = {};
+  BeginClose();
+}
 
 UiWindow* WindowService::NativeWindow() const {
   if (const auto application = application_.lock()) application->RequireThread();
@@ -307,7 +354,7 @@ std::function<void()> WindowService::ConnectLifecycle(std::function<void(WindowL
 }
 
 void WindowService::Request(WindowCommand command) {
-  if (!ui_window_) return;
+  if (!ui_window_ && !session_command_) return;
   const auto application = application_.lock();
   if (!application) return;
   application->RequireThread();
@@ -315,9 +362,29 @@ void WindowService::Request(WindowCommand command) {
     throw std::logic_error("HuxerUI window commands are unavailable during window installation");
   }
   if (!IsOpen()) return;
-  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  ExecutionGuard guard(ui_window_ ? InternalAccess::WindowExecution(*ui_window_) : application->execution);
   if ((command == WindowCommand::Minimize || command == WindowCommand::Close) && HandleRequest(command)) return;
-  if (ui_window_ && IsOpen()) ui_window_->RequestWindowCommand(command);
+  if (!IsOpen()) return;
+  if (session_command_ && (command == WindowCommand::Close || command == WindowCommand::Activate)) {
+    auto request = session_command_;
+    request(command);
+    return;
+  }
+  if (!ui_window_) return;
+  if (command == WindowCommand::Activate && !ui_window_->state_->window_->activatable) command = WindowCommand::Show;
+  ui_window_->RequestWindowCommand(command);
+}
+
+bool WindowService::SetAlwaysOnTop(bool enabled) {
+  if (!ui_window_ || !IsOpen()) return false;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  return ui_window_->SetWindowAlwaysOnTop(enabled);
+}
+
+bool WindowService::SetPointerPassThrough(bool enabled) {
+  if (!ui_window_ || !IsOpen()) return false;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  return ui_window_->SetWindowPointerPassThrough(enabled);
 }
 
 void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal) {
@@ -339,7 +406,7 @@ void WindowService::RequestKeyboard(bool show) {
 }
 
 void WindowService::RequestFullscreen(bool fullscreen) {
-  if (!IsOpen()) return;
+  if (!ui_window_ || !IsOpen()) return;
   ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
   ui_window_->RequestFullscreen(fullscreen);
 }
@@ -358,7 +425,7 @@ bool WindowService::HandleShortcut(const KeyEvent& event) {
 }
 
 std::function<void()> WindowService::ConnectShortcut(Key key, KeyModifiers modifiers, std::function<bool()> handler) {
-  if (!IsOpen() || CurrentUiWindow() != ui_window_) {
+  if (!ui_window_ || !IsOpen() || CurrentUiWindow() != ui_window_) {
     throw std::logic_error("HuxerUI window shortcuts require a composition in the target window");
   }
   const auto shortcut = ShortcutKey(key, modifiers);
@@ -446,13 +513,6 @@ void WindowService::DisconnectRequest(WindowCommand command, std::uint64_t conne
   }
   request->handler = {};
   request->connection = 0;
-}
-
-void WindowService::Disconnect() noexcept {
-  if (!ui_window_) return;
-  BeginClose();
-  ui_window_ = nullptr;
-  ClearHandlers();
 }
 
 void WindowService::ClearHandlers() noexcept {
@@ -561,9 +621,9 @@ bool WindowHandle::IsFullscreen() const {
   return service_->IsFullscreen();
 }
 
-WindowCapabilities WindowHandle::Capabilities() const {
+WindowNativeCapabilities WindowHandle::Capabilities() const {
   const auto* window = service_->NativeWindow();
-  return window ? window->NativeWindowCapabilities() : WindowCapabilities{};
+  return window ? window->NativeWindowCapabilities() : WindowNativeCapabilities{};
 }
 
 WindowRequestResult WindowHandle::SetTopmost(bool topmost) const {
@@ -626,6 +686,14 @@ void WindowHandle::Activate() const {
   service_->Request(WindowCommand::Activate);
 }
 
+bool WindowHandle::SetAlwaysOnTop(bool enabled) const {
+  return service_->SetAlwaysOnTop(enabled);
+}
+
+bool WindowHandle::SetPointerPassThrough(bool enabled) const {
+  return service_->SetPointerPassThrough(enabled);
+}
+
 void WindowHandle::Minimize() const {
   service_->Request(WindowCommand::Minimize);
 }
@@ -669,7 +737,7 @@ WindowHandle::ConnectShortcut(Key key, KeyModifiers modifiers, std::function<boo
 }
 
 WindowHandle UseWindow() {
-  return WindowHandle{UseService<detail::WindowService>()};
+  return UseService<detail::WindowService>()->Handle();
 }
 
 void SetWindowRelationship(const WindowHandle& window, const WindowRelationship& relationship) {

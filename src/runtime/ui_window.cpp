@@ -817,6 +817,9 @@ void ApplyViewDeclaration(MountedNode& mounted, ViewSpec& compiled, std::shared_
   mounted.component_semantics = std::move(compiled.component_semantics);
   mounted.author_semantics = std::move(compiled.author_semantics);
   mounted.scope_factory = std::move(compiled.scope_factory);
+#if defined(HUXERUI_ENABLE_PROFILING) && HUXERUI_ENABLE_PROFILING
+  mounted.profile_source = compiled.profile_source;
+#endif
   mounted.canvas_painter = std::move(compiled.canvas_painter);
   mounted.image_properties = std::move(compiled.image_properties);
   mounted.platform_view = std::move(compiled.platform_view);
@@ -1467,7 +1470,8 @@ bool UiWindow::IsInitialized() const noexcept {
 }
 
 void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory content, const WindowOptions& window_options,
-                                std::optional<ResourceConfiguration> configuration, WindowLifecycleState initial_lifecycle) {
+                                std::optional<ResourceConfiguration> configuration,
+                                WindowLifecycleState initial_lifecycle, std::shared_ptr<WindowService> window_service) {
   if (state_)
     throw std::logic_error("HuxerUI UI window has already been initialized");
   const auto application_state = application_runtime.state_;
@@ -1488,7 +1492,7 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory conten
   const ScrollPhysics scroll_physics = ScrollDefaults();
   detail::ValidateScrollPhysics(scroll_physics);
   detail::ValidateWindowOptions(window_options);
-  const WindowCapabilities capabilities = NativeWindowCapabilities();
+  const WindowNativeCapabilities capabilities = NativeWindowCapabilities();
   if ((window_options.presentation == WindowPresentation::Utility && !capabilities.utility_presentation) ||
       (window_options.transparent_surface && !capabilities.transparent_surface) ||
       (window_options.show_without_activation && !capabilities.passive_display) ||
@@ -1547,7 +1551,12 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory conten
     text_measurer->dependency = state_->text_metrics_dependency_;
 #endif
     root.Provide(std::move(text_measurer));
-    state_->window_service_ = std::make_shared<WindowService>(*this);
+    if (window_service) {
+      window_service->Attach(*this);
+      state_->window_service_ = std::move(window_service);
+    } else {
+      state_->window_service_ = std::make_shared<WindowService>(*this);
+    }
     state_->window_service_->UpdateLifecycleState(initial_lifecycle);
     root.Provide(state_->window_service_);
     state_->scene_transition_service_ = std::make_shared<SceneTransitionService>(*state_);
@@ -1925,8 +1934,9 @@ void UiWindow::SetWindowMetrics(WindowMetrics metrics) {
 }
 
 bool UiWindow::IsWindowDragRegion(Point position) const {
-  return state_->window_->metrics.title_bar.has_value() && state_->mounted_root_ &&
-         detail::HitTestWindowDragRegion(*state_->mounted_root_, position);
+  const auto& window = *state_->window_;
+  return (window.metrics.title_bar.has_value() || window.chrome_mode == WindowChromeMode::None) &&
+         state_->mounted_root_ && detail::HitTestWindowDragRegion(*state_->mounted_root_, position);
 }
 
 std::optional<std::uint64_t> UiWindow::HitTestPlatformView(Point position) const {
@@ -2708,7 +2718,7 @@ bool UiWindow::RequestFocus(std::uint64_t identity, bool focus_visible) {
 void UiWindow::SetFocusedNode(std::optional<std::uint64_t> identity, std::optional<bool> focus_visible, bool reverse) {
   if (state_->focus_change_in_progress_) return;
   if (identity.has_value()) {
-    if (!state_->mounted_root_) {
+    if (!state_->window_->activatable || !state_->mounted_root_) {
       identity.reset();
     } else {
       detail::MountedNode* candidate = FindNode(*state_->mounted_root_, *identity);
@@ -3572,6 +3582,7 @@ bool UiWindow::ComposeScope(detail::MountedNode& mounted) {
     mounted.measure_dirty = mounted.measure_dirty || layout_changed;
     return layout_changed;
   }
+  HUXERUI_PROFILE_COMPONENT(mounted);
   HUXERUI_PROFILE_SCOPE(profile_scope, Scope, mounted.identity);
   HUXERUI_PROFILE_FLAG(
       profile_scope,

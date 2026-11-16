@@ -204,6 +204,7 @@ private:
   std::shared_ptr<detail::ViewSpec> spec_;
 
   friend View ProvideEnvironment(Environment environment, View content);
+  friend class Scope;
   friend class Text;
   friend class UiWindow;
   friend class detail::VirtualMeasureSession;
@@ -1039,7 +1040,7 @@ private:
   ValidationResult validation_;
 };
 
-/// Displays an image resource, vector asset, raster asset, or ExternalTexture.
+/// Displays an image resource, vector asset, encoded image, bitmap, or ExternalTexture.
 /// @code
 /// return Image(images::avatar).Fit(ImageFit::Cover).Align(HorizontalAlignment::Center, VerticalAlignment::Center);
 /// @endcode
@@ -1449,6 +1450,19 @@ private:
   std::optional<float> step_;
 };
 
+namespace detail {
+
+/// Source metadata emitted by hcg for an instrumented composable definition.
+struct ProfileSource {
+  std::string_view function;
+  std::string_view file;
+  std::size_t line = 0;
+
+  bool operator==(const ProfileSource&) const = default;
+};
+
+} // namespace detail
+
 /// Establishes an independently recomposable child declaration from a copyable factory and captured arguments.
 ///
 /// Prefer ordinary composable functions for reusable UI. Scope is useful when a declaration explicitly needs a child
@@ -1459,6 +1473,9 @@ private:
 class Scope final : public View {
 public:
   explicit Scope(std::function<View()> factory);
+
+  /// Constructs a scope with hcg-generated metadata. The source strings must have static storage duration.
+  Scope(detail::ProfileSource source, std::function<View()> factory);
 
   template <class Factory, class... Arguments>
     requires detail::ViewFactoryFor<Factory, Arguments...>
@@ -1552,6 +1569,26 @@ enum class DockPlacement {
   Right,
   Top,
   Bottom,
+};
+
+/// Describes one proposed panel transfer to a different DockLayout in the same workspace.
+struct DockTransferRequest {
+  /// Places the transferred panel relative to an existing panel in the receiving layout.
+  struct Target {
+    /// ID of the existing panel that anchors the placement.
+    std::string panel_id;
+    /// Insertion or split relative to the anchor's group.
+    DockPlacement placement = DockPlacement::TabAfter;
+  };
+
+  /// ID of the panel to move.
+  std::string panel_id;
+  /// Workspace-local ID of the layout that currently contains the panel.
+  std::string source_layout_id;
+  /// Workspace-local ID of the receiving layout.
+  std::string target_layout_id;
+  /// Placement in the receiving layout. An empty value requests its first tab group.
+  std::optional<Target> target;
 };
 
 /// Describes the ordered splits, tab groups, and sizing of a DockLayout.
@@ -1662,20 +1699,79 @@ private:
   friend struct detail::DockConfiguration;
 };
 
+/// Describes a panel in the current tab bar, in DockTree order. Strings are borrowed for the tab bar factory call.
+struct DockTabBarItem {
+  std::string_view id;
+  std::string_view title;
+  bool closable = true;
+};
+
+namespace detail {
+
+struct DockTabBarBinding;
+
+} // namespace detail
+
+/// Provides the panel declarations and docking bindings for one group during tab bar composition.
+/// Use the context only during the factory call. Returned Views retain their own bindings.
+class DockTabBarContext final {
+public:
+  DockTabBarContext(const DockTabBarContext&) = delete;
+  DockTabBarContext& operator=(const DockTabBarContext&) = delete;
+
+  /// Returns the panels in visual docking order, including inactive panels.
+  std::span<const DockTabBarItem> Items() const noexcept;
+  /// Returns the selected panel ID in this group.
+  std::string_view Selected() const noexcept;
+
+  /// Builds the standard tab bar with built-in selection, closing, keyboard navigation, and drop targets.
+  View DefaultBar() const;
+  /// Binds the given View as the drag source for a panel in this group. Ordinary click handlers are preserved.
+  /// @throws std::invalid_argument If the ID is absent from this group or the View is empty.
+  View BindTabDrag(std::string_view panel_id, View view) const;
+  /// Uses the View's left and right halves as insertion targets before and after the given panel.
+  /// @throws std::invalid_argument If the ID is absent from this group or the View is empty.
+  View BindTabDrop(std::string_view panel_id, View view) const;
+
+private:
+  explicit DockTabBarContext(const detail::DockTabBarBinding& binding) : binding_(binding) {}
+
+  const detail::DockTabBarBinding& binding_;
+
+  friend struct detail::DockConfiguration;
+};
+
 /// Presents a controlled docking workspace with retained, keyed panel content.
 ///
 /// Each tab group lays out its selected panel. Keeping a DockItem declaration retains compatible mounted content
-/// across tab changes, moves, and removal from the tree. Removing the declaration unmounts its content.
+/// across tab changes, moves within this layout, and removal from the tree. Transferring to another layout mounts its
+/// own content. Keep document data in shared application state when it must survive a transfer.
 class DockLayout final : public detail::TypedView<DockLayout> {
 public:
   /// Creates a workspace and applies the tree root's Frame and Grow as View modifiers.
   /// @throws std::invalid_argument If an item is invalid, item IDs repeat, or a tree ID has no declaration.
   DockLayout(std::vector<DockItem> items, DockTree tree);
 
-  /// Handles DockEvents::Changed proposals from tab selection, closing, resizing, and completed docking moves.
+  /// Builds the bar above each group's panel content. Return an empty View to leave the slot hidden.
+  /// Custom bars own selection, closing, and keyboard and accessibility behavior. Only their explicitly bound
+  /// drop targets accept docking within the bar. An empty factory restores the built-in tabs for every group.
+  DockLayout TabBar(std::function<View(const DockTabBarContext&)> factory) &&;
+
+  /// Allows panel transfers between layouts that share a workspace ID in the same application.
+  /// Use a stable, distinct layout ID for each participating DockLayout. A receiving layout must handle
+  /// DockEvents::TransferRequested. Bind DockEvents::DetachRequested to opt into releases outside the application.
+  /// @throws std::invalid_argument If either ID is empty.
+  DockLayout Workspace(std::string workspace_id, std::string layout_id) &&;
+
+  /// Handles DockEvents::Changed proposals from selection, closing, resizing, and moves within this layout.
   template <class Function> DockLayout OnChanged(Function&& function) && {
     return std::move(*this).On<DockEvents::Changed>(std::forward<Function>(function));
   }
+
+private:
+  void SetConfiguration(std::shared_ptr<const detail::DockConfiguration> configuration);
+
+  std::shared_ptr<const detail::DockConfiguration> configuration_;
 };
 
 /// Places children in wrapping lines according to the configured Flow modifiers.
