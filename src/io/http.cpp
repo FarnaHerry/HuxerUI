@@ -1,7 +1,6 @@
 #include <huxerui/http.h>
 
 #include <algorithm>
-#include <coroutine>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -13,7 +12,6 @@
 
 #include "http_internal.h"
 #include "application/application_internal.h"
-#include "runtime/task_internal.h"
 #include "stream_internal.h"
 #include "macros_internal.h"
 
@@ -159,27 +157,24 @@ public:
 
   Task<IoResult<Bytes>> ReadAsync(std::size_t maximum_bytes) override;
 
-  void SuspendOpen(std::weak_ptr<TaskExecution> execution, std::coroutine_handle<> continuation) {
+  void SuspendOpen(TaskContinuation continuation) {
     bool start = false;
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_) {
         return;
       }
-      execution_ = std::move(execution);
-      continuation_ = continuation;
+      continuation_ = std::move(continuation);
       start = !started_;
       started_ = true;
-      resume = HasOpenEventLocked();
+      if (HasOpenEventLocked()) ready = std::exchange(continuation_, {});
     }
 
     if (start) {
       StartTransport();
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   HttpOpenEvent TakeOpenEvent() {
@@ -207,18 +202,17 @@ public:
     throw std::logic_error("HuxerUI HTTP request resumed without an event");
   }
 
-  void SuspendRead(std::weak_ptr<TaskExecution> execution, std::coroutine_handle<> continuation) {
+  void SuspendRead(TaskContinuation continuation) {
     std::shared_ptr<HttpTransportOperation> operation;
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_) {
         return;
       }
-      execution_ = std::move(execution);
-      continuation_ = continuation;
+      continuation_ = std::move(continuation);
       if (HasReadEventLocked()) {
-        resume = true;
+        ready = std::exchange(continuation_, {});
       } else if (!read_request_pending_) {
         read_request_pending_ = true;
         operation = operation_;
@@ -228,9 +222,7 @@ public:
     if (operation) {
       operation->RequestRead();
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   IoResult<Bytes> TakeReadEvent(std::size_t maximum_bytes) {
@@ -319,7 +311,6 @@ public:
         return;
       }
       canceled_ = true;
-      execution_.reset();
       continuation_ = {};
       operation = std::move(operation_);
       cancel_operation = !transport_terminal_;
@@ -398,7 +389,7 @@ private:
   }
 
   void OnUploadProgress(std::uint64_t transferred_bytes) noexcept {
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_ || response_.has_value() || !progress_) {
@@ -410,26 +401,22 @@ private:
         return;
       }
       pending_upload_progress_ = transferred_bytes;
-      resume = static_cast<bool>(continuation_);
+      ready = std::exchange(continuation_, {});
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   void OnResponse(HttpTransportResponse response) noexcept {
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_ || response_.has_value() || error_.has_value()) {
         return;
       }
       response_.emplace(std::move(response));
-      resume = static_cast<bool>(continuation_);
+      ready = std::exchange(continuation_, {});
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   void OnBody(Bytes body) noexcept {
@@ -438,7 +425,7 @@ private:
       return;
     }
 
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_ || complete_ || error_.has_value()) {
@@ -458,15 +445,13 @@ private:
           body_.insert(body_.end(), body.begin(), body.end());
         }
       }
-      resume = static_cast<bool>(continuation_);
+      ready = std::exchange(continuation_, {});
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   void OnComplete() noexcept {
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_ || complete_ || error_.has_value()) {
@@ -482,15 +467,13 @@ private:
         complete_ = true;
       }
       transport_terminal_ = true;
-      resume = static_cast<bool>(continuation_);
+      ready = std::exchange(continuation_, {});
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   void OnError(HttpError error) noexcept {
-    bool resume = false;
+    TaskContinuation ready;
     {
       std::scoped_lock lock(mutex_);
       if (canceled_ || complete_ || error_.has_value()) {
@@ -498,30 +481,14 @@ private:
       }
       SetErrorLocked(std::move(error));
       transport_terminal_ = true;
-      resume = static_cast<bool>(continuation_);
+      ready = std::exchange(continuation_, {});
     }
-    if (resume) {
-      ResumeContinuation();
-    }
+    ready.Resume();
   }
 
   void SetErrorLocked(HttpError error) noexcept {
     read_request_pending_ = false;
     error_.emplace(std::move(error));
-  }
-
-  void ResumeContinuation() noexcept {
-    std::weak_ptr<TaskExecution> execution;
-    std::coroutine_handle<> continuation;
-    {
-      std::scoped_lock lock(mutex_);
-      if (canceled_ || !continuation_) {
-        return;
-      }
-      execution = execution_;
-      continuation = std::exchange(continuation_, {});
-    }
-    ResumeTask(execution, continuation);
   }
 
   [[nodiscard]] bool HasOpenEventLocked() const noexcept {
@@ -548,8 +515,7 @@ private:
   std::function<void(HttpProgress)> progress_;
   const std::uint64_t upload_total_;
   std::shared_ptr<HttpTransportOperation> operation_;
-  std::weak_ptr<TaskExecution> execution_;
-  std::coroutine_handle<> continuation_;
+  TaskContinuation continuation_;
   std::optional<HttpTransportResponse> response_;
   std::optional<HttpError> error_;
   Bytes body_;
@@ -583,15 +549,11 @@ public:
     }
   }
 
-  [[nodiscard]] bool await_ready() const noexcept {
-    return false;
+  void Suspend(TaskContinuation continuation) {
+    operation_->SuspendOpen(std::move(continuation));
   }
 
-  template <class Promise> void await_suspend(std::coroutine_handle<Promise> continuation) {
-    operation_->SuspendOpen(TaskExecutionFor(continuation), continuation);
-  }
-
-  HttpOpenEvent await_resume() {
+  HttpOpenEvent TakeResult() {
     return std::exchange(operation_, {})->TakeOpenEvent();
   }
 
@@ -604,15 +566,11 @@ public:
   HttpReadAwaiter(std::shared_ptr<HttpOperation> operation, std::size_t maximum_bytes)
       : operation_(std::move(operation)), maximum_bytes_(maximum_bytes) {}
 
-  [[nodiscard]] bool await_ready() const noexcept {
-    return false;
+  void Suspend(TaskContinuation continuation) {
+    operation_->SuspendRead(std::move(continuation));
   }
 
-  template <class Promise> void await_suspend(std::coroutine_handle<Promise> continuation) {
-    operation_->SuspendRead(TaskExecutionFor(continuation), continuation);
-  }
-
-  IoResult<Bytes> await_resume() {
+  IoResult<Bytes> TakeResult() {
     return operation_->TakeReadEvent(maximum_bytes_);
   }
 
@@ -666,7 +624,7 @@ Task<HttpResult<HttpResponseStream>> OpenHttpStream(std::weak_ptr<ApplicationRun
   std::erase_if(application->http_operations, [](const auto& pending) { return pending.expired(); });
   application->http_operations.push_back(operation);
   while (true) {
-    HttpOpenEvent event = co_await HttpOpenAwaiter(operation);
+    HttpOpenEvent event = co_await TaskAwaiter<HttpOpenAwaiter>(operation);
     if (event.progress.has_value()) {
       operation->ReportProgress(std::move(*event.progress));
       continue;
@@ -682,7 +640,7 @@ Task<HttpResult<HttpResponseStream>> OpenHttpStream(std::weak_ptr<ApplicationRun
 
 Task<IoResult<Bytes>> ReadHttpStream(HttpReadCancellation cancellation, std::size_t maximum_bytes) {
   cancellation.Operation()->RequireReadable();
-  auto data = co_await HttpReadAwaiter(cancellation.Operation(), maximum_bytes);
+  auto data = co_await TaskAwaiter<HttpReadAwaiter>(cancellation.Operation(), maximum_bytes);
   if (!data.Succeeded() || data.Value().empty()) {
     cancellation.Finish(true);
     co_return data;

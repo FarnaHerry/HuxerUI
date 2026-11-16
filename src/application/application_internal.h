@@ -195,6 +195,7 @@ struct ApplicationRuntimeState final : std::enable_shared_from_this<ApplicationR
   std::shared_ptr<HttpTransport> http_transport;
   std::vector<std::weak_ptr<HttpOperation>> http_operations;
   std::shared_ptr<TaskScopeImpl> tasks;
+  std::shared_ptr<SystemTasks> system_tasks;
   std::vector<std::weak_ptr<UiExecutionState>> uis;
   /// Window relationship registry on the application thread: per-window record plus deterministic owned edges.
   struct WindowRelationRecord {

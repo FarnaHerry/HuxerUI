@@ -8,6 +8,7 @@ User guides describe the current public SDK, development guides cover this repos
 - [Installation](guide/installation.md): install, upgrade, select, and remove an SDK.
 - [Getting Started](guide/getting-started.md): create, diagnose, build, and run an application.
 - [Core Concepts](guide/core-concepts.md): Views, composition, state, identity, events, and Environment.
+- [System Tasks](guide/system-tasks.md) explains task selection, control, UI observation, platform setup, and the runnable Android/iOS example.
 - [Layout and Scrolling](guide/layout.md): constraints, responsive layout, scrolling, and virtualization.
 - [Components and Input](guide/components.md): controls, navigation, gestures, and text editing.
 - [Windowless UI Testing](guide/testing.md): real-Runtime queries, input, virtual frames, and structural captures.
@@ -46,6 +47,7 @@ User guides describe the current public SDK, development guides cover this repos
 [Multi-Window](design/multi-window.md) defines runtime window creation, explicit per-window content factories, and shared-Runtime ownership rules.
 [Window Relationship](design/window-relationship.md) defines window ownership, modality, cascade retirement, and platform input blocking.
 [Split and Docking Layouts](design/split-and-docking.md) defines controlled pane resizing and retained single-window docking workspaces.
+[System Tasks](design/system-tasks.md) defines platform admission, cooperative stopping, and UI observation for platform-scheduled, user-started finite, and ongoing work.
 Design documents are implementation references, not a public API stability guarantee.
 
 ## Scope

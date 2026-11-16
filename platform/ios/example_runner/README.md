@@ -4,6 +4,8 @@ Open `HuxerUIExamples.xcodeproj` to run and debug repository examples on a Simul
 
 The default application target is `example_ui_gallery`. To select another example, copy `Config/Local.xcconfig.example` to the ignored `Config/Local.xcconfig` and set `HUXERUI_APP_TARGET` to an `example_*` target declared under `examples/`.
 
+Set `HUXERUI_APP_INFO_PLIST` in `Config/Local.xcconfig` to override the default `App/Info.plist` with a path relative to the Xcode project directory.
+
 Set `DEVELOPMENT_TEAM` in the same local file when physical-device signing requires it. The Xcode build phase configures the repository for the selected SDK and architecture, builds only the selected application core, and links it into the shared native runner.
 
 When `HUXERUI_APP_TARGET` is `example_application`, open its registered URL scheme on the booted Simulator with:
@@ -15,6 +17,10 @@ xcrun simctl openurl booted "huxerui-example://documents/42"
 The runner also declares text documents, so the Files share sheet can open a UTF-8 text file with the application example. URL schemes and document types are native application metadata; generated applications declare their own values in `App/Info.plist`.
 
 The runner opts into multiple window scenes. Set `HUXERUI_APP_TARGET=example_dock_layout`, touch and hold a document tab on iPad or the iPhone Duo inner display, then choose **Move to new window**. Window creation depends on the current UIKit environment.
+
+## System tasks example
+
+Set `HUXERUI_APP_TARGET=example_system_tasks` and `HUXERUI_APP_INFO_PLIST=../../../examples/system_tasks/ios/Info.plist` in `Config/Local.xcconfig`. The selected Info.plist supplies the `processing` background mode and permitted task identifiers. The declaration identifiers use the default bundle prefix `com.huxerui.examples`; update the declarations and permitted identifiers together if changing the signing bundle identifier. See the [example instructions](../../../examples/system_tasks/README.md) for SDK requirements, expected support, and physical-device checks.
 
 ## Download notification example
 

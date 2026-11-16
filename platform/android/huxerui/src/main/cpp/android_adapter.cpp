@@ -14,6 +14,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -553,12 +554,13 @@ public:
           type.Get(), "captureClipboardFiles", "(I)Lorg/huxerui/HuxerUIApplication$ClipboardFilesRead;");
       resource_locale_ = environment->GetMethodID(type.Get(), "resourceLocale", "()[B");
       resource_scale_ = environment->GetMethodID(type.Get(), "resourceScale", "()F");
+      const jmethodID development_root = environment->GetMethodID(type.Get(), "developmentResourceRoot", "()[B");
       process_pss_bytes_ = environment->GetMethodID(type.Get(), "processPssBytes", "()J");
       stopped_ = environment->GetMethodID(type.Get(), "onRuntimeStopped", "()V");
       if (!get_context || !read_clipboard_text_ || !write_clipboard_text_ || !write_clipboard_item_ ||
           !write_clipboard_files_ || !may_have_clipboard_text_ || !capture_clipboard_item_ ||
           !capture_clipboard_files_ || !resource_locale_ || !resource_scale_ || !process_pss_bytes_ ||
-          !stopped_ || environment->ExceptionCheck()) {
+          !development_root || !stopped_ || environment->ExceptionCheck()) {
         throw std::runtime_error("HuxerUI Android application methods do not match the platform backend");
       }
       android::LocalRef<jobject> context(environment, environment->CallObjectMethod(host, get_context));
@@ -567,6 +569,10 @@ public:
       }
       context_ = environment->NewGlobalRef(context.Get());
       if (!context_) throw std::runtime_error("HuxerUI could not retain its Android application Context");
+      android::LocalRef<jbyteArray> root(environment, static_cast<jbyteArray>(
+          environment->CallObjectMethod(host, development_root)));
+      if (environment->ExceptionCheck()) throw std::runtime_error("HuxerUI could not read the development resource root");
+      if (root) development_resource_root_ = FromByteArray(environment, root.Get());
       asset_manager_ = std::make_shared<AndroidAssetManager>(environment, context_);
     } catch (...) {
       Release(environment);
@@ -589,6 +595,14 @@ public:
   /// Returns the VM used to acquire thread-local JNI environments.
   /// @return Process VM pointer; no JNI attachment or reference ownership is transferred.
   JavaVM* VirtualMachine() const noexcept { return virtual_machine_; }
+
+  bool ReceiveSystemTaskEvent(const PlatformPayload& event) {
+    if (!system_task_event_)
+      return false;
+    system_task_event_(event);
+    return true;
+  }
+
   std::function<void()> on_stopped;
   std::uint64_t identity = 0;
   /// Initializes shared services after Java application facilities and dispatch are ready.
@@ -656,6 +670,9 @@ public:
   std::optional<InputStream> OpenRead(std::string_view package_path) override {
     if (!IsValidResourcePackagePath(package_path)) {
       throw std::logic_error("HuxerUI Android resource path is invalid");
+    }
+    if (!development_resource_root_.empty()) {
+      return OpenPackageFile(development_resource_root_ / package_path);
     }
     auto backend = std::make_shared<AndroidAssetInputStreamBackend>(asset_manager_, package_path);
     if (!backend->IsOpen()) {
@@ -838,6 +855,9 @@ private:
     return CreateAndroidPermissionTransport(virtual_machine_, Environment(), host_);
   }
 
+  std::shared_ptr<SystemTaskTransport> CreateSystemTaskTransport() override {
+    return CreateAndroidSystemTaskTransport(virtual_machine_, Environment(), host_, system_task_event_);
+  }
 
   /// Borrows JNI access from an already attached calling thread without attaching a worker.
   /// @return Thread-local JNI environment, or null when this thread cannot access the VM.
@@ -868,6 +888,8 @@ private:
   jobject host_ = nullptr;
   jobject context_ = nullptr;
   std::shared_ptr<AndroidAssetManager> asset_manager_;
+  std::filesystem::path development_resource_root_;
+  std::function<void(const PlatformPayload&)> system_task_event_;
   jmethodID read_clipboard_text_ = nullptr;
   jmethodID write_clipboard_text_ = nullptr;
   jmethodID write_clipboard_item_ = nullptr;
@@ -1857,6 +1879,20 @@ extern "C" JNIEXPORT void JNICALL Java_org_huxerui_HuxerUIApplication_nativeRequ
   } catch (const std::exception& exception) {
     huxerui::detail::ThrowJavaException(environment, exception.what());
   }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_org_huxerui_HuxerUIApplication_nativeSystemTaskEvent(
+    JNIEnv* environment, jclass, jlong identity, jobject event) {
+  try {
+    if (auto application = huxerui::detail::ApplicationHost(identity)) {
+      return application->ReceiveSystemTaskEvent(huxerui::android::JavaPlatformPayloadToCpp(environment, event))
+                 ? JNI_TRUE
+                 : JNI_FALSE;
+    }
+  } catch (const std::exception& exception) {
+    huxerui::detail::ThrowJavaException(environment, exception.what());
+  }
+  return JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL Java_org_huxerui_HuxerUIApplication_nativeDrainTasks(
