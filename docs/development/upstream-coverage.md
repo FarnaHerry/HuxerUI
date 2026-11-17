@@ -102,7 +102,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
 | Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Removed in favor of upstream's platform paragraph cache (`ad28dd34`). Do not reintroduce a second cache layer at the mounted node. |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
-| Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
+| Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192) is open from `fix/staged-runtime-dependency-conflicts` |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
 | Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only capability support: upstream has no `HUXERUI_LINUX_X11` consumer, so the build switch is not a standalone fix and belongs to the Linux placement and input-passthrough capability. |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
@@ -130,7 +130,7 @@ These are the bug fixes still worth a focused upstream PR; capability work stays
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only |
 | Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia` |
-| Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions |
+| Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions. PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192) is open from `fix/staged-runtime-dependency-conflicts` |
 | Low | Windows DWM corner attribute SDK portability | `e8be9126` | `win32_adapter.cpp` uses `DWMWCP_ROUND` and `DWMWA_WINDOW_CORNER_PREFERENCE`; pre-22000 Windows SDKs do not declare them, so older toolchains need numeric attribute values |
 
 GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after re-auditing `c67c42c2`.
