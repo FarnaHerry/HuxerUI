@@ -644,9 +644,7 @@ WindowHandle Runtime::OpenWindow(
     ApplyWindowRelationship(*created->state_->window_service_, owner_service.get(), relationship.modal);
     RebuildWindowBlocking({});
     if (created->IsInitialized()) {
-      created->RequestWindowCommand((options.show_without_activation || !options.activatable)
-                                        ? WindowCommand::Show
-                                        : WindowCommand::Activate);
+      created->RequestWindowCommand(options.activatable ? WindowCommand::Activate : WindowCommand::Show);
     }
   } catch (...) {
     const auto found = std::find_if(owned_windows_.begin(), owned_windows_.end(),

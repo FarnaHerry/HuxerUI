@@ -1401,14 +1401,8 @@ public:
   }
 
   WindowNativeCapabilities NativeWindowCapabilities() const override {
-    return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
-            .topmost = true, .geometry = true, .native_move = true, .input_passthrough = transparent_surface_};
-  }
-
-  WindowRequestResult RequestWindowTopmost(bool topmost) override {
-    return SetWindowPos(window_, topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
-               ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
+    return {.transparent_surface = true, .utility_presentation = true,
+            .geometry = true, .native_move = true};
   }
 
   WindowRequestResult RequestWindowPosition(Point position) override {
@@ -1449,19 +1443,6 @@ public:
     return SetWindowPos(window_, nullptr, 0, 0, outer_width, outer_height,
                         SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER)
                ? WindowRequestResult::Submitted : WindowRequestResult::Rejected;
-  }
-
-  WindowRequestResult RequestWindowInputPassthrough(bool passthrough) override {
-    if (!transparent_surface_) return WindowRequestResult::Unavailable;
-    const LONG_PTR previous = GetWindowLongPtrW(window_, GWL_EXSTYLE);
-    const LONG_PTR next = passthrough ? previous | WS_EX_TRANSPARENT : previous & ~WS_EX_TRANSPARENT;
-    if (next == previous) return WindowRequestResult::Submitted;
-    SetLastError(ERROR_SUCCESS);
-    if (SetWindowLongPtrW(window_, GWL_EXSTYLE, next) == 0 && GetLastError() != ERROR_SUCCESS) {
-      return WindowRequestResult::Rejected;
-    }
-    CancelPointer();
-    return WindowRequestResult::Submitted;
   }
 
   WindowRequestResult RequestWindowMove() override {
@@ -1597,7 +1578,6 @@ private:
     const float scale = DpiScale();
     utility_window_ = options.presentation == WindowPresentation::Utility;
     transparent_surface_ = options.transparent_surface;
-    passive_display_ = options.show_without_activation;
     custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
     borderless_ = options.chrome_mode == WindowChromeMode::None;
     transparent_background_ = options.transparent_background;
@@ -1619,8 +1599,7 @@ private:
         : borderless_ ? WS_POPUP | WS_THICKFRAME | WS_MAXIMIZEBOX : WS_OVERLAPPEDWINDOW;
     if (!resizable_ || utility_window_) style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
     DWORD extended_style = (utility_window_ ? WS_EX_TOOLWINDOW : 0) |
-                           (transparent_surface_ ? WS_EX_LAYERED : 0) |
-                           (passive_display_ ? WS_EX_NOACTIVATE : 0);
+                           (transparent_surface_ ? WS_EX_LAYERED : 0);
     if (!activatable_) extended_style |= WS_EX_NOACTIVATE;
     if (options.topmost || options.always_on_top) extended_style |= WS_EX_TOPMOST;
     if (transparent_background_) extended_style |= no_redirection_bitmap_style;
@@ -2335,7 +2314,6 @@ private:
         message != WM_NCCALCSIZE && message != WM_GETMINMAXINFO && message != WM_NCDESTROY) {
       return message == WM_CLOSE ? 0 : DefWindowProcW(window, message, w_param, l_param);
     }
-    if (message == WM_MOUSEACTIVATE && passive_display_) return MA_NOACTIVATE;
     if (windowed_placement_ && message == WM_NCCALCSIZE) return 0;
     if ((custom_chrome_ || borderless_) && message == WM_NCCALCSIZE) {
       // User32 must observe the first captioned-window calculation before the client takes ownership of the frame.
@@ -2687,7 +2665,6 @@ private:
   bool custom_chrome_ = false;
   bool utility_window_ = false;
   bool transparent_surface_ = false;
-  bool passive_display_ = false;
   bool borderless_ = false;
   bool transparent_background_ = false;
   bool activatable_ = true;

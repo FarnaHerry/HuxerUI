@@ -1494,9 +1494,7 @@ void UiWindow::InitializeWindow(Runtime& application_runtime, ViewFactory conten
   detail::ValidateWindowOptions(window_options);
   const WindowNativeCapabilities capabilities = NativeWindowCapabilities();
   if ((window_options.presentation == WindowPresentation::Utility && !capabilities.utility_presentation) ||
-      (window_options.transparent_surface && !capabilities.transparent_surface) ||
-      (window_options.show_without_activation && !capabilities.passive_display) ||
-      (window_options.topmost && !capabilities.topmost)) {
+      (window_options.transparent_surface && !capabilities.transparent_surface)) {
     throw std::logic_error("HuxerUI requested window presentation is unavailable on this attachment");
   }
   if (!content) throw std::invalid_argument("HuxerUI window content must not be empty");

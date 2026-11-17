@@ -5,8 +5,6 @@
 #include <thread>
 
 #include "application/window_internal.h"
-#include "../../examples/desktop_pet/pet.h"
-#include "../../examples/desktop_pet/pet_model.h"
 
 namespace huxerui::test {
 
@@ -793,10 +791,10 @@ TEST_CASE("FloatingWindowRequestsReportUnavailableAndDisconnectWithoutRebinding"
     runtime.BuildFrame();
     REQUIRE(window_handle.has_value());
     REQUIRE(window_handle->Capabilities() == WindowNativeCapabilities{});
-    REQUIRE(window_handle->SetTopmost(true) == WindowRequestResult::Unavailable);
+    REQUIRE_FALSE(window_handle->SetAlwaysOnTop(true));
     REQUIRE(window_handle->SetPosition({-100.0F, 20.0F}) == WindowRequestResult::Unavailable);
     REQUIRE(window_handle->SetClientSize({120.0F, 80.0F}) == WindowRequestResult::Unavailable);
-    REQUIRE(window_handle->SetInputPassthrough(true) == WindowRequestResult::Unavailable);
+    REQUIRE_FALSE(window_handle->SetPointerPassThrough(true));
     REQUIRE(window_handle->BeginMove() == WindowRequestResult::Unavailable);
     REQUIRE_FALSE(window_handle->WorkArea());
     REQUIRE_THROWS_AS(
@@ -807,10 +805,10 @@ TEST_CASE("FloatingWindowRequestsReportUnavailableAndDisconnectWithoutRebinding"
         std::invalid_argument);
   }
   REQUIRE(window_handle->Capabilities() == WindowNativeCapabilities{});
-  REQUIRE(window_handle->SetTopmost(true) == WindowRequestResult::Disconnected);
+  REQUIRE_FALSE(window_handle->SetAlwaysOnTop(true));
   REQUIRE(window_handle->SetPosition({10.0F, 20.0F}) == WindowRequestResult::Disconnected);
   REQUIRE(window_handle->SetClientSize({100.0F, 80.0F}) == WindowRequestResult::Disconnected);
-  REQUIRE(window_handle->SetInputPassthrough(false) == WindowRequestResult::Disconnected);
+  REQUIRE_FALSE(window_handle->SetPointerPassThrough(false));
   REQUIRE(window_handle->BeginMove() == WindowRequestResult::Disconnected);
   REQUIRE_FALSE(window_handle->WorkArea());
 }
@@ -818,8 +816,6 @@ TEST_CASE("FloatingWindowRequestsReportUnavailableAndDisconnectWithoutRebinding"
 TEST_CASE("FloatingWindowCreationRejectsUnavailablePoliciesAndInvalidConfiguration") {
   AppOptions options;
   SECTION("Utility presentation is unavailable") { options.window.presentation = WindowPresentation::Utility; }
-  SECTION("Passive display is unavailable") { options.window.show_without_activation = true; }
-  SECTION("Topmost is unavailable") { options.window.topmost = true; }
   SECTION("Transparent utility surfaces are unavailable") {
     options.window.presentation = WindowPresentation::Utility;
     options.window.transparent_surface = true;
@@ -860,270 +856,6 @@ TEST_CASE("FloatingWindowRequestsPreserveNativeResultsAndRequireTheApplicationTh
   worker.join();
   REQUIRE(rejected);
   REQUIRE(platform.requests == 1);
-}
-
-namespace {
-bool pet_animate = true;
-bool pet_reduced_motion = false;
-int pet_compositions = 0;
-
-View PetAnimationApp() {
-  ++pet_compositions;
-  ThemeSpec theme;
-  theme.motion.reduced_motion = pet_reduced_motion;
-  return MaterialTheme{theme, Stack {}.With(desktop_pet::Orb{.animate = pet_animate})};
-}
-}
-
-TEST_CASE("DesktopPetOrbAnimatesPaintWithoutRecompositionAndStopsWhenHiddenOrMotionIsReduced") {
-  pet_animate = true;
-  pet_reduced_motion = false;
-  pet_compositions = 0;
-  TestPlatform platform;
-  UiWindow window(PetAnimationApp, platform);
-  window.SetWindowMetrics({.viewport = {200.0F, 200.0F}});
-  const auto first = window.BuildCommit().next_frame_deadline;
-  REQUIRE(first.has_value());
-  REQUIRE(*first == Catch::Approx(1.0 / 30.0));
-  const auto initial_commands = window.BuildFrame().Commands();
-  platform.current_time = 1.0 / 30.0;
-  REQUIRE(window.BuildCommit().next_frame_deadline.value() == Catch::Approx(2.0 / 30.0));
-  REQUIRE(window.BuildFrame().Commands() != initial_commands);
-  platform.current_time = 2.0 / 30.0;
-  REQUIRE(window.BuildCommit().next_frame_deadline.value() == Catch::Approx(3.0 / 30.0));
-  REQUIRE(pet_compositions == 1);
-
-  SECTION("Hidden or manually stopped") { pet_animate = false; }
-  SECTION("Reduced motion") { pet_reduced_motion = true; }
-  window.InvalidateRoot();
-  REQUIRE_FALSE(window.BuildCommit().next_frame_deadline);
-  const auto paused_commands = window.BuildFrame().Commands();
-  platform.current_time = 1.0;
-  REQUIRE(window.BuildFrame().Commands() == paused_commands);
-}
-
-namespace {
-
-View PetModelApp() {
-  const auto model = UseService<desktop_pet::PetModel>();
-  desktop_pet::UsePetAttachment(model);
-  return Spacer();
-}
-
-View PetSettingsApp() {
-  desktop_pet::UseSettingsAttachment(UseService<desktop_pet::PetModel>());
-  return Spacer();
-}
-
-class PetModelWindow final : public TestPlatform {
-public:
-  PetModelWindow(const WindowOptions& options, int& destroyed, bool passive_display_available)
-      : position_(options.initial_position.value_or(Point{})), destroyed_(destroyed),
-        passive_display_available_(passive_display_available) {
-    owned_native_window = true;
-  }
-  ~PetModelWindow() override { ++destroyed_; }
-
-  WindowNativeCapabilities NativeWindowCapabilities() const override {
-    return {.transparent_surface = true, .utility_presentation = true,
-            .passive_display = passive_display_available_, .topmost = true, .geometry = true};
-  }
-  WindowRequestResult RequestWindowTopmost(bool) override { return WindowRequestResult::Submitted; }
-  WindowRequestResult RequestWindowPosition(Point position) override {
-    position_ = position;
-    return WindowRequestResult::Submitted;
-  }
-  std::optional<Point> WindowScreenOrigin() const override { return position_; }
-  std::optional<Rect> WindowWorkArea() const override { return Rect{0.0F, 0.0F, 1000.0F, 800.0F}; }
-  void RequestWindowCommand(WindowCommand command) override {
-    TestPlatform::RequestWindowCommand(command);
-    if (command == WindowCommand::Show || command == WindowCommand::Activate) {
-      UpdateWindowLifecycleState(WindowLifecycleState::Inactive);
-    } else if (command == WindowCommand::Hide) {
-      UpdateWindowLifecycleState(WindowLifecycleState::Background);
-    }
-  }
-
-private:
-  Point position_;
-  int& destroyed_;
-  bool passive_display_available_;
-};
-
-class PetModelRuntime final : public TestPlatform {
-public:
-  ~PetModelRuntime() override { huxerui::Runtime::Retire(); }
-  int destroyed = 0;
-  bool passive_display_available = true;
-  std::vector<WindowOptions> attempted_options;
-  std::vector<WindowOptions> opened_options;
-
-  std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
-    attempted_options.push_back(options);
-    auto window = std::make_unique<PetModelWindow>(options, destroyed, passive_display_available);
-    detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
-    window->SetWindowMetrics({.viewport = options.initial_size});
-    window->BuildFrame();
-    opened_options.push_back(options);
-    return window;
-  }
-};
-
-}
-
-TEST_CASE("DesktopPetStartupPreservesPassiveDisplayAndFallsBackWhenUnavailable") {
-  PetModelRuntime owner;
-  SECTION("A backend with passive display retains its creation policy") {}
-  SECTION("A backend without passive display falls back during creation") {
-    owner.passive_display_available = false;
-  }
-  std::shared_ptr<desktop_pet::PetModel> model;
-  Application application{
-      PetModelApp,
-      {
-          .create_initial_window = false,
-          .show_debug_overlay = false,
-          .application_hooks = {
-              [&](ApplicationContext& context) {
-                model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
-                context.Provide(model);
-                const auto application = UseApplication();
-                UseApplicationTaskScope().Post([model, application] { model->Show(application); });
-              },
-          },
-      },
-  };
-  RuntimeLifetime lifetime(application, owner);
-  REQUIRE(owner.opened_options.empty());
-  owner.RunPlatformModuleTasks();
-  REQUIRE(model->pet.has_value());
-  REQUIRE(owner.opened_options.size() == 1);
-  REQUIRE(owner.attempted_options.front().show_without_activation);
-  REQUIRE(owner.attempted_options.front().topmost);
-  REQUIRE(owner.opened_options.back().show_without_activation == owner.passive_display_available);
-  REQUIRE(owner.opened_options.back().topmost == owner.passive_display_available);
-  REQUIRE(owner.attempted_options.size() == (owner.passive_display_available ? 1 : 2));
-}
-
-TEST_CASE("DesktopPetLightweightHideReleasesWindowsAndRestoresApplicationPreferences") {
-  std::shared_ptr<desktop_pet::PetModel> model;
-  std::optional<ApplicationHandle> application_handle;
-  PetModelRuntime owner;
-  auto tray = std::make_shared<TestSystemTrayTransport>();
-  tray->available = true;
-  owner.system_tray_transport = tray;
-  Application application{
-      PetModelApp,
-      {
-          .show_debug_overlay = false,
-          .quit_on_last_window_closed = false,
-          .application_hooks = {
-              [&model, &application_handle](ApplicationContext& context) {
-                model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
-                context.Provide(model);
-                application_handle = UseApplication();
-              },
-          },
-      },
-  };
-  RuntimeLifetime lifetime(application, owner);
-  model->Show(*application_handle);
-  model->OpenSettings(*application_handle);
-  const auto old_pet = *model->pet;
-  const auto old_settings = *model->settings;
-  REQUIRE_FALSE(model->lightweight.Get());
-  old_pet.Close();
-  REQUIRE(old_pet.IsOpen());
-  owner.RunPlatformModuleTasks();
-  REQUIRE(owner.destroyed == 0);
-  REQUIRE(model->pet.has_value());
-  REQUIRE(model->pet->LifecycleState() == WindowLifecycleState::Background);
-  model->Show(*application_handle);
-  REQUIRE(model->pet->SetPosition({-120.0F, 64.0F}) == WindowRequestResult::Submitted);
-  model->energized = true;
-  model->animate = false;
-  model->SetTopmost(false);
-  model->SetLightweight(true, true);
-  REQUIRE(model->pet.has_value());
-  SECTION("Lightweight hide requests closure") { model->Hide(true); }
-  SECTION("Lightweight close allows the native close path") { old_pet.Close(); }
-  owner.RunPlatformModuleTasks();
-  REQUIRE(owner.destroyed == 2);
-  REQUIRE_FALSE(model->pet);
-  REQUIRE_FALSE(model->settings);
-  REQUIRE(old_pet.SetTopmost(true) == WindowRequestResult::Disconnected);
-  REQUIRE(old_settings.SetTopmost(true) == WindowRequestResult::Disconnected);
-  REQUIRE(owner.application_quit_requests == 0);
-
-  model->Show(*application_handle);
-  REQUIRE(model->pet.has_value());
-  REQUIRE((model->pet->Position() == Point{-120.0F, 64.0F}));
-  REQUIRE_FALSE(owner.opened_options.back().topmost);
-  REQUIRE(model->energized.Get());
-  REQUIRE_FALSE(model->animate.Get());
-  REQUIRE(model->lightweight.Get());
-  model->Hide(true);
-  owner.RunPlatformModuleTasks();
-  model->OpenSettings(*application_handle);
-  REQUIRE_FALSE(model->pet);
-  model->SetTopmost(true);
-  model->Show(*application_handle);
-  REQUIRE(owner.opened_options.back().topmost);
-  model->Hide(true);
-  owner.RunPlatformModuleTasks();
-  REQUIRE(owner.destroyed == 5);
-}
-
-TEST_CASE("DesktopPetLightweightModeProtectsReplacementsAndRequiresTrayRecovery") {
-  std::shared_ptr<desktop_pet::PetModel> model;
-  std::optional<ApplicationHandle> application_handle;
-  PetModelRuntime owner;
-  Application application{
-      PetModelApp,
-      {
-          .show_debug_overlay = false,
-          .quit_on_last_window_closed = false,
-          .application_hooks = {
-              [&model, &application_handle](ApplicationContext& context) {
-                model = std::make_shared<desktop_pet::PetModel>(PetModelApp, PetSettingsApp);
-                context.Provide(model);
-                application_handle = UseApplication();
-              },
-          },
-      },
-  };
-  RuntimeLifetime lifetime(application, owner);
-  model->Show(*application_handle);
-  model->SetLightweight(true, false);
-  model->Hide(false);
-  REQUIRE_FALSE(model->lightweight.Get());
-  REQUIRE(model->pet->LifecycleState() != WindowLifecycleState::Background);
-
-  SECTION("Enabling while hidden releases the retained window") {
-    model->Hide(true);
-    model->SetLightweight(true, true);
-    owner.RunPlatformModuleTasks();
-    REQUIRE(owner.destroyed == 1);
-    REQUIRE_FALSE(model->pet);
-  }
-  SECTION("Old lifecycle cleanup preserves newly mounted windows") {
-    model->SetLightweight(true, true);
-    model->OpenSettings(*application_handle);
-    model->Hide(true);
-    model->Show(*application_handle);
-    model->OpenSettings(*application_handle);
-    owner.RunPlatformModuleTasks();
-    REQUIRE(owner.destroyed == 2);
-    REQUIRE(model->pet.has_value());
-    REQUIRE(model->settings.has_value());
-    REQUIRE(model->pet->SetTopmost(true) == WindowRequestResult::Submitted);
-    REQUIRE(model->settings->SetTopmost(true) == WindowRequestResult::Submitted);
-    model->Hide(true);
-    owner.RunPlatformModuleTasks();
-    REQUIRE(owner.destroyed == 4);
-    REQUIRE_FALSE(model->pet);
-    REQUIRE_FALSE(model->settings);
-  }
 }
 
 TEST_CASE("WindowRetirementReleasesItsLastSemanticFrame") {
@@ -1883,11 +1615,10 @@ TEST_CASE("Closing an owner retires descendants before native destruction and ex
   REQUIRE(platform.application_quit_requests == 1);
 }
 
-TEST_CASE("Relationships are installed before presentation and passive windows are shown without activation") {
+TEST_CASE("Relationships are installed before presentation and non-activating windows are shown without activation") {
   class PresentationWindow final : public TestPlatform {
   public:
     bool presented_with_relationship = false;
-    WindowNativeCapabilities NativeWindowCapabilities() const override { return {.passive_display = true}; }
     void RequestWindowCommand(WindowCommand command) override {
       if (command == WindowCommand::Show || command == WindowCommand::Activate) {
         presented_with_relationship = !applied_owners.empty() && !applied_modal_states.empty();
@@ -1898,6 +1629,7 @@ TEST_CASE("Relationships are installed before presentation and passive windows a
   class PresentationRuntime final : public TestPlatform {
   public:
     std::vector<PresentationWindow*> windows;
+    WindowCapabilities QueryWindowSupport() const noexcept override { return {.non_activating = true}; }
     std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
       auto window = std::make_unique<PresentationWindow>();
       detail::InternalAccess::InitializeWindow(*window, *this, std::move(content), options);
@@ -1910,7 +1642,7 @@ TEST_CASE("Relationships are installed before presentation and passive windows a
   const auto app = UseApplication();
   const auto owner = app.OpenWindow(EmptyOwnedWindow);
   const auto modal = app.OpenWindow(EmptyOwnedWindow, {}, {.owner = owner, .modal = true});
-  const auto passive = app.OpenWindow(EmptyOwnedWindow, {.show_without_activation = true});
+  const auto passive = app.OpenWindow(EmptyOwnedWindow, {.activatable = false});
   REQUIRE(platform.windows[1]->presented_with_relationship);
   REQUIRE(platform.windows[1]->applied_owners.back() == platform.windows[0]);
   REQUIRE(platform.windows[0]->applied_modal_states.back() == std::pair<bool, bool>{false, true});

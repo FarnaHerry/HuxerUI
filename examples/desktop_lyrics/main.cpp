@@ -42,7 +42,8 @@ View LyricsOverlay(State<std::size_t> line) {
 
 View App() {
   const auto application = UseApplication();
-  const auto support = UseWindow().Capabilities();
+  const auto native = UseWindow().Capabilities();
+  const auto host = application.WindowSupport();
   auto overlay = UseState(std::optional<WindowHandle>{});
   auto line = UseState(std::size_t{0});
   auto on_top = UseState(false);
@@ -58,22 +59,23 @@ View App() {
     Text("Desktop lyrics", TextRole::Title),
     Text("Drag the lyrics panel to move it. Switch on click-through to use the window below it."),
     Row {
-      Button(open ? "Show overlay" : "Open overlay").OnClick([application, support, overlay, line, on_top, pass_through] {
+      Button(open ? "Show overlay" : "Open overlay").OnClick([application, native, host, overlay, line, on_top, pass_through] {
         const std::optional<WindowHandle>& window = overlay;
         if (window && window->IsOpen()) {
           window->Show();
           return;
         }
-        overlay = application.OpenWindow([line] { return LyricsOverlay(line); }, {
+        WindowOptions options{
             .title = "Lyrics overlay",
             .initial_size = {540.0F, 140.0F},
             .presentation = WindowPresentation::Utility,
-            .transparent_surface = support.transparent_surface,
-            .show_without_activation = support.passive_display,
-            .topmost = support.topmost,
+            .transparent_surface = native.transparent_surface,
+            .activatable = !host.non_activating,
             .resizable = false,
-        });
-        on_top = support.topmost;
+        };
+        options.always_on_top = host.always_on_top;
+        overlay = application.OpenWindow([line] { return LyricsOverlay(line); }, options);
+        on_top = host.always_on_top;
         pass_through = false;
       }),
       Button("Next lyric").OnClick([line] {
@@ -89,13 +91,13 @@ View App() {
       Button(pass_through ? "Restore pointer input" : "Pass clicks through").OnClick([overlay, pass_through] {
         const std::optional<WindowHandle>& window = overlay;
         const bool enabled = !pass_through;
-        if (window && window->SetInputPassthrough(enabled) == WindowRequestResult::Submitted) pass_through = enabled;
-      }).With(Enabled(open && support.input_passthrough)),
+        if (window && window->SetPointerPassThrough(enabled)) pass_through = enabled;
+      }).With(Enabled(open && host.pointer_pass_through)),
       Button(on_top ? "Use ordinary level" : "Keep on top").OnClick([overlay, on_top] {
         const std::optional<WindowHandle>& window = overlay;
         const bool enabled = !on_top;
-        if (window && window->SetTopmost(enabled) == WindowRequestResult::Submitted) on_top = enabled;
-      }).With(Enabled(open && support.topmost)),
+        if (window && window->SetAlwaysOnTop(enabled)) on_top = enabled;
+      }).With(Enabled(open && host.always_on_top)),
     }.With(Spacing(10.0F)),
   }.With(Padding(24.0F), Spacing(14.0F), CrossAlign(CrossAxisAlignment::Stretch));
 }

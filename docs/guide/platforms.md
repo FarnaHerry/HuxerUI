@@ -64,10 +64,10 @@ Positions that become unrepresentable after DPI and decoration adjustment throw 
 ## Floating utility windows
 
 Windows, Linux (GTK), and macOS support `WindowPresentation::Utility` for a borderless, non-resizable window excluded from task or window switching.
-Set `WindowOptions::transparent_surface` for per-pixel transparency, `show_without_activation` for passive display, and `topmost` for an initial above-normal stacking preference.
+Set `WindowOptions::transparent_surface` for per-pixel transparency, `activatable` to false for passive display, and `topmost` for an initial above-normal stacking preference.
 These options default to ordinary window behavior; transparency requires Utility presentation.
-The utility, transparency, and passive-display policies are fixed when the native window is created.
-Hosts reject nondefault presentation policies their active backend cannot honor with `std::logic_error`, so query `WindowHandle::Capabilities()` or branch on availability instead of assuming one desktop contract.
+The utility, transparency, and activation policies are fixed when the native window is created.
+Hosts reject nondefault presentation policies their active backend cannot honor with `std::logic_error`, and upstream desktop options the host cannot provide throw `std::runtime_error`, so query `WindowHandle::Capabilities()` / `ApplicationHandle::WindowSupport()` or branch on availability instead of assuming one desktop contract.
 Other backends retain that explicit rejection behavior.
 
 ```cpp
@@ -76,20 +76,21 @@ const auto pet = application.OpenWindow([] { return CompanionView(); }, {
     .initial_size = {200.0F, 200.0F},
     .presentation = WindowPresentation::Utility,
     .transparent_surface = true,
-    .show_without_activation = true,
+    .activatable = false,
     .topmost = true,
 });
 ```
 
 `WindowHandle::Capabilities()` describes native operations available to that attachment.
-`SetTopmost`, `SetPosition`, `SetClientSize`, `SetInputPassthrough`, and `BeginMove` return `WindowRequestResult`: Submitted accepts the request without promising native application, Unavailable reports an unsupported operation, Rejected reports native refusal, and Disconnected reports a retired attachment.
+`SetPosition`, `SetClientSize`, and `BeginMove` return `WindowRequestResult`: Submitted accepts the request without promising native application, Unavailable reports an unsupported operation, Rejected reports native refusal, and Disconnected reports a retired attachment.
+`SetAlwaysOnTop` and `SetPointerPassThrough` return whether the host accepted the change.
 Call these operations and `WorkArea()` on the original application thread; nonfinite positions and nonpositive or nonfinite sizes throw `std::invalid_argument`.
 `WorkArea()` returns the current monitor's logical screen work area, or `std::nullopt`; monitor selection follows the native window rather than a global primary-monitor assumption.
 Use `BeginMove()` from an accepted drag gesture to let the host move the window, and reserve programmatic positioning for explicit placement or recovery.
 
 Windows transparent utility windows use a bounded layered-surface path with complete CPU readback per presented frame, limited to 4096 physical pixels per dimension and 16 million pixels in total.
 Zero-alpha pixels naturally pass native mouse input through; translucent pixels remain interactive.
-`SetInputPassthrough(true)` excludes the entire surface without changing its appearance, and restoring input preserves native modal blocking.
+`SetPointerPassThrough(true)` excludes the entire surface without changing its appearance, and restoring input preserves native modal blocking.
 Independent arbitrary shaped input regions remain unavailable; View hit testing and visual alpha are not substitutes for that capability.
 PlatformView hosting is unavailable on the transparent path; ExternalTexture rendering remains usable.
 
@@ -97,7 +98,7 @@ macOS floating-window support is a preview accepted through the macOS Multi-Wind
 Utility windows use borderless `NSPanel` surfaces excluded from window cycling and able to share a Space with a full-screen window.
 Transparent surfaces make the panel non-opaque with a clear background and no shadow, and the renderer erases stale content with per-pixel alpha instead of the opaque fallback fill.
 Passive display orders the panel front without taking key status, and its non-activating style keeps pointer input from implicitly activating the application.
-`SetInputPassthrough` uses whole-window input exclusion and is available on every attachment; `BeginMove` needs the pointer-down event of the current drag gesture and is rejected without one.
+`SetPointerPassThrough` uses whole-window input exclusion and is available on every attachment; `BeginMove` needs the pointer-down event of the current drag gesture and is rejected without one.
 Open an ordinary settings window and explicitly activate it for keyboard/IME editing.
 
 Linux transparent utility windows draw through the regular GTK scene graph: the window background becomes a per-pixel alpha surface, and no CPU readback budget applies.

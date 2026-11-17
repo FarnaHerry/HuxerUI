@@ -127,11 +127,8 @@ enum class WindowRequestResult { Submitted, Unavailable, Rejected, Disconnected 
 struct WindowNativeCapabilities {
   bool transparent_surface = false;
   bool utility_presentation = false;
-  bool passive_display = false;
-  bool topmost = false;
   bool geometry = false;
   bool native_move = false;
-  bool input_passthrough = false;
 
   bool operator==(const WindowNativeCapabilities&) const = default;
 };
@@ -251,11 +248,7 @@ struct WindowOptions {
   /// Enables a per-pixel alpha surface. Requires Utility presentation; independent of View opacity.
   bool transparent_surface = false;
 
-  /// Shows without taking keyboard focus and suppresses implicit activation on pointer input.
-  /// Explicit Activate remains an application request for deliberate keyboard access.
-  bool show_without_activation = false;
-
-  /// Initial above-normal stacking preference, subsequently mutable through SetTopmost.
+  /// Initial above-normal stacking preference, subsequently mutable through SetAlwaysOnTop.
   bool topmost = false;
 
   /// Lets the desktop show through unpainted client pixels and blend with partially transparent content.
@@ -450,16 +443,10 @@ public:
   /// Reads available native operations; a retired handle reports all false. Call on the application thread.
   [[nodiscard]] WindowNativeCapabilities Capabilities() const;
 
-  /// Requests above-normal stacking without activation; independent of owner relationships and fullscreen.
-  /// Native requests run on the original application thread; retired handles return Disconnected.
-  [[nodiscard]] WindowRequestResult SetTopmost(bool topmost) const;
   /// Requests a finite client origin in logical screen coordinates, preserving negative display origins.
   [[nodiscard]] WindowRequestResult SetPosition(Point position) const;
   /// Requests finite positive client dimensions, subject to the configured minimum and native constraints.
   [[nodiscard]] WindowRequestResult SetClientSize(Size size) const;
-  /// Excludes all native pointer input without changing drawing. Restoring input preserves modal blocking.
-  /// Unsupported attachments return Unavailable; a change cancels active pointer interaction and capture.
-  [[nodiscard]] WindowRequestResult SetInputPassthrough(bool passthrough) const;
   /// Queues native user dragging after the current callback, without a framework movement state machine.
   [[nodiscard]] WindowRequestResult BeginMove() const;
   /// Reads this window's current monitor work area in logical screen coordinates, or nullopt when unavailable.

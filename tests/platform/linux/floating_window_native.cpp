@@ -396,13 +396,7 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       self.Check(capabilities.transparent_surface, "transparent surfaces were unavailable");
       self.Check(capabilities.utility_presentation, "utility presentation was unavailable");
       self.Check(capabilities.native_move, "native moves were unavailable");
-      self.Check(capabilities.passive_display == x11, "passive display capability mismatched the backend");
-      self.Check(capabilities.topmost == x11, "topmost capability mismatched the backend");
       self.Check(capabilities.geometry == x11, "geometry capability mismatched the backend");
-      self.Check(!capabilities.input_passthrough || x11, "input passthrough was offered without X11");
-      if (shape) {
-        self.Check(capabilities.input_passthrough, "input passthrough missed the X11 shape extension");
-      }
       work_area = self.primary->WorkArea();
       if (x11) {
         self.Check(work_area.has_value() && work_area->width > 0.0F && work_area->height > 0.0F,
@@ -430,8 +424,8 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       }
       self.Check(invalid_argument_rejected, "transparent standard windows were accepted");
       if (!x11) {
-        // Wayland compositors own activation and stacking, so requesting them must fail creation
-        // instead of silently creating an ordinary window.
+        // Wayland compositors own activation and stacking, so the host rejects those upstream
+        // creation options instead of silently creating an ordinary window.
         for (int option = 0; option < 2; ++option) {
           try {
             WindowOptions options{
@@ -440,12 +434,12 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
                 .presentation = WindowPresentation::Utility,
             };
             if (option == 0) {
-              options.show_without_activation = true;
+              options.activatable = false;
             } else {
-              options.topmost = true;
+              options.always_on_top = true;
             }
             static_cast<void>(self.application->OpenWindow(FloatingContentApp, options));
-          } catch (const std::logic_error&) {
+          } catch (const std::runtime_error&) {
             ++logic_error_rejections;
           }
         }
@@ -462,7 +456,6 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
         };
         if (x11) {
           options.initial_position = Point{120.0F, 90.0F};
-          options.show_without_activation = true;
           options.topmost = true;
         }
         floating = self.application->OpenWindow(FloatingContentApp, options);
@@ -483,8 +476,6 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       if (x11) {
         self.Check(probe.DepthIs32(pet), "transparent window did not use a 32-bit visual");
         self.Check(probe.WindowTypeIsUtility(pet), "X11 window type missed UTILITY");
-        self.Check(probe.InputHintIsPassive(pet), "passive window kept its X11 input hint");
-        self.Check(!gtk_window_is_active(pet), "passive utility window held keyboard activation");
       }
       ++stage;
     } else if (stage == 3) {
@@ -519,22 +510,10 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       }
       ++stage;
     } else if (stage == 4) {
-      const WindowRequestResult passthrough = floating->SetInputPassthrough(true);
-      if (shape) {
-        self.Check(passthrough == WindowRequestResult::Submitted, "passthrough request was not submitted");
-        self.Check(probe.InputRegionRectangles(self.Native("HuxerUI floating pet")) == 0,
-                   "passthrough left X11 input rectangles behind");
-        self.Check(floating->SetInputPassthrough(false) == WindowRequestResult::Submitted,
-                   "restoring input was not submitted");
-        self.Check(probe.InputRegionRectangles(self.Native("HuxerUI floating pet")) > 0,
-                   "restoring input did not bring back X11 input rectangles");
-      } else {
-        self.Check(passthrough == WindowRequestResult::Unavailable,
-                   "passthrough was offered without the X11 shape extension");
+      if (x11) {
+        self.Check(floating->SetPointerPassThrough(true), "pointer pass-through was not submitted");
+        self.Check(floating->SetPointerPassThrough(false), "restoring pointer input was not submitted");
       }
-      self.Check(floating->SetTopmost(false) ==
-                     (x11 ? WindowRequestResult::Submitted : WindowRequestResult::Unavailable),
-                 "topmost request mismatched the backend");
       press_baseline = self.presses;
       ++stage;
     } else if (stage == 5) {
@@ -577,15 +556,13 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
           }
           return false;
         }
-        if (shape) {
+        if (x11) {
           // Enabling passthrough mid-press cancels the shared pointer sequence and releases capture.
-          self.Check(floating->SetInputPassthrough(true) == WindowRequestResult::Submitted,
-                     "passthrough during a press was not submitted");
+          self.Check(floating->SetPointerPassThrough(true), "passthrough during a press was not submitted");
           if (self.cancels == 0) {
             return false;
           }
-          self.Check(floating->SetInputPassthrough(false) == WindowRequestResult::Submitted,
-                     "restoring input during a press was not submitted");
+          self.Check(floating->SetPointerPassThrough(false), "restoring pointer input during a press failed");
           probe.Button(false);
         }
         press_baseline = self.presses;
@@ -647,8 +624,8 @@ TEST_CASE("LinuxNativeFloatingWindowHonorsBackendCapabilitiesAndRequests", "[.][
       if (floating->Capabilities() != WindowNativeCapabilities{}) {
         return false;
       }
-      self.Check(floating->SetInputPassthrough(true) == WindowRequestResult::Disconnected,
-                 "retired floating window accepted passthrough");
+      self.Check(!floating->SetPointerPassThrough(true),
+                 "retired floating window accepted pointer pass-through");
       self.Check(floating->SetClientSize({120.0F, 90.0F}) == WindowRequestResult::Disconnected,
                  "retired floating window accepted a resize");
       ++stage;

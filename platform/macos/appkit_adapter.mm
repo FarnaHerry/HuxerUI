@@ -841,7 +841,6 @@ public:
       const NSRect frame = NSMakeRect(0.0, 0.0, initial_size.width, initial_size.height);
       utility_window_ = options.presentation == WindowPresentation::Utility;
       transparent_surface_ = options.transparent_surface;
-      passive_display_ = options.show_without_activation;
       input_passthrough_ = options.pointer_pass_through;
       custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
       borderless_ = options.chrome_mode == WindowChromeMode::None;
@@ -856,7 +855,7 @@ public:
       if (custom_chrome_) {
         style |= NSWindowStyleMaskFullSizeContentView;
       }
-      if (passive_display_ || !activatable_) {
+      if (!activatable_) {
         // Nonactivating style is reserved for NSPanel and keeps pointer input from activating the application.
         style |= NSWindowStyleMaskNonactivatingPanel;
       }
@@ -867,7 +866,7 @@ public:
         panel.hidesOnDeactivate = NO;
         window_ = panel;
         if (window_ != nil) panel->huxeruiWindow = this;
-      } else if (utility_window_ || passive_display_) {
+      } else if (utility_window_) {
         HuxerUIPanel* panel = [[HuxerUIPanel alloc] initWithContentRect:frame
                                                                 styleMask:style
                                                                   backing:NSBackingStoreBuffered
@@ -939,7 +938,7 @@ public:
                                                object:nil];
       if (options.initial_position) ApplyWindowContentOrigin(*options.initial_position);
       else [window_ center];
-      if (!passive_display_ && activatable_) [window_ makeFirstResponder:view_];
+      if (activatable_) [window_ makeFirstResponder:view_];
       UiWindow::UpdateResourceConfiguration(Configuration());
       RefreshSystemTheme();
       UpdateWindowLifecycleState();
@@ -1254,14 +1253,8 @@ public:
 
   WindowNativeCapabilities NativeWindowCapabilities() const override {
     // AppKit has no backend split: every attachment exposes the same native window operations.
-    return {.transparent_surface = true, .utility_presentation = true, .passive_display = true,
-            .topmost = true, .geometry = true, .native_move = true, .input_passthrough = true};
-  }
-
-  WindowRequestResult RequestWindowTopmost(bool topmost) override {
-    if (window_ == nil || !IsInitialized()) return WindowRequestResult::Rejected;
-    window_.level = topmost ? NSFloatingWindowLevel : NSNormalWindowLevel;
-    return WindowRequestResult::Submitted;
+    return {.transparent_surface = true, .utility_presentation = true,
+            .geometry = true, .native_move = true};
   }
 
   WindowRequestResult RequestWindowPosition(Point position) override {
@@ -1291,15 +1284,6 @@ public:
     NSRect desired = NSMakeRect(content.origin.x, NSMaxY(content) - content_size.height, content_size.width,
                                 content_size.height);
     [window_ setFrame:[window_ frameRectForContentRect:desired] display:YES];
-    return WindowRequestResult::Submitted;
-  }
-
-  WindowRequestResult RequestWindowInputPassthrough(bool passthrough) override {
-    if (window_ == nil || !IsInitialized()) return WindowRequestResult::Rejected;
-    if (input_passthrough_ == passthrough) return WindowRequestResult::Submitted;
-    input_passthrough_ = passthrough;
-    ApplyMouseEvents();
-    if (passthrough) [view_ cancelPointer];
     return WindowRequestResult::Submitted;
   }
 
@@ -1709,7 +1693,6 @@ private:
   bool custom_chrome_ = false;
   bool utility_window_ = false;
   bool transparent_surface_ = false;
-  bool passive_display_ = false;
   bool input_passthrough_ = false;
   std::optional<Size> minimum_size_;
   bool borderless_ = false;

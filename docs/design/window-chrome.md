@@ -118,8 +118,11 @@ struct WindowOptions {
   WindowCaptionLabels caption_labels;
   WindowPresentation presentation = WindowPresentation::Standard;
   bool transparent_surface = false;
-  bool show_without_activation = false;
   bool topmost = false;
+  bool transparent_background = false;
+  bool always_on_top = false;
+  bool activatable = true;
+  bool pointer_pass_through = false;
   bool resizable = true;
 };
 
@@ -394,11 +397,11 @@ Linux Custom mode uses framework controls in a `WindowControlsLayout` layer, GTK
 
 ## Desktop window policies
 
-The application Runtime validates requested policies before creating the window. Each UiWindow applies its own configuration, reports native support through `NativeWindowCapabilities()`, and uses the existing WindowService for requests. Creation and later activation requests show a `show_without_activation` window without moving keyboard focus. Native input and shared focus dispatch both honor that policy.
+The application Runtime validates requested policies before creating the window. Each UiWindow applies its own configuration, reports native support through `NativeWindowCapabilities()`, and uses the existing WindowService for requests. Host-wide support for the upstream desktop-window options comes from `ApplicationHandle::WindowSupport()`, and creation rejects an unsupported request before any native change. A window created with `activatable` set to false is shown without moving keyboard focus; native input and shared focus dispatch both honor that policy.
 
-Transparency configures the base surface and renderer through `transparent_surface`. Windows uses the retained Direct2D scene and a premultiplied DirectComposition swap chain, clearing damaged pixels to transparent before replay. AppKit clears the dirty region of the nonopaque content surface and uses a non-activating panel when required. GTK clears its themed window background through a scoped style and uses the X11 shape input region for pass-through.
+Transparency configures the base surface and renderer through `transparent_surface`. Windows uses the retained Direct2D scene and a premultiplied DirectComposition swap chain, clearing damaged pixels to transparent before replay. AppKit clears the dirty region of the nonopaque content surface and uses a non-activating panel when required. GTK clears its themed window background through a scoped style and uses the GDK surface input region for pass-through.
 
-Window stacking and input passthrough can change independently of surface transparency through `SetTopmost()` and `SetInputPassthrough()`. Pointer capture belongs to the window that is switching policy. GTK reports only the behaviors it can provide with the current display backend.
+Window stacking and input passthrough can change independently of surface transparency through `SetAlwaysOnTop()` and `SetPointerPassThrough()`. Pointer capture belongs to the window that is switching policy. GTK reports only the behaviors it can provide with the current display backend.
 
 ## Fullscreen and keyboard shortcuts
 
@@ -435,16 +438,16 @@ Manual Linux validation covers GTK decoration removal, drag and edge or corner r
 
 Floating windows extend the existing WindowOptions, WindowHandle, WindowService, and native UiWindow operations.
 WindowPresentation::Utility selects a borderless, non-resizable helper surface excluded from the task switcher; it does not reinterpret Custom chrome or create another application loop.
-The presentation, transparent_surface, and show_without_activation options are fixed at creation; topmost is an initial preference that can subsequently change through WindowHandle::SetTopmost.
+The presentation, transparent_surface, and activatable options are fixed at creation; topmost is an initial preference that can subsequently change through WindowHandle::SetAlwaysOnTop.
 Defaults retain ordinary opaque, decorated, activating windows.
 Transparent surfaces require Utility presentation, which has no native title-bar metrics or framework caption controls.
 
-WindowNativeCapabilities describes this attachment's available transparency, utility presentation, passive display, stacking, geometry, native moving, and whole-window input passthrough.
+WindowNativeCapabilities describes this attachment's available transparency, utility presentation, geometry, and native moving.
 Unavailable hosts return false capabilities; a nondefault creation policy requiring unavailable behavior throws std::logic_error instead of silently creating an ordinary window.
 Invalid configuration throws std::invalid_argument before native policy changes, and native resource failures use std::runtime_error; diagnostics begin with HuxerUI.
 Availability is a snapshot on the application thread, not a platform-name guarantee or a general capability registry.
 
-SetTopmost, SetPosition, SetClientSize, SetInputPassthrough, and BeginMove return WindowRequestResult.
+SetPosition, SetClientSize, and BeginMove return WindowRequestResult; SetAlwaysOnTop and SetPointerPassThrough report the host's acceptance as a bool.
 Submitted means the host accepted a request, not that its window manager applied it; Rejected means the host declined it, Unavailable means the attachment cannot perform it, and Disconnected identifies a retired attachment.
 Requests and capability queries run on the original application thread, retain the original Runtime identity, and never reconnect a stale handle to a replacement window.
 Position and WorkArea are native snapshots in logical screen coordinates; observed client geometry continues to enter through SetWindowMetrics.
@@ -458,7 +461,7 @@ The initial layered-surface budget is 4096 by 4096 physical pixels, also bounded
 Transparent frame clearing and partial repaint must erase the old silhouette, preserve premultiplied color, and keep zero-alpha pixels at zero.
 Device recreation and resizing discard all dependent publication resources before the next complete redraw.
 
-Layered-window zero-alpha pixels naturally exclude native mouse input, and SetInputPassthrough excludes the whole surface without changing its pixels.
+Layered-window zero-alpha pixels naturally exclude native mouse input, and SetPointerPassThrough excludes the whole surface without changing its pixels.
 The adapter publishes layered frames directly from its scheduled frame callback: an unpublished layered surface cannot rely on ordinary WM_PAINT delivery to become visible.
 These are distinct from arbitrary application-supplied native input regions, which remain future work: this implementation does not advertise an independent shaped-region capability.
 A WM_NCHITTEST return value alone does not establish cross-process passthrough.

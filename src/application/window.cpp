@@ -626,11 +626,6 @@ WindowNativeCapabilities WindowHandle::Capabilities() const {
   return window ? window->NativeWindowCapabilities() : WindowNativeCapabilities{};
 }
 
-WindowRequestResult WindowHandle::SetTopmost(bool topmost) const {
-  auto* window = service_->NativeWindow();
-  return window ? window->RequestWindowTopmost(topmost) : WindowRequestResult::Disconnected;
-}
-
 WindowRequestResult WindowHandle::SetPosition(Point position) const {
   if (!std::isfinite(position.x) || !std::isfinite(position.y)) {
     throw std::invalid_argument("HuxerUI window position must be finite");
@@ -645,11 +640,6 @@ WindowRequestResult WindowHandle::SetClientSize(Size size) const {
   }
   auto* window = service_->NativeWindow();
   return window ? window->RequestWindowSize(size) : WindowRequestResult::Disconnected;
-}
-
-WindowRequestResult WindowHandle::SetInputPassthrough(bool passthrough) const {
-  auto* window = service_->NativeWindow();
-  return window ? window->RequestWindowInputPassthrough(passthrough) : WindowRequestResult::Disconnected;
 }
 
 WindowRequestResult WindowHandle::BeginMove() const {

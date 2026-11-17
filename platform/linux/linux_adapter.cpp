@@ -15,9 +15,6 @@
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #endif
-#if defined(HUXERUI_LINUX_X11) && defined(HUXERUI_LINUX_X11_SHAPE)
-#include <X11/extensions/shape.h>
-#endif
 #endif
 
 #include <sys/resource.h>
@@ -1517,41 +1514,9 @@ public:
     WindowNativeCapabilities capabilities;
     capabilities.transparent_surface = true;
     capabilities.utility_presentation = true;
-    capabilities.passive_display = x11;
-    capabilities.topmost = x11;
     capabilities.geometry = x11;
     capabilities.native_move = true;
-#if defined(HUXERUI_LINUX_X11) && defined(HUXERUI_LINUX_X11_SHAPE)
-    capabilities.input_passthrough = x11;
-#endif
     return capabilities;
-  }
-
-  WindowRequestResult RequestWindowTopmost(bool topmost) override {
-#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
-    if (!UsingX11SurfaceBackend()) {
-      return WindowRequestResult::Unavailable;
-    }
-    if (window_ == nullptr) {
-      return WindowRequestResult::Rejected;
-    }
-    topmost_ = topmost;
-    if (!gtk_widget_get_mapped(GTK_WIDGET(window_))) {
-      // Unmapped windows adopt the preference the next time they map.
-      return WindowRequestResult::Submitted;
-    }
-    X11SurfaceRequest request{window_};
-    if (!request) {
-      return WindowRequestResult::Rejected;
-    }
-    SendNetWmStateMessage(request.display, request.window, "_NET_WM_STATE_ABOVE",
-                          topmost ? kNetWmStateAdd : kNetWmStateRemove);
-    XFlush(request.display);
-    return WindowRequestResult::Submitted;
-#else
-    static_cast<void>(topmost);
-    return WindowRequestResult::Unavailable;
-#endif
   }
 
   WindowRequestResult RequestWindowPosition(Point position) override {
@@ -1606,38 +1571,6 @@ public:
     const int height = ResolveWindowPositionCoordinate(std::max(1.0F, size.height), 1, std::numeric_limits<int>::max());
     gtk_window_set_default_size(window_, width, height);
     return WindowRequestResult::Submitted;
-  }
-
-  WindowRequestResult RequestWindowInputPassthrough(bool passthrough) override {
-#if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11_SHAPE)
-    if (!UsingX11SurfaceBackend()) {
-      return WindowRequestResult::Unavailable;
-    }
-    if (window_ == nullptr) {
-      return WindowRequestResult::Rejected;
-    }
-    if (passthrough == input_passthrough_) {
-      return WindowRequestResult::Submitted;
-    }
-    X11SurfaceRequest request{window_};
-    if (!request || !gtk_widget_get_mapped(GTK_WIDGET(window_))) {
-      return WindowRequestResult::Rejected;
-    }
-    if (passthrough) {
-      // An empty input region excludes the whole surface from native hit testing.
-      XShapeCombineRectangles(request.display, request.window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, 0);
-    } else {
-      // Restoring the input region from the bounding shape tracks the current window size.
-      XShapeCombineShape(request.display, request.window, ShapeInput, 0, 0, request.window, ShapeBounding, ShapeSet);
-    }
-    XFlush(request.display);
-    input_passthrough_ = passthrough;
-    CancelPointer();
-    return WindowRequestResult::Submitted;
-#else
-    static_cast<void>(passthrough);
-    return WindowRequestResult::Unavailable;
-#endif
   }
 
   WindowRequestResult RequestWindowMove() override {
@@ -1771,7 +1704,7 @@ private:
   void CreateWindow(const WindowOptions& options, Size initial_size) {
     utility_window_ = options.presentation == WindowPresentation::Utility;
     transparent_surface_ = options.transparent_surface;
-    passive_display_ = options.show_without_activation;
+    activatable_ = options.activatable;
     topmost_ = options.topmost;
     // Utility presentation is borderless by definition, so custom chrome has nothing to replace.
     custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
@@ -1908,7 +1841,7 @@ private:
       XChangeProperty(request.display, request.window, XInternAtom(request.display, "_NET_WM_WINDOW_TYPE", False),
           XA_ATOM, 32, PropModeReplace, reinterpret_cast<const unsigned char*>(&utility_type), 1);
     }
-    if (passive_display_) {
+    if (!activatable_) {
       XWMHints hints;
       hints.flags = InputHint;
       hints.input = False;
@@ -1933,7 +1866,7 @@ private:
     if (topmost_) {
       SendNetWmStateMessage(request.display, request.window, "_NET_WM_STATE_ABOVE", kNetWmStateAdd);
     }
-    if (passive_display_) {
+    if (!activatable_) {
       G_GNUC_BEGIN_IGNORE_DEPRECATIONS
       XWMHints hints;
       hints.flags = InputHint;
@@ -2849,9 +2782,8 @@ private:
   bool transparent_surface_ = false;
   std::optional<Rect> aperture_region_;
   std::optional<Rect> locator_region_;
-  bool passive_display_ = false;
+  bool activatable_ = true;
   bool topmost_ = false;
-  bool input_passthrough_ = false;
   std::optional<Size> minimum_size_;
   guint32 pointer_press_time_ = 0;
   bool borderless_ = false;

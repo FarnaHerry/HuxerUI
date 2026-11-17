@@ -244,7 +244,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
   const Application application{NativePetContent, {
       .window = {.title = "HuxerUI Native Pet", .initial_size = {200.0F, 200.0F},
           .initial_position = Point{100.0F, 100.0F}, .presentation = WindowPresentation::Utility,
-          .transparent_surface = true, .show_without_activation = true, .topmost = true},
+          .transparent_surface = true, .topmost = true, .activatable = false},
       .show_debug_overlay = false,
       .quit_on_last_window_closed = false,
       .application_hooks = {[state](ApplicationContext& context) { context.Provide(state); }},
@@ -302,13 +302,14 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
   Await([&] { return runner.state->clicks.load() == 1; });
   REQUIRE(GetForegroundWindow() == probe.data->window);
   WindowRequestResult result{};
-  runner.Invoke([&] { result = runner.state->window->SetInputPassthrough(true); });
-  REQUIRE(result == WindowRequestResult::Submitted);
+  bool passthrough_ok = false;
+  runner.Invoke([&] { passthrough_ok = runner.state->window->SetPointerPassThrough(true); });
+  REQUIRE(passthrough_ok);
   Click(body);
   Await([&] { return InterlockedCompareExchange(&probe.data->clicks, 0, 0) == before + 2; });
   REQUIRE(DesktopPixel(body) == RGB(240, 60, 30));
-  runner.Invoke([&] { result = runner.state->window->SetInputPassthrough(false); });
-  REQUIRE(result == WindowRequestResult::Submitted);
+  runner.Invoke([&] { passthrough_ok = runner.state->window->SetPointerPassThrough(false); });
+  REQUIRE(passthrough_ok);
   Click(body);
   Await([&] { return runner.state->clicks.load() == 2; });
 
@@ -319,8 +320,8 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
   const DWORD ui_thread = GetWindowThreadProcessId(native, nullptr);
   GUITHREADINFO capture{sizeof(GUITHREADINFO)};
   Await([&] { return GetGUIThreadInfo(ui_thread, &capture) && capture.hwndCapture == native; });
-  runner.Invoke([&] { result = runner.state->window->SetInputPassthrough(true); });
-  REQUIRE(result == WindowRequestResult::Submitted);
+  runner.Invoke([&] { passthrough_ok = runner.state->window->SetPointerPassThrough(true); });
+  REQUIRE(passthrough_ok);
   REQUIRE(GetGUIThreadInfo(ui_thread, &capture));
   REQUIRE(capture.hwndCapture == nullptr);
   REQUIRE(runner.state->cancels.load() >= 1);
@@ -334,7 +335,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
         {.title = "HuxerUI Native Pet Modal", .initial_size = {240.0F, 160.0F}},
         {.owner = runner.state->window, .modal = true}
     );
-    static_cast<void>(runner.state->window->SetInputPassthrough(false));
+    static_cast<void>(runner.state->window->SetPointerPassThrough(false));
   });
   REQUIRE_FALSE(IsWindowEnabled(native));
   runner.Invoke([&] { modal->Close(); });
@@ -366,15 +367,15 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
       throw std::runtime_error("HuxerUI floating-window position did not round trip");
     }
     static_cast<void>(runner.state->window->SetClientSize({220.0F, 180.0F}));
-    static_cast<void>(runner.state->window->SetTopmost(false));
+    static_cast<void>(runner.state->window->SetAlwaysOnTop(false));
   });
   REQUIRE(result == WindowRequestResult::Submitted);
   REQUIRE((GetWindowLongPtrW(native, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0);
   const DWORD gdi_baseline = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
   runner.Invoke([&] { runner.state->window->Close(); });
   Await([&] { return !IsWindow(native); });
-  runner.Invoke([&] { result = runner.state->window->SetInputPassthrough(true); });
-  REQUIRE(result == WindowRequestResult::Disconnected);
+  runner.Invoke([&] { passthrough_ok = runner.state->window->SetPointerPassThrough(true); });
+  REQUIRE_FALSE(passthrough_ok);
   for (int cycle = 0; cycle < 4; ++cycle) {
     runner.Invoke([&] {
       runner.state->window = runner.state->application->OpenWindow(
@@ -382,7 +383,7 @@ TEST_CASE("Win32FloatingPetPreservesDesktopAlphaFocusAndCrossProcessInput", "[.]
           {
           .title = "HuxerUI Native Pet Reopened", .initial_size = {200.0F, 200.0F},
           .initial_position = Point{100.0F, 100.0F}, .presentation = WindowPresentation::Utility,
-          .transparent_surface = true, .show_without_activation = true, .topmost = true}
+          .transparent_surface = true, .topmost = true, .activatable = false}
       );
     });
     const HWND reopened = FindWindowW(nullptr, L"HuxerUI Native Pet Reopened");

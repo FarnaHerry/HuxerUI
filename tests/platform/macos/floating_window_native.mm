@@ -244,8 +244,8 @@ bool Near(float value, float expected, float margin) {
 TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[macos-native]") {
   FloatingScenario scenario;
   const WindowNativeCapabilities expected_capabilities{
-      .transparent_surface = true, .utility_presentation = true, .passive_display = true,
-      .topmost = true, .geometry = true, .native_move = true, .input_passthrough = true,
+      .transparent_surface = true, .utility_presentation = true,
+      .geometry = true, .native_move = true,
   };
   const auto pet_options = [] {
     return WindowOptions{
@@ -254,8 +254,8 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
         .initial_position = Point{120.0F, 140.0F},
         .presentation = WindowPresentation::Utility,
         .transparent_surface = true,
-        .show_without_activation = true,
         .topmost = true,
+        .activatable = false,
     };
   };
   int phase = 0;
@@ -339,10 +339,10 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
     }
     case 3: {
       NSWindow* pet = checks.watches[0]->Window();
-      checks.Check(checks.pet->SetTopmost(false) == WindowRequestResult::Submitted, "SetTopmost(false) was refused");
-      checks.Check(pet.level == NSNormalWindowLevel, "SetTopmost(false) did not clear the floating level");
-      checks.Check(checks.pet->SetTopmost(true) == WindowRequestResult::Submitted, "SetTopmost(true) was refused");
-      checks.Check(pet.level == NSFloatingWindowLevel, "SetTopmost(true) did not restore the floating level");
+      checks.Check(checks.pet->SetAlwaysOnTop(false), "SetAlwaysOnTop(false) was refused");
+      checks.Check(pet.level == NSNormalWindowLevel, "SetAlwaysOnTop(false) did not clear the floating level");
+      checks.Check(checks.pet->SetAlwaysOnTop(true), "SetAlwaysOnTop(true) was refused");
+      checks.Check(pet.level == NSFloatingWindowLevel, "SetAlwaysOnTop(true) did not restore the floating level");
       checks.Check(checks.pet->SetPosition({180.0F, 160.0F}) == WindowRequestResult::Submitted,
                    "SetPosition was refused");
       const std::optional<Point> moved = checks.pet->Position();
@@ -384,7 +384,7 @@ TEST_CASE("MacNativeFloatingUtilityWindowsPresentAlphaGeometryAndStacking", "[ma
     }
     case 5: {
       if (!checks.watches[0]->Released()) return false;
-      checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Disconnected,
+      checks.Check(!checks.pet->SetPointerPassThrough(true),
                    "a retired handle still performed native requests");
       checks.Check(checks.pet->Capabilities() == WindowNativeCapabilities{}, "a retired handle still reported capabilities");
       checks.pet = checks.application->OpenWindow([] { return FloatingPetContent(true); }, pet_options());
@@ -427,7 +427,7 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
           .initial_position = Point{120.0F, 140.0F},
           .presentation = WindowPresentation::Utility,
           .transparent_surface = true,
-          .show_without_activation = true,
+          .activatable = false,
       }
       );
       checks.Watch("HuxerUI native pet");
@@ -446,14 +446,14 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       checks.Check(checks.pet->BeginMove() == WindowRequestResult::Rejected,
                    "BeginMove reused a released mouse-down event");
       DeliverPointer(pet, NSEventTypeLeftMouseDown, NSMakePoint(100.0, 100.0));
-      checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Submitted,
-                   "SetInputPassthrough(true) was refused");
+      checks.Check(checks.pet->SetPointerPassThrough(true),
+                   "SetPointerPassThrough(true) was refused");
       checks.Check(pet.ignoresMouseEvents, "passthrough did not exclude native pointer input");
       checks.Check(checks.cancels >= 1, "passthrough did not cancel the active pointer sequence");
       DeliverPointer(pet, NSEventTypeLeftMouseUp, NSMakePoint(100.0, 100.0));
       checks.Check(checks.clicks == 1, "a cancelled pointer sequence still produced a click");
-      checks.Check(checks.pet->SetInputPassthrough(false) == WindowRequestResult::Submitted,
-                   "SetInputPassthrough(false) was refused");
+      checks.Check(checks.pet->SetPointerPassThrough(false),
+                   "SetPointerPassThrough(false) was refused");
       checks.Check(!pet.ignoresMouseEvents, "restoring input did not re-enable native pointer input");
       ClickViewPoint(pet, NSMakePoint(100.0, 100.0));
       checks.Check(checks.clicks == 2, "the click after restoring input did not reach the application");
@@ -504,8 +504,8 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       if (checks.modal_compositions == 0) return false;
       NSWindow* pet = checks.watches[0]->Window();
       checks.Check(pet.ignoresMouseEvents, "a modal window did not block the utility window's native input");
-      checks.Check(checks.pet->SetInputPassthrough(true) == WindowRequestResult::Submitted,
-                   "SetInputPassthrough(true) under a modal was refused");
+      checks.Check(checks.pet->SetPointerPassThrough(true),
+                   "SetPointerPassThrough(true) under a modal was refused");
       checks.Check(pet.ignoresMouseEvents, "modal blocking and passthrough did not combine");
       checks.modal->Close();
       ++phase;
@@ -515,8 +515,8 @@ TEST_CASE("MacNativeFloatingWindowPassthroughAndNativeMoveKeepInputContracts", "
       if (!checks.watches[2]->Released()) return false;
       NSWindow* pet = checks.watches[0]->Window();
       checks.Check(pet.ignoresMouseEvents, "modal retirement cleared the requested passthrough");
-      checks.Check(checks.pet->SetInputPassthrough(false) == WindowRequestResult::Submitted,
-                   "SetInputPassthrough(false) after a modal was refused");
+      checks.Check(checks.pet->SetPointerPassThrough(false),
+                   "SetPointerPassThrough(false) after a modal was refused");
       checks.Check(!pet.ignoresMouseEvents, "restoring input did not clear native pointer exclusion");
       checks.pet->Close();
       ++phase;

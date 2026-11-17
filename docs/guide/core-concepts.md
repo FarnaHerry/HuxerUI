@@ -342,11 +342,11 @@ Hidden windows count, while initial windowless startup, failed creation, and ret
 
 Use `WindowChromeMode::None` to open an undecorated window. Mark an area with `WindowDragRegion{}` to make it draggable. Interactive descendants still receive pointer input. Set `WindowOptions::resizable` to false to disable user resizing in windowed mode.
 
-`WindowPresentation::Utility` selects a borderless, non-resizable helper excluded from task switching. Combine it with `transparent_surface`, `show_without_activation`, and `topmost` as needed. `UseWindow().Capabilities()` reports the host's transparency, utility presentation, passive display, stacking, geometry, native move, and input-passthrough support.
+`WindowPresentation::Utility` selects a borderless, non-resizable helper excluded from task switching. Combine it with `transparent_surface`, `activatable`, and `topmost` as needed. `UseWindow().Capabilities()` reports the attachment's transparency, utility presentation, geometry, and native-move support; `UseApplication().WindowSupport()` reports the host-wide desktop options.
 
-`WindowHandle::SetTopmost`, `SetInputPassthrough`, `SetPosition`, `SetClientSize`, and `BeginMove` return `WindowRequestResult`. `Submitted` means the host accepted the request, `Unavailable` reports an unsupported operation, `Rejected` reports native refusal, and `Disconnected` reports a retired attachment. Enabling input passthrough cancels current pointer interaction in that window; keep a control in another window to restore pointer input.
+`WindowHandle::SetPosition`, `SetClientSize`, and `BeginMove` return `WindowRequestResult`. `Submitted` means the host accepted the request, `Unavailable` reports an unsupported operation, `Rejected` reports native refusal, and `Disconnected` reports a retired attachment. `SetAlwaysOnTop` and `SetPointerPassThrough` report the host's acceptance as a bool. Enabling pointer pass-through cancels current pointer interaction in that window; keep a control in another window to restore input.
 
-The [desktop lyrics example](../../examples/desktop_lyrics/main.cpp) uses the available capabilities to configure its overlay. Linux GTK reports backend-specific support for utility presentation, transparency, stacking, placement, and input passthrough; see [Floating utility windows](../design/window-chrome.md#floating-utility-windows).
+The [desktop lyrics example](../../examples/desktop_lyrics/main.cpp) uses the available capabilities to configure its overlay. Linux GTK reports backend-specific support for utility presentation, transparency, placement, and pointer pass-through; see [Floating utility windows](../design/window-chrome.md#floating-utility-windows).
 
 ## Runtime model
 
