@@ -227,6 +227,20 @@ bool IsValidSystemBarsAppearance(const SystemBarsAppearance& appearance) noexcep
          valid_brightness(appearance.status_bar_content) && valid_brightness(appearance.navigation_bar_content);
 }
 
+void ValidateWindowSupport(const WindowOptions& options, const WindowCapabilities& support) {
+  if (options.transparent_background && !support.transparent_background) {
+    throw std::runtime_error("HuxerUI host does not support transparent window backgrounds");
+  }
+  if (options.always_on_top && !support.always_on_top) {
+    throw std::runtime_error("HuxerUI host does not support always-on-top windows");
+  }
+  if (!options.activatable && !support.non_activating) {
+    throw std::runtime_error("HuxerUI host does not support non-activating windows");
+  }
+  if (options.pointer_pass_through && !support.pointer_pass_through) {
+    throw std::runtime_error("HuxerUI host does not support window pointer pass-through");
+  }
+}
 
 WindowService::WindowService(UiWindow& ui_window)
     : ui_window_(&ui_window), application_(CurrentApplicationRuntime()) {}
@@ -359,6 +373,18 @@ void WindowService::Request(WindowCommand command) {
   if (!ui_window_) return;
   if (command == WindowCommand::Activate && !ui_window_->state_->window_->activatable) command = WindowCommand::Show;
   ui_window_->RequestWindowCommand(command);
+}
+
+bool WindowService::SetAlwaysOnTop(bool enabled) {
+  if (!ui_window_ || !IsOpen()) return false;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  return ui_window_->SetWindowAlwaysOnTop(enabled);
+}
+
+bool WindowService::SetPointerPassThrough(bool enabled) {
+  if (!ui_window_ || !IsOpen()) return false;
+  ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
+  return ui_window_->SetWindowPointerPassThrough(enabled);
 }
 
 void WindowService::ApplyRelationship(const std::shared_ptr<WindowService>& owner, bool modal) {
@@ -658,6 +684,14 @@ void WindowHandle::HideKeyboard() const {
 
 void WindowHandle::Activate() const {
   service_->Request(WindowCommand::Activate);
+}
+
+bool WindowHandle::SetAlwaysOnTop(bool enabled) const {
+  return service_->SetAlwaysOnTop(enabled);
+}
+
+bool WindowHandle::SetPointerPassThrough(bool enabled) const {
+  return service_->SetPointerPassThrough(enabled);
 }
 
 void WindowHandle::Minimize() const {

@@ -503,6 +503,14 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override {
+    return {
+        .transparent_background = true,
+        .always_on_top = true,
+        .non_activating = true,
+        .pointer_pass_through = true,
+    };
+  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
 
   void UpdateWindows();
@@ -834,9 +842,10 @@ public:
       utility_window_ = options.presentation == WindowPresentation::Utility;
       transparent_surface_ = options.transparent_surface;
       passive_display_ = options.show_without_activation;
-      activatable_ = !options.show_without_activation;
+      input_passthrough_ = options.pointer_pass_through;
       custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
       borderless_ = options.chrome_mode == WindowChromeMode::None;
+      activatable_ = options.activatable;
       custom_title_bar_height_ = options.title_bar_height;
       minimum_size_ = options.minimum_size;
       renderer_->SetTransparentSurface(transparent_surface_);
@@ -892,6 +901,12 @@ public:
         window_.backgroundColor = NSColor.clearColor;
         window_.hasShadow = NO;
       }
+      if (options.transparent_background) {
+        window_.opaque = NO;
+        window_.backgroundColor = NSColor.clearColor;
+      }
+      if (options.always_on_top) window_.level = NSFloatingWindowLevel;
+      window_.ignoresMouseEvents = options.pointer_pass_through;
       if (options.topmost) {
         window_.level = NSFloatingWindowLevel;
       }
@@ -924,7 +939,7 @@ public:
                                                object:nil];
       if (options.initial_position) ApplyWindowContentOrigin(*options.initial_position);
       else [window_ center];
-      if (!passive_display_) [window_ makeFirstResponder:view_];
+      if (!passive_display_ && activatable_) [window_ makeFirstResponder:view_];
       UiWindow::UpdateResourceConfiguration(Configuration());
       RefreshSystemTheme();
       UpdateWindowLifecycleState();
@@ -1143,6 +1158,20 @@ public:
     UpdateWindowLifecycleState();
   }
 
+  bool SetWindowAlwaysOnTop(bool enabled) override {
+    if (window_ == nil) return false;
+    window_.level = enabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    return true;
+  }
+
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    if (window_ == nil || (enabled && view_ != nil && view_->huxeruiOutgoingDrag)) return false;
+    if (window_.ignoresMouseEvents == enabled && input_passthrough_ == enabled) return true;
+    input_passthrough_ = enabled;
+    ApplyMouseEvents();
+    if (enabled) [view_ cancelPointer];
+    return true;
+  }
 
   void RequestFullscreen(bool fullscreen) override {
     if (!IsInitialized()) return;

@@ -974,6 +974,21 @@ public:
   }
 
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override {
+#if defined(HUXERUI_WINDOWS_7_COMPAT)
+    const HMODULE composition = LoadLibraryW(L"dcomp.dll");
+    const bool transparent_background = composition && GetProcAddress(composition, "DCompositionCreateDevice");
+    if (composition) FreeLibrary(composition);
+#else
+    constexpr bool transparent_background = true;
+#endif
+    return {
+        .transparent_background = transparent_background,
+        .always_on_top = true,
+        .non_activating = true,
+        .pointer_pass_through = true,
+    };
+  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
   int Run();
 
@@ -1227,7 +1242,7 @@ public:
   ~WindowsUiWindow() override { Retire(); Cleanup(); }
 
   void Initialize(Runtime& application, ViewFactory content, const WindowOptions& options) {
-    renderer_.Initialize(options.transparent_surface);
+    renderer_.Initialize(options.transparent_background);
     instance_ = GetModuleHandleW(nullptr);
     CreateApplicationWindow(application, std::move(content), options);
     const auto execution = InternalAccess::WindowExecution(*this);
@@ -1511,7 +1526,31 @@ public:
     const float scale =
         static_cast<float>(window_ != nullptr ? win32_api_.WindowDpi(window_) : win32_api_.SystemDpi()) / kDipsPerInch;
     return Point{static_cast<float>(origin.x) / scale, static_cast<float>(origin.y) / scale};
+  }
 
+  bool SetWindowAlwaysOnTop(bool enabled) override {
+    return window_ && SetWindowPos(window_, enabled ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    if (!window_ || (enabled && transport_drag_)) return false;
+    const LONG_PTR previous = GetWindowLongPtrW(window_, GWL_EXSTYLE);
+    const auto flags = static_cast<LONG_PTR>(pointer_pass_through_style);
+    const LONG_PTR style = enabled ? previous | flags : previous & ~flags;
+    if (style == previous) return true;
+    if (!SetWindowStyle(style, GWL_EXSTYLE)) return false;
+
+    // The layered input style can use full opacity with either of the renderer's swap chains.
+    constexpr UINT frame_change = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER;
+    if ((enabled && !SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA)) ||
+        !SetWindowPos(window_, nullptr, 0, 0, 0, 0, frame_change)) {
+      HUXERUI_DISCARD(SetWindowStyle(previous, GWL_EXSTYLE));
+      if (!enabled) HUXERUI_DISCARD(SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA));
+      return false;
+    }
+    if (enabled) CancelPointer();
+    return true;
   }
 
   void RequestFullscreen(bool fullscreen) override {
@@ -1561,7 +1600,8 @@ private:
     passive_display_ = options.show_without_activation;
     custom_chrome_ = !utility_window_ && options.chrome_mode == WindowChromeMode::Custom;
     borderless_ = options.chrome_mode == WindowChromeMode::None;
-    activatable_ = !options.show_without_activation;
+    transparent_background_ = options.transparent_background;
+    activatable_ = options.activatable;
     resizable_ = options.resizable;
     renderer_.SetTransparentSurface(transparent_surface_);
     custom_title_bar_height_ = options.title_bar_height;
@@ -1578,10 +1618,13 @@ private:
     DWORD style = utility_window_ ? WS_POPUP
         : borderless_ ? WS_POPUP | WS_THICKFRAME | WS_MAXIMIZEBOX : WS_OVERLAPPEDWINDOW;
     if (!resizable_ || utility_window_) style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
-    const DWORD extended_style = (utility_window_ ? WS_EX_TOOLWINDOW : 0) |
-                                 (transparent_surface_ ? WS_EX_LAYERED : 0) |
-                                 (passive_display_ ? WS_EX_NOACTIVATE : 0) |
-                                 (options.topmost ? WS_EX_TOPMOST : 0);
+    DWORD extended_style = (utility_window_ ? WS_EX_TOOLWINDOW : 0) |
+                           (transparent_surface_ ? WS_EX_LAYERED : 0) |
+                           (passive_display_ ? WS_EX_NOACTIVATE : 0);
+    if (!activatable_) extended_style |= WS_EX_NOACTIVATE;
+    if (options.topmost || options.always_on_top) extended_style |= WS_EX_TOPMOST;
+    if (transparent_background_) extended_style |= no_redirection_bitmap_style;
+    if (options.pointer_pass_through) extended_style |= pointer_pass_through_style;
     if (!utility_window_ && !custom_chrome_ && !borderless_ &&
         !win32_api_.AdjustWindowRectForDpi(&frame, style, FALSE, extended_style, static_cast<UINT>(dpi_))) {
       throw std::runtime_error("HuxerUI could not calculate the Windows window size");
@@ -1617,7 +1660,9 @@ private:
       throw std::runtime_error("HuxerUI could not create its Windows application window");
     }
     static_cast<WindowsRuntime&>(application).ApplyWindowIcons(window_);
-
+    if (options.pointer_pass_through && !SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA)) {
+      throw std::runtime_error("HuxerUI could not enable Windows window pointer pass-through");
+    }
     dpi_ = static_cast<float>(win32_api_.WindowDpi(window_));
     auto configuration = application.Resources()->Configuration();
     configuration.display_scale = DpiScale();
@@ -2470,10 +2515,10 @@ private:
       }
       // A window without a redirection bitmap can have an empty GDI paint clip even with pending damage.
       RECT update_rect{};
-      if (transparent_surface_) GetUpdateRect(window, &update_rect, FALSE);
+      if (transparent_background_) GetUpdateRect(window, &update_rect, FALSE);
       PAINTSTRUCT paint{};
       BeginPaint(window, &paint);
-      const RECT& paint_rect = transparent_surface_ ? update_rect : paint.rcPaint;
+      const RECT& paint_rect = transparent_background_ ? update_rect : paint.rcPaint;
       const auto render_result = committed_frame_ != nullptr
           ? renderer_.Render(window_, dpi_, *committed_frame_, paint_rect) : Win32RenderResult::Skipped;
       if (render_result == Win32RenderResult::Retry || render_result == Win32RenderResult::Recreate) {
@@ -2644,6 +2689,7 @@ private:
   bool transparent_surface_ = false;
   bool passive_display_ = false;
   bool borderless_ = false;
+  bool transparent_background_ = false;
   bool activatable_ = true;
   bool resizable_ = true;
   float custom_title_bar_height_ = 0.0F;

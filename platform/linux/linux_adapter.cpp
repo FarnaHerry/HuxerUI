@@ -944,10 +944,36 @@ public:
   ~LinuxRuntime() override {
     Retire();
     StopObservingLifecycle();
+    if (transparent_window_style_) {
+      gtk_style_context_remove_provider_for_display(transparent_window_display_,
+                                                     GTK_STYLE_PROVIDER(transparent_window_style_));
+      g_clear_object(&transparent_window_style_);
+      g_clear_object(&transparent_window_display_);
+    }
     dispatcher_->Shutdown();
   }
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override {
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) return {};
+    return {
+        .transparent_background = gdk_display_is_rgba(display) && gdk_display_is_composited(display),
+        .pointer_pass_through = gdk_display_supports_input_shapes(display) != FALSE,
+    };
+  }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
+
+  void ApplyTransparentWindowStyle(GtkWidget* widget) {
+    if (!transparent_window_style_) {
+      transparent_window_display_ = GDK_DISPLAY(g_object_ref(gtk_widget_get_display(widget)));
+      transparent_window_style_ = gtk_css_provider_new();
+      gtk_css_provider_load_from_string(transparent_window_style_,
+          "window.huxerui-transparent-window { background-color: transparent; background-image: none; }");
+      gtk_style_context_add_provider_for_display(transparent_window_display_,
+          GTK_STYLE_PROVIDER(transparent_window_style_), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    gtk_widget_add_css_class(widget, "huxerui-transparent-window");
+  }
 
   void ReportFailure(std::exception_ptr failure) {
     if (!failure_) failure_ = std::move(failure);
@@ -1255,6 +1281,8 @@ private:
     stopped_ = true;
   }
   std::shared_ptr<LinuxUiThreadDispatcher> dispatcher_;
+  GdkDisplay* transparent_window_display_ = nullptr;
+  GtkCssProvider* transparent_window_style_ = nullptr;
   GListModel* windows_ = nullptr;
   std::vector<GObject*> observed_windows_;
   bool stopped_ = false;
@@ -1315,6 +1343,12 @@ public:
     renderer_.Initialize();
     const Size initial_size = ResolveInitialWindowSize(options);
     CreateWindow(options, initial_size);
+    if (options.transparent_background) {
+      static_cast<LinuxRuntime&>(application).ApplyTransparentWindowStyle(GTK_WIDGET(window_));
+    }
+    if (options.pointer_pass_through && !SetWindowPointerPassThrough(true)) {
+      throw std::runtime_error("HuxerUI could not enable GTK window pointer pass-through");
+    }
     RefreshTextDpi();
     auto configuration = runtime.Resources()->Configuration();
     configuration.display_scale = static_cast<float>(gtk_widget_get_scale_factor(drawing_area_));
@@ -1707,6 +1741,21 @@ public:
     }
   }
 
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    if (!window_ || (enabled && platform_drag_) ||
+        !gdk_display_supports_input_shapes(gtk_widget_get_display(GTK_WIDGET(window_)))) return false;
+    if (pointer_pass_through_ == enabled) return true;
+    // Realize the surface before the first show so initial pass-through is in effect at mapping.
+    gtk_widget_realize(GTK_WIDGET(window_));
+    GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
+    if (!surface) return false;
+    pointer_pass_through_ = enabled;
+    UpdatePointerInputRegion(surface);
+    if (enabled) CancelPointer();
+    else gtk_widget_queue_allocate(GTK_WIDGET(window_));
+    return true;
+  }
+
   bool DispatchWindowRequest(WindowCommand command) noexcept {
     try {
       return IsInitialized() && UiWindow::HandleWindowRequest(command);
@@ -2040,6 +2089,12 @@ private:
     });
   }
 
+  void UpdatePointerInputRegion(GdkSurface* surface) const {
+    cairo_region_t* region = pointer_pass_through_ ? cairo_region_create() : nullptr;
+    gdk_surface_set_input_region(surface, region);
+    if (region) cairo_region_destroy(region);
+  }
+
   void AttachToplevelState() {
     if (window_ == nullptr) {
       return;
@@ -2358,6 +2413,7 @@ private:
     self.AttachToplevelState();
     self.ApplyPendingInitialPosition();
     self.ApplyFloatingWindowMapState();
+    if (self.pointer_pass_through_ && self.toplevel_) self.UpdatePointerInputRegion(GDK_SURFACE(self.toplevel_));
 
     self.UpdateLifecycleState();
   }
@@ -2799,6 +2855,7 @@ private:
   std::optional<Size> minimum_size_;
   guint32 pointer_press_time_ = 0;
   bool borderless_ = false;
+  bool pointer_pass_through_ = false;
 
   float custom_title_bar_height_ = 0.0F;
   PointerButton pressed_buttons_ = PointerButton::None;

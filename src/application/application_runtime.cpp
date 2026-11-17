@@ -587,6 +587,10 @@ bool Runtime::SupportsMultipleWindows() const noexcept {
   return false;
 }
 
+WindowCapabilities Runtime::QueryWindowSupport() const noexcept {
+  return {};
+}
+
 std::unique_ptr<UiWindow> Runtime::CreateUiWindow(ViewFactory, const WindowOptions&) {
   throw std::runtime_error("HuxerUI host does not support creating top-level windows");
 }
@@ -616,6 +620,7 @@ WindowHandle Runtime::OpenWindow(
   if (!SupportsMultipleWindows()) {
     throw std::runtime_error("HuxerUI host does not support creating top-level windows");
   }
+  ValidateWindowSupport(options, QueryWindowSupport());
   ExecutionGuard application_guard(state_->execution);
   std::unique_ptr<UiWindow> window;
   ++state_->window_installations;
@@ -639,8 +644,9 @@ WindowHandle Runtime::OpenWindow(
     ApplyWindowRelationship(*created->state_->window_service_, owner_service.get(), relationship.modal);
     RebuildWindowBlocking({});
     if (created->IsInitialized()) {
-      created->RequestWindowCommand(options.show_without_activation ? WindowCommand::Show
-                                                                    : WindowCommand::Activate);
+      created->RequestWindowCommand((options.show_without_activation || !options.activatable)
+                                        ? WindowCommand::Show
+                                        : WindowCommand::Activate);
     }
   } catch (...) {
     const auto found = std::find_if(owned_windows_.begin(), owned_windows_.end(),

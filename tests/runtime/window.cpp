@@ -1218,7 +1218,18 @@ public:
     TestPlatform::RequestWindowCommand(command);
     if (command == WindowCommand::Close) huxerui::UiWindow::CloseWindow();
   }
+  bool SetWindowAlwaysOnTop(bool enabled) override {
+    always_on_top_requests.push_back(enabled);
+    return true;
+  }
+  bool SetWindowPointerPassThrough(bool enabled) override {
+    pass_through_requests.push_back(enabled);
+    return true;
+  }
   void Frame() { huxerui::UiWindow::BuildFrame(); }
+
+  std::vector<bool> always_on_top_requests;
+  std::vector<bool> pass_through_requests;
 
 private:
   int& destroyed_;
@@ -1229,6 +1240,7 @@ public:
   using TestPlatform::TestPlatform;
   ~OwnedWindowPlatform() override { huxerui::Runtime::Retire(); }
   bool SupportsMultipleWindows() const noexcept override { return true; }
+  WindowCapabilities QueryWindowSupport() const noexcept override { return window_support; }
   std::unique_ptr<huxerui::UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override {
     ++creations;
     if (before_create) before_create();
@@ -1241,6 +1253,7 @@ public:
   int destroyed = 0;
   std::function<void()> before_create;
   std::vector<OwnedTestWindow*> windows;
+  WindowCapabilities window_support;
 };
 
 View EmptyOwnedWindow() { return {}; }
@@ -1315,6 +1328,7 @@ TEST_CASE("Owned windows have independent content and local State while sharing 
   REQUIRE(platform.destroyed == 2);
   REQUIRE(platform.application_quit_requests == 1);
   REQUIRE_FALSE(app.SupportsMultipleWindows());
+  REQUIRE(app.WindowSupport() == WindowCapabilities{});
   REQUIRE_THROWS_AS(app.OpenWindow(EmptyOwnedWindow), std::logic_error);
   REQUIRE_NOTHROW(first.Close());
 }
@@ -1399,6 +1413,88 @@ TEST_CASE("Owned window closure is observable and waits for the outer UI callbac
   platform.RunPlatformModuleTasks();
   REQUIRE_FALSE(reopened.IsOpen());
   REQUIRE(platform.application_quit_requests == 1);
+}
+
+TEST_CASE("A host window session survives replacing its UI attachment") {
+  OwnedWindowPlatform platform;
+  Application application(EmptyOwnedWindow, {.show_debug_overlay = false});
+  RuntimeLifetime runtime(application, platform);
+  std::vector<WindowCommand> commands;
+  const auto service = std::make_shared<detail::WindowService>([&](WindowCommand command) {
+    commands.push_back(command);
+  });
+  const auto handle = service->Handle();
+  REQUIRE_FALSE(handle.IsOpen());
+
+  auto attachment = std::make_unique<OwnedTestWindow>(platform.destroyed);
+  attachment->Initialize(platform, EmptyOwnedWindow, {}, service);
+  attachment->UpdateWindowLifecycleState(WindowLifecycleState::Active);
+  REQUIRE(handle.IsOpen());
+  REQUIRE(handle.LifecycleState() == WindowLifecycleState::Active);
+  attachment.reset();
+
+  REQUIRE(handle.IsOpen());
+  REQUIRE(handle.LifecycleState() == WindowLifecycleState::Background);
+  REQUIRE_FALSE(handle.SetAlwaysOnTop(true));
+  handle.Activate();
+  REQUIRE(commands == std::vector{WindowCommand::Activate});
+
+  attachment = std::make_unique<OwnedTestWindow>(platform.destroyed);
+  attachment->Initialize(platform, EmptyOwnedWindow, {}, service);
+  REQUIRE(service->Handle() == handle);
+  REQUIRE(handle.IsOpen());
+  handle.Close();
+  REQUIRE(commands == std::vector{WindowCommand::Activate, WindowCommand::Close});
+  REQUIRE(handle.IsOpen());
+  service->EndSession();
+  attachment.reset();
+  REQUIRE_FALSE(handle.IsOpen());
+  handle.Close();
+  REQUIRE(commands.size() == 2);
+}
+
+TEST_CASE("Optional desktop window behavior uses host capabilities and the addressed window") {
+  OwnedWindowPlatform platform;
+  Application application(EmptyOwnedWindow, {.show_debug_overlay = false});
+  RuntimeLifetime runtime(application, platform);
+  const auto app = UseApplication();
+  REQUIRE(app.WindowSupport() == WindowCapabilities{});
+  REQUIRE_THROWS_WITH(app.OpenWindow(EmptyOwnedWindow, {.transparent_background = true}),
+                      "HuxerUI host does not support transparent window backgrounds");
+  REQUIRE_THROWS_WITH(app.OpenWindow(EmptyOwnedWindow, {.activatable = false}),
+                      "HuxerUI host does not support non-activating windows");
+  REQUIRE(platform.creations == 0);
+
+  platform.window_support = {
+      .transparent_background = true,
+      .always_on_top = true,
+      .non_activating = true,
+      .pointer_pass_through = true,
+  };
+  REQUIRE(app.WindowSupport() == platform.window_support);
+  const auto ordinary = app.OpenWindow(EmptyOwnedWindow);
+  const auto overlay = app.OpenWindow(EmptyOwnedWindow, {
+      .chrome_mode = WindowChromeMode::None,
+      .transparent_background = true,
+      .always_on_top = true,
+      .activatable = false,
+      .pointer_pass_through = true,
+      .resizable = false,
+  });
+  overlay.Activate();
+  REQUIRE(platform.windows[0]->window_commands == std::vector<WindowCommand>{WindowCommand::Activate});
+  REQUIRE(platform.windows[1]->window_commands == std::vector<WindowCommand>{WindowCommand::Show, WindowCommand::Show});
+  REQUIRE(overlay.SetAlwaysOnTop(false));
+  REQUIRE(overlay.SetPointerPassThrough(false));
+  REQUIRE(platform.windows[0]->always_on_top_requests.empty());
+  REQUIRE(platform.windows[0]->pass_through_requests.empty());
+  REQUIRE(platform.windows[1]->always_on_top_requests == std::vector<bool>{false});
+  REQUIRE(platform.windows[1]->pass_through_requests == std::vector<bool>{false});
+
+  overlay.Close();
+  REQUIRE_FALSE(overlay.SetAlwaysOnTop(true));
+  REQUIRE_FALSE(overlay.SetPointerPassThrough(true));
+  REQUIRE(ordinary.IsOpen());
 }
 
 TEST_CASE("Rejected maintenance wakes do not escape UI callback cleanup") {
