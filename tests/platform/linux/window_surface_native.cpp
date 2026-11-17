@@ -72,14 +72,16 @@ struct SurfaceScenario {
       }
       Check(rejected, "nonfinite aperture dimensions were accepted");
     } else if (stage == 1) {
-      Check(gtk_widget_has_css_class(GTK_WIDGET(native), "huxerui-transparent"), "window background stayed opaque");
+      Check(gtk_widget_has_css_class(GTK_WIDGET(native), "huxerui-transparent-window"),
+            "window background stayed opaque");
       Check((Pixel(canvas, 30, 30) >> 24U) == 0, "aperture did not omit the selected canvas pixels");
       Check((Pixel(canvas, 5, 5) >> 24U) == 255, "aperture removed pixels outside its rectangle");
       Check(Pixel(canvas, 85, 25) == 0xFF01A0FDU, "locator did not use the documented opaque color");
       Check(linux::SetWindowAperture(*window, {}), "aperture restoration was rejected");
       Check(linux::SetWindowMarker(*window, {}), "locator removal was rejected");
     } else {
-      Check(!gtk_widget_has_css_class(GTK_WIDGET(native), "huxerui-transparent"), "original background was not restored");
+      Check(!gtk_widget_has_css_class(GTK_WIDGET(native), "huxerui-transparent-window"),
+            "original background was not restored");
       Check((Pixel(canvas, 30, 30) >> 24U) == 255, "canvas did not repaint after aperture removal");
       Check(Pixel(canvas, 85, 25) == 0xFFCC3311U, "locator pixels survived removal");
       return true;

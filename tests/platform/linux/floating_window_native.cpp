@@ -349,13 +349,7 @@ void RunFloatingScenario(FloatingScenario& scenario) {
 }
 
 bool HasTransparentCssClass(GtkWindow* window) {
-  const char* const* classes = gtk_widget_get_css_classes(GTK_WIDGET(window));
-  for (const char* const* name = classes; name != nullptr && *name != nullptr; ++name) {
-    if (std::string_view(*name) == "huxerui-transparent") {
-      return true;
-    }
-  }
-  return false;
+  return gtk_widget_has_css_class(GTK_WIDGET(window), "huxerui-transparent-window");
 }
 
 } // namespace

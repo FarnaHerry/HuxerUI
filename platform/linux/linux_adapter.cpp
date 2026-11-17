@@ -142,31 +142,6 @@ struct X11SurfaceRequest {
 };
 #endif
 
-/// The theme paints the GtkWindow background node opaquely; transparent utility surfaces override
-/// that node only for windows carrying this class, so ordinary windows keep their theme background.
-constexpr const char* kTransparentWindowCss = "window.huxerui-transparent { background: transparent; }";
-
-/// Displays whose style cascade already carries the transparent-background rule. One
-/// display-lifetime registration avoids re-invalidating every window's style each time a
-/// transparent window retires, mirrors how theme providers live with their display, and lets
-/// windows opt in and out through the CSS class alone.
-std::vector<GdkDisplay*> transparent_background_displays;
-
-void EnsureTransparentBackgroundProvider(GdkDisplay* display) {
-  if (std::find(transparent_background_displays.begin(), transparent_background_displays.end(), display) !=
-      transparent_background_displays.end()) {
-    return;
-  }
-  GtkCssProvider* provider = gtk_css_provider_new();
-  gtk_css_provider_load_from_string(provider, kTransparentWindowCss);
-  gtk_style_context_add_provider_for_display(
-      display, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
-  );
-  // The display's style cascade owns the registration from here on, matching theme providers.
-  g_object_unref(provider);
-  transparent_background_displays.push_back(display);
-}
-
 // D-Bus completions retain only this cancellable subscription, never a native window.
 class LinuxSystemTheme final : public std::enable_shared_from_this<LinuxSystemTheme> {
 public:
@@ -960,7 +935,11 @@ public:
   }
   std::unique_ptr<UiWindow> CreateUiWindow(ViewFactory content, const WindowOptions& options) override;
 
-  void ApplyTransparentWindowStyle(GtkWidget* widget) {
+  void SetTransparentWindowStyle(GtkWidget* widget, bool transparent) {
+    if (!transparent) {
+      gtk_widget_remove_css_class(widget, "huxerui-transparent-window");
+      return;
+    }
     if (!transparent_window_style_) {
       transparent_window_display_ = GDK_DISPLAY(g_object_ref(gtk_widget_get_display(widget)));
       transparent_window_style_ = gtk_css_provider_new();
@@ -1314,15 +1293,14 @@ public:
     if (current == region) return true;
     current = region;
     if (!marker) {
+      runtime_->SetTransparentWindowStyle(GTK_WIDGET(window_),
+                                          transparent_background_ || transparent_surface_ || aperture_region_.has_value());
       if (aperture_region_ || transparent_surface_) {
-        ApplyTransparentBackground();
         if (GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_))) {
           G_GNUC_BEGIN_IGNORE_DEPRECATIONS
           gdk_surface_set_opaque_region(surface, nullptr);
           G_GNUC_END_IGNORE_DEPRECATIONS
         }
-      } else {
-        gtk_widget_remove_css_class(GTK_WIDGET(window_), "huxerui-transparent");
       }
     }
     gtk_widget_queue_draw(drawing_area_);
@@ -1340,8 +1318,8 @@ public:
     renderer_.Initialize();
     const Size initial_size = ResolveInitialWindowSize(options);
     CreateWindow(options, initial_size);
-    if (options.transparent_background) {
-      static_cast<LinuxRuntime&>(application).ApplyTransparentWindowStyle(GTK_WIDGET(window_));
+    if (transparent_background_ || transparent_surface_) {
+      runtime.SetTransparentWindowStyle(GTK_WIDGET(window_), true);
     }
     if (options.pointer_pass_through && !SetWindowPointerPassThrough(true)) {
       throw std::runtime_error("HuxerUI could not enable GTK window pointer pass-through");
@@ -1389,7 +1367,10 @@ public:
   }
 
   bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
-    if (!window_ || !pointer_device_ || platform_drag_ || pressed_buttons_ != PointerButton::Primary) return false;
+    if (!window_ || !pointer_device_ || gdk_device_get_source(pointer_device_) != GDK_SOURCE_MOUSE ||
+        platform_drag_ || pressed_buttons_ != PointerButton::Primary) {
+      return false;
+    }
     GdkSurface* surface = gtk_native_get_surface(GTK_NATIVE(window_));
     if (!surface) return false;
     GBytes* bytes = g_bytes_new_static("", 0);
@@ -1704,6 +1685,7 @@ private:
   void CreateWindow(const WindowOptions& options, Size initial_size) {
     utility_window_ = options.presentation == WindowPresentation::Utility;
     transparent_surface_ = options.transparent_surface;
+    transparent_background_ = options.transparent_background;
     activatable_ = options.activatable;
     topmost_ = options.topmost;
     // Utility presentation is borderless by definition, so custom chrome has nothing to replace.
@@ -1720,9 +1702,6 @@ private:
     );
     gtk_window_set_decorated(window_, !custom_chrome_ && !utility_window_ && !borderless_);
     gtk_window_set_resizable(window_, options.resizable && !utility_window_);
-    if (transparent_surface_) {
-      ApplyTransparentBackground();
-    }
     if (options.initial_position.has_value()) {
       ApplyInitialPosition(*options.initial_position);
     }
@@ -1819,12 +1798,6 @@ private:
     double y = 0.0;
     gtk_native_get_surface_transform(GTK_NATIVE(window_), &x, &y);
     return Point{origin.x - static_cast<float>(x), origin.y - static_cast<float>(y)};
-  }
-
-  /// Points the theme's window background at per-pixel alpha for this window only.
-  void ApplyTransparentBackground() {
-    EnsureTransparentBackgroundProvider(gtk_widget_get_display(GTK_WIDGET(window_)));
-    gtk_widget_add_css_class(GTK_WIDGET(window_), "huxerui-transparent");
   }
 
   /// Applies creation-time X11 protocol state that must exist before the first map: the utility
@@ -2425,13 +2398,9 @@ private:
       return;
     }
     GdkDevice* device = event ? gdk_event_get_device(event) : nullptr;
-    g_clear_object(&pointer_device_);
-    if (device && gdk_device_get_source(device) == GDK_SOURCE_MOUSE) pointer_device_ = g_object_ref(device);
+    g_set_object(&pointer_device_, device);
+    pointer_press_time_ = event ? gdk_event_get_time(event) : GDK_CURRENT_TIME;
     pressed_buttons_ |= button;
-    if (event) {
-      g_set_object(&pointer_device_, gdk_event_get_device(event));
-      pointer_press_time_ = gdk_event_get_time(event);
-    }
     SendPointer(PointerEventType::Down, position, button, pressed_buttons_,
         event ? TranslateModifiers(gdk_event_get_modifier_state(event)) : KeyModifiers{});
   }
@@ -2780,6 +2749,7 @@ private:
   bool custom_chrome_ = false;
   bool utility_window_ = false;
   bool transparent_surface_ = false;
+  bool transparent_background_ = false;
   std::optional<Rect> aperture_region_;
   std::optional<Rect> locator_region_;
   bool activatable_ = true;
@@ -2791,6 +2761,7 @@ private:
 
   float custom_title_bar_height_ = 0.0F;
   PointerButton pressed_buttons_ = PointerButton::None;
+  GdkDevice* pointer_device_ = nullptr;
   GdkDrag* platform_drag_ = nullptr;
   bool suppress_pointer_release_ = false;
   Point last_pointer_position_;
