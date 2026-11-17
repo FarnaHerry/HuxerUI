@@ -39,7 +39,7 @@ Use a native Linux session with distribution-owned GTK dependencies for CMake; W
 Run each hidden native tag in a separate process, particularly `[linux-native]`, whose application loop uses a worker thread.
 Retirement and independent-window lifecycle checks run on both X11 and Wayland; floating-window geometry and physical pointer input require the backend capabilities described in [Platform Interfaces](../guide/platforms.md).
 Use an isolated X11 display for synthetic pointer sequences, since desktop focus, stacking, and window-manager animations can prevent deterministic delivery.
-CMake links Xext when XShape is available; the mcpp payload configuration declares XShape support and probes `xext` explicitly so its consumers receive the same link dependency.
+CMake and mcpp link X11 for the fork's placement operations. Pointer pass-through uses the GDK surface input region.
 
 The complete `[linux-native-floating]` X11 scenario remains unqualified: the current desktop and pre-integration binary both time out at stage 6, and an isolated Xwayland run times out at stage 3.
 Independent X11 lifecycle, geometry, retirement, and upstream application-scoped drag checks pass; those results do not establish the complete floating-window input sequence.

@@ -104,7 +104,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192) is open from `fix/staged-runtime-dependency-conflicts` |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
-| Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only capability support: upstream has no `HUXERUI_LINUX_X11` consumer, so the build switch is not a standalone fix and belongs to the Linux placement and input-passthrough capability. |
+| Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only Linux placement support. Pointer pass-through uses upstream GDK input regions. |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
 
 Linux resize hit testing deliberately leaves the client interior outside its 6-DIP band interactive, including near corners. Hover and press use the same geometry.
@@ -137,7 +137,7 @@ GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after 
 Upstream has no `DiscardHost`/`CanDiscardHost`; `Runtime::MaintainWindows` retires a Runtime-owned window in a posted task before destroying it, and `LinuxUiWindow::Cleanup` resets text input and clears the canvas data pointer before `gtk_window_destroy`.
 Most of the fork change depends on fork-only `ReleaseRetiredWindow`, `RetireOwned`, and `WindowHandle::Retire` semantics.
 Reconsider only with a concrete upstream repro; the file-picker `GWeakRef` is the only part that may stand alone.
-Optional X11/Xext linkage (`ad73d2b7`) was also removed: upstream has no `HUXERUI_LINUX_X11` consumer, so the switch belongs to the fork-only Linux placement and input-passthrough capability rather than a standalone fix.
+Optional X11 linkage (`ad73d2b7`) belongs to the fork's Linux placement capability. The GTK adapter now uses upstream input regions for pointer pass-through and carries no direct Xext dependency.
 
 Windows application icon resources (`bcead3fe`) and RefreshBox `move_content` (`16323d5a`) were reclassified as capability work: both add API that upstream does not have, so their behavior cannot be a standalone upstream bug fix.
 `WindowTitleBar` brace initialization is style-only on current toolchains; do not submit it without an older-Clang repro.

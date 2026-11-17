@@ -105,7 +105,6 @@ unsigned long X11WindowId(GtkWindow* window) noexcept {
 }
 
 #if defined(GDK_WINDOWING_X11) && defined(HUXERUI_LINUX_X11)
-constexpr int kNetWmStateRemove = 0;
 constexpr int kNetWmStateAdd = 1;
 
 /// EWMH state transitions are requests to the window manager: the client message is sent after the
