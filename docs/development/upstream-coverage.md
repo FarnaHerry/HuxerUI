@@ -100,7 +100,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Backdrop and liquid-glass materials | `96a0b988` and follow-up fixes | Fork-only capability; do not prepare an upstream PR. The upstream author will own transparency and Gaussian blur centrally later (2026-11-13). |
 | Desktop touchpad paging | `00caf9a0` | Fork-only capability |
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
-| Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Fork-only optimization; upstream `ad28dd34` caches paragraph metrics and drawing layouts per platform, but each layout pass still re-enters the platform measurer, while the mounted-node memo skips that call when text, font, options, and width are unchanged |
+| Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Removed in favor of upstream's platform paragraph cache (`ad28dd34`). Do not reintroduce a second cache layer at the mounted node. |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Fork-only fix |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
