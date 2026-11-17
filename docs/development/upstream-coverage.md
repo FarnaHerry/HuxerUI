@@ -93,7 +93,7 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | RefreshBox `move_content` and overscroll cancellation | `16323d5a`, `0b6400c0` | Fork-only |
 | GTK retired-window reclaim and callback detachment | `99fd7ba2` | Fork-only architecture: upstream lacks `DiscardHost`/`CanDiscardHost` and retires a Runtime-owned window from `MaintainWindows` before destroying it; `LinuxUiWindow::Cleanup` already resets text input and clears the canvas data pointer. Most of `99fd7ba2` depends on fork-only `ReleaseRetiredWindow`/`RetireOwned`. Recheck only with a concrete upstream repro; the file-picker `GWeakRef` is the only candidate that may stand alone. |
 | macOS native-input task and frame-commit deferral | `785eb892`, `7f0ffc9f` | Fork-only |
-| macOS native quit without `NSTerminateLater` | `ca6d413d` | Fork-only |
+| macOS native quit reply | `ca6d413d` | Covered by upstream `d9c430fc`; keep the fork's direct-path loop wake only |
 | Windows application icon resource and handle lifetime | `bcead3fe`, `446a5a90` | Fork-only |
 | Window ownership and modality relationships | `6b34925e` and follow-up fixes | Fork-only capability |
 | Windowless startup (`AppOptions::create_initial_window`) | `a954965f`, `83617e66` | Fork-only capability |
@@ -126,7 +126,7 @@ These are the bug fixes still worth a focused upstream PR; capability work stays
 
 | Value | Item | Fork evidence | Upstream gap |
 |---|---|---|---|
-| High | macOS quit enters a modal loop | `ca6d413d` | `appkit_adapter.mm` returns `NSTerminateLater` while shutdown is queued; the fork returns `NSTerminateCancel` after `RequestShutdown()`. Upstream PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190) is open from `fix/macos-quit-modal-loop` (head `ed7b0094` on `92ccb9cb`, mergeable and awaiting review). |
+| High | macOS quit enters a modal loop | `ca6d413d` | Covered by upstream `d9c430fc` (PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190)): a direct `terminate:` returns `NSTerminateCancel` after `RequestShutdown()`, and a system Quit Apple Event is answered after shared teardown. Drop the standalone proposal; the fork keeps its `stop:`/event wake only for the direct path. |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only |
 | Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia` |
