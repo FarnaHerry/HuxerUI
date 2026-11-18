@@ -1083,7 +1083,6 @@ public:
       runtime_->ReportFailure(std::current_exception());
       return true;
     }
-    }
   }
 
   bool BeginApplicationDrag(std::shared_ptr<WindowDrag> drag) override {
