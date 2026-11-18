@@ -174,6 +174,10 @@ The remote `fix/windows-installer-runs` tip `9def0481` carried `4f53e7f4`, `6d85
 `feat/scroll-fill-viewport` keeps its worktree at `/home/farna/dev/cpp/mcpp/HuxerUI-upstream-fill-viewport` because it has uncommitted work.
 `farna/upstream-2026-10`, `farna/worktree-snapshot-20261018`, `probe/ui-perf`, `origin/perf/text-measurement-memo`, and `origin/wip/window-caption-controls` remain available.
 
+On 2026-11-18, after upstream `b235b074` and merge `3fa29a3c` covered the numeric DWM corner attribute, `fix/windows-dwm-corner-sdk-portability` (`1d95ffc8`) and its worktree `HuxerUI-upstream-dwm-corner` were removed, and the remote branch was deleted.
+PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) was closed unmerged.
+`fix/ios-app-link-response` (`11b7fed6`) keeps its worktree because the response-file implementation stays fork-only until macOS and Xcode are available.
+
 ## llm-switch patch intake
 
 On 2026-10-07, llm-switch's CI-applied checkout patches were folded into the fork:
