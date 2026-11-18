@@ -7,10 +7,11 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `c67c42c2` (`fix(windows): expose DirectComposition declarations for Win7`).
-- Fork merge commits: `d5c66a42` (through `bca06f08`) and `1aba61cb` (through `c67c42c2`).
+- Last merged upstream commit: `bf186b86` (`fix(packaging): avoid false runtime dependency conflicts`).
+- Fork merge commits: `d5c66a42` (through `bca06f08`), `1aba61cb` (through `c67c42c2`), and `6f730fd6` (through `bf186b86`).
 - Audited upstream HEAD: `c67c42c2`.
 - Last audit date: 2026-11-15.
+- Audited later: `fcb7b302` (iOS SDK link validation) and `bf186b86` (runtime dependency scan) were merged after the audit; only the staged-versus-host runtime dependency row below changed classification.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -61,6 +62,7 @@ When a fork-only capability creates the state, the fix belongs with that capabil
 | Pager settles on the controlled page when drag is disabled mid-gesture | `dbc28f3c` | Upstream `acfb154b` (PR [#182](https://github.com/HuxerUI/HuxerUI/pull/182)) targets `behavior_.selected_index` in the disabled-drag branch and adds `Pager returns to the controlled page when dragging is disabled mid-gesture` covering both `Dragging` and `AwaitingCommit` | Integrated through `d5c66a42`; the duplicate fork change is identical to upstream. Keep the fork-only touchpad rebase and Cancel fixes. |
 | Application-scoped cross-window drag | `3ef0a74b` | Upstream `372d8afe` implements `BeginApplicationDrag`, the retained `WindowDrag` transport, GTK/AppKit/Win32 delivery, receiver hit testing, and `released_outside_application` | Adopted upstream and removed `window_drag_internal.h` and the fork's parallel transport during the `c67c42c2` merge. Do not resubmit. |
 | Windows 7 DirectComposition declarations | `14c5b996` | Upstream `c67c42c2` declares the DirectComposition types needed by the Windows 7 compatibility renderer | Drop the fork patch; the shared declaration now matches upstream. |
+| Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Upstream `bf186b86` (PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192)) takes the staging root as a positional scan argument, compares only bundled copies for the hash check, and appends every candidate to the resolved list so final verification still rejects external copies | Drop the fork duplicate. Merge `6f730fd6` adopted the upstream implementation, so `_huxerui_runtime_scan` no longer parses `STAGING_ROOT` and no longer carries a separate staged/external split. |
 
 Windows owns taskbar visibility for fullscreen windows.
 The shell hides the taskbar when a window enters fullscreen while it is already the foreground window, and keeps it hidden across later focus changes; a window that enters fullscreen while backgrounded leaves the taskbar visible and later activation does not re-evaluate.
@@ -102,7 +104,6 @@ The list is a re-audit shortcut, not a roadmap or a promise to upstream every it
 | Immutable shared HTTP request body | `329d75e2` | Fork-only capability |
 | Unchanged-text measurement memo | `794c038`, `TextMeasurementMemo` | Removed in favor of upstream's platform paragraph cache (`ad28dd34`). Do not reintroduce a second cache layer at the mounted node. |
 | Pager release-distance and velocity thresholds | `329d75e2` | Fork-only interaction choice; the upstream author confirmed that configurable tuning will be opened later (2026-11-11). Do not submit a separate PR. |
-| Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192) is open from `fix/staged-runtime-dependency-conflicts` |
 | Host-tool static runtime option | `32666c44` | Fork-only build portability |
 | Optional X11 linkage across CMake and mcpp | `ad73d2b7` | Fork-only Linux placement support. Pointer pass-through uses upstream GDK input regions. |
 | `WindowTitleBar` Objective-C++ brace initialization | `3e16bf4c` | Fork-only compiler compatibility |
@@ -130,7 +131,6 @@ These are the bug fixes still worth a focused upstream PR; capability work stays
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only |
 | Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia` |
-| Medium | Runtime dependency conflict classification | `cdffec57`, `9e67114e`, `03b438c6` | No explicit `STAGING_ROOT` or `REAL_PATH`-normalized staged-versus-host comparison; packaging aborts on mixed resolutions. PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192) is open from `fix/staged-runtime-dependency-conflicts` |
 | Low | Windows DWM corner attribute SDK portability | `e8be9126` | `win32_adapter.cpp` uses `DWMWCP_ROUND` and `DWMWA_WINDOW_CORNER_PREFERENCE`; pre-22000 Windows SDKs do not declare them, so older toolchains need numeric attribute values |
 
 GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after re-auditing `c67c42c2`.
@@ -143,6 +143,8 @@ Windows application icon resources (`bcead3fe`) and RefreshBox `move_content` (`
 `WindowTitleBar` brace initialization is style-only on current toolchains; do not submit it without an older-Clang repro.
 
 `TextField::TextStyles` (PR #153) was closed without an equivalent upstream implementation and is now removed from the fork rather than carried as a candidate.
+
+Runtime dependency conflict classification (PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192)) landed as upstream `bf186b86`; merge `6f730fd6` adopted it and removed the fork duplicate, so it is no longer a candidate.
 
 ## Fork-only reachability
 
