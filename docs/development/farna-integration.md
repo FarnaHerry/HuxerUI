@@ -176,6 +176,12 @@ The remote `fix/windows-installer-runs` tip `9def0481` carried `4f53e7f4`, `6d85
 
 On 2026-11-18, after upstream `b235b074` and merge `3fa29a3c` covered the numeric DWM corner attribute, `fix/windows-dwm-corner-sdk-portability` (`1d95ffc8`) and its worktree `HuxerUI-upstream-dwm-corner` were removed, and the remote branch was deleted.
 PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) was closed unmerged.
+The same day, the remaining superseded preparation branches and their worktrees were removed with their remote branches:
+
+- `fix/macos-quit-modal-loop` (`ed7b0094`, worktree `HuxerUI-upstream-macos-quit`); upstream `d9c430fc` owns the quit behavior. Its `tests/platform/macos/quit_native.mm` was not carried into `farna/main` and is not recoverable after this cleanup.
+- `fix/pager-disable-drag` (`f63c1479`, worktree `HuxerUI-upstream-pager`); upstream `acfb154b` is the identical change integrated through `d5c66a42`.
+- `fix/staged-runtime-dependency-conflicts` (`ab461a3d`, worktree `HuxerUI-upstream-runtime-deps`); upstream `bf186b86` rewrote the fix and merge `6f730fd6` adopted it.
+
 `fix/ios-app-link-response` (`11b7fed6`) keeps its worktree because the response-file implementation stays fork-only until macOS and Xcode are available.
 
 ## llm-switch patch intake
