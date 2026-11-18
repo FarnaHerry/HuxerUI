@@ -15,6 +15,7 @@ target_sources(huxerui_linux_tests PRIVATE
         http.cpp
         multi_window_native.cpp
         platform_module.cpp
+        platform_view.cpp
         renderer.cpp
         resident_effects.cpp
         text_input.cpp

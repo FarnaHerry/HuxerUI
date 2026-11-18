@@ -2802,4 +2802,10 @@ HWND NativeWindow(UiWindow& window) {
   return native ? native->BorrowNativeWindow() : nullptr;
 }
 
+HWND GetPlatformWindow(const WindowHandle& window) {
+  auto* attachment =
+      dynamic_cast<huxerui::detail::WindowsUiWindow*>(huxerui::detail::WindowService::AttachedWindow(window));
+  return attachment ? attachment->Window() : nullptr;
+}
+
 } // namespace huxerui::windows

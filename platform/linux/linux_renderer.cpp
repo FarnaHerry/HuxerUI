@@ -35,6 +35,7 @@
 #include "graphics/geometry_internal.h"
 #include "linux_external_texture_internal.h"
 #include "linux_gl_effects_internal.h"
+#include "linux_platform_view.h"
 #include "graphics/path_internal.h"
 #include "graphics/paint_internal.h"
 #include "resources/resource_internal.h"
@@ -2604,9 +2605,9 @@ void SnapshotBackdropScene(LinuxRenderer::Impl& state, GtkSnapshot* snapshot, co
 
 class SnapshotScenePainter final {
 public:
-  SnapshotScenePainter(LinuxRenderer::Impl& impl, GtkSnapshot* snapshot,
+  SnapshotScenePainter(LinuxRenderer::Impl& impl, GtkSnapshot* snapshot, const LinuxPlatformViews* platform_views,
                        std::optional<std::pair<std::size_t, std::size_t>> command_range = std::nullopt)
-      : impl_(impl), snapshot_(snapshot), command_range_(command_range) {}
+      : impl_(impl), snapshot_(snapshot), platform_views_(platform_views), command_range_(command_range) {}
 
   void Draw(const RenderScene& scene) {
     if (scene.root != nullptr) {
@@ -2755,8 +2756,15 @@ private:
     gtk_snapshot_restore(snapshot_);
   }
 
-  void DrawCommand(CairoBatch& batch, const PaintCommand&, const PlacePlatformViewCommand&) {
+  void DrawCommand(CairoBatch& batch, const PaintCommand&, const PlacePlatformViewCommand& command) {
     Flush(batch);
+    if (command_range_.has_value()) {
+      return;
+    }
+    if (!platform_views_) {
+      throw std::logic_error("HuxerUI GTK PlatformView composition requires its window host");
+    }
+    platform_views_->SnapshotView(snapshot_, command);
   }
 
   void DrawCommand(CairoBatch&, const PaintCommand&, const DrawBackdropCommand&) {
@@ -2814,6 +2822,7 @@ private:
 
   LinuxRenderer::Impl& impl_;
   GtkSnapshot* snapshot_ = nullptr;
+  const LinuxPlatformViews* platform_views_;
   std::optional<std::pair<std::size_t, std::size_t>> command_range_;
   std::size_t command_cursor_ = 0;
 };
@@ -2918,7 +2927,7 @@ std::unique_ptr<TextLayoutBackend> LinuxRenderer::CreatePlatformTextLayout(
   return std::make_unique<PangoTextLayout>(impl_->context, text, style, max_width, options);
 }
 
-void LinuxRenderer::Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame) {
+void LinuxRenderer::Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame, const LinuxPlatformViews* platform_views) {
   if (snapshot == nullptr) {
     throw std::invalid_argument("HuxerUI Linux renderer requires a GTK snapshot");
   }
@@ -2933,7 +2942,7 @@ void LinuxRenderer::Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame) {
       impl_->backdrop_root = nullptr;
     }
     impl_->backdrop_gl.reset();
-    SnapshotScenePainter(*impl_, snapshot).Draw(frame.scene);
+    SnapshotScenePainter(*impl_, snapshot, platform_views).Draw(frame.scene);
   }
 }
 
@@ -2985,7 +2994,7 @@ void LinuxRenderer::SnapshotSlice(GtkSnapshot* snapshot, const RenderFrame& fram
     Snapshot(snapshot, frame);
     return;
   }
-  SnapshotScenePainter(*impl_, snapshot, std::pair{first_command, command_count}).Draw(frame.scene);
+  SnapshotScenePainter(*impl_, snapshot, nullptr, std::pair{first_command, command_count}).Draw(frame.scene);
 }
 
 } // namespace huxerui::detail

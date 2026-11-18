@@ -11,6 +11,7 @@
 
 namespace huxerui::detail {
 
+class LinuxPlatformViews;
 class TextLayoutBackend;
 
 struct LinuxBackdropStats {
@@ -60,7 +61,7 @@ public:
   std::unique_ptr<TextLayoutBackend> CreatePlatformTextLayout(
       const AttributedText& text, const TextStyle& style, float max_width, const TextLayoutOptions& options);
 
-  void Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame);
+  void Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame, const LinuxPlatformViews* platform_views = nullptr);
   void SnapshotSlice(GtkSnapshot* snapshot, const RenderFrame& frame, std::size_t first_command,
                      std::size_t command_count);
   [[nodiscard]] LinuxBackdropStats BackdropStats() const noexcept;

@@ -5,6 +5,7 @@
 #include <utility>
 
 #include <huxerui/platform_registry.h>
+#include <huxerui/window.h>
 
 #if !defined(NOMINMAX)
 #define NOMINMAX
@@ -21,6 +22,12 @@ namespace huxerui::windows {
 /// Borrows the HWND of the exact HuxerUI attachment on its original application thread.
 /// Returns null for an unavailable or retired attachment. Never destroy the borrowed window or retain it past closure.
 [[nodiscard]] HWND NativeWindow(UiWindow& window);
+
+/// Borrows the HWND of a HuxerUI window on its application thread. HuxerUI owns window destruction.
+/// @param window Handle for the window to query.
+/// @return The HWND, or nullptr if the window has no live Win32 attachment. Query again after deferred work.
+/// @throws std::logic_error If called off the original live application's thread.
+HWND GetPlatformWindow(const WindowHandle& window);
 
 /// Describes the Win32 lifecycle of one registered PlatformView type.
 ///

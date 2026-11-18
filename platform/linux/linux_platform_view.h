@@ -1,38 +1,41 @@
 #pragma once
 
-#include <gtk/gtk.h>
-
-#include <huxerui/render_scene.h>
-#include <huxerui/window.h>
-
-#include <functional>
+#include <cstdint>
 #include <memory>
 
-namespace huxerui::detail {
+#include <gtk/gtk.h>
 
-class LinuxRenderer;
+#include <huxerui/geometry.h>
+
+namespace huxerui {
+
+class PlacePlatformViewCommand;
+class UiWindow;
+struct RenderFrame;
+
+namespace detail {
+
 class PlatformRegistry;
 
-/// Owns one GTK child hierarchy for every native PlatformView in a Linux window.
 class LinuxPlatformViews final {
 public:
-  LinuxPlatformViews(GtkWidget* host, LinuxRenderer& renderer, PlatformRegistry& registry, UiWindow& ui_window);
+  LinuxPlatformViews(UiWindow& ui, PlatformRegistry& registry, GtkWindow* window, GtkWidget* canvas,
+                     GtkWidget* input);
   ~LinuxPlatformViews();
-
-  LinuxPlatformViews(const LinuxPlatformViews&) = delete;
-  LinuxPlatformViews& operator=(const LinuxPlatformViews&) = delete;
 
   void Commit(const RenderFrame& frame);
   void Allocate(int width, int height);
-  void Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame);
-  [[nodiscard]] bool RouteToHuxerUI(Point position, PointerEventType type, bool huxerui_pointer_capture);
-  [[nodiscard]] bool HasPlatformFocus() const noexcept;
-  void SetFocusChangedHandler(std::function<void(bool)> handler);
-  void Shutdown() noexcept;
+  void SnapshotView(GtkSnapshot* snapshot, const PlacePlatformViewCommand& command) const;
+
+  bool TargetsHuxerUI(Point point) const;
+  void SynchronizeFocusFromGtk();
+  void ApplyFocusToGtk(bool reverse);
+  bool HandleTab(bool reverse);
 
 private:
-  struct State;
-  std::unique_ptr<State> state_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
-} // namespace huxerui::detail
+} // namespace detail
+} // namespace huxerui

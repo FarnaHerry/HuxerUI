@@ -1,433 +1,396 @@
 #include "linux_internal.h"
-
 #include "linux_platform_view.h"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
-#include <vector>
 
 #include <huxerui/linux/platform_registry.h>
 
-#include "application/platform_registry_internal.h"
 #include "internal_access.h"
-#include "linux_renderer.h"
 #include "runtime/mounted_node_internal.h"
 
 namespace huxerui::detail {
+
 namespace {
 
-Rect VisibleBounds(const PlatformViewPlacement& placement) noexcept {
-  if (!placement.visible) {
-    return {};
-  }
-  return placement.clip.has_value() ? placement.world_bounds.Intersection(*placement.clip) : placement.world_bounds;
+struct HuxerUIPlatformClip {
+  GtkWidget parent_instance;
+  Rect child_bounds;
+};
+
+struct HuxerUIPlatformClipClass {
+  GtkWidgetClass parent_class;
+};
+
+G_DEFINE_TYPE(HuxerUIPlatformClip, huxerui_platform_clip, GTK_TYPE_WIDGET)
+
+GskTransform* Translation(float x, float y) {
+  const graphene_point_t point{x, y};
+  return gsk_transform_translate(nullptr, &point);
+}
+
+int GtkExtent(float extent) {
+  return static_cast<int>(std::min(std::ceil(static_cast<double>(extent)), static_cast<double>(G_MAXINT)));
+}
+
+void huxerui_platform_clip_class_init(HuxerUIPlatformClipClass* clip_class) {
+  auto* widget_class = GTK_WIDGET_CLASS(clip_class);
+  widget_class->size_allocate = [](GtkWidget* widget, int, int, int) {
+    const Rect bounds = reinterpret_cast<HuxerUIPlatformClip*>(widget)->child_bounds;
+    if (GtkWidget* child = gtk_widget_get_first_child(widget); child && gtk_widget_should_layout(child)) {
+      gtk_widget_allocate(
+          child, GtkExtent(bounds.width), GtkExtent(bounds.height), -1, Translation(bounds.x, bounds.y));
+    }
+  };
+  widget_class->snapshot = [](GtkWidget* widget, GtkSnapshot* snapshot) {
+    if (GtkWidget* child = gtk_widget_get_first_child(widget)) {
+      gtk_widget_snapshot_child(widget, child, snapshot);
+    }
+  };
+  G_OBJECT_CLASS(clip_class)->dispose = [](GObject* object) {
+    if (GtkWidget* child = gtk_widget_get_first_child(GTK_WIDGET(object))) {
+      gtk_widget_unparent(child);
+    }
+    G_OBJECT_CLASS(huxerui_platform_clip_parent_class)->dispose(object);
+  };
+  gtk_widget_class_set_accessible_role(widget_class, GTK_ACCESSIBLE_ROLE_PRESENTATION);
+}
+
+void huxerui_platform_clip_init(HuxerUIPlatformClip* clip) {
+  gtk_widget_set_overflow(GTK_WIDGET(clip), GTK_OVERFLOW_HIDDEN);
 }
 
 struct EventRoute {
-  UiWindow* ui_window = nullptr;
-  std::thread::id ui_thread;
-  std::uint64_t identity = 0;
+  UiWindow& ui;
+  const std::thread::id thread = std::this_thread::get_id();
+  std::uint64_t identity;
   bool active = false;
 };
 
-} // namespace
+struct HostedView {
+  std::string type;
+  std::shared_ptr<const linux::detail::GtkViewFactory> factory;
+  std::shared_ptr<EventRoute> route;
+  std::shared_ptr<void> instance;
+  GtkWidget* view = nullptr;
+  GtkWidget* clip = nullptr;
+  Rect bounds;
+  Rect visible_bounds;
+  std::uint64_t properties_revision = 0;
+  std::uint64_t controller_revision = 0;
+  PlatformValue controller;
+  bool connected = false;
 
-struct LinuxPlatformViews::State {
-  struct FocusRoute {
-    State* state = nullptr;
-    std::uint64_t identity = 0;
-  };
-
-  struct HostedView {
-    ~HostedView() {
-      if (event_route) {
-        event_route->active = false;
+  ~HostedView() {
+    route->active = false;
+    if (clip) {
+      if (gtk_widget_get_parent(clip)) {
+        gtk_widget_unparent(clip);
       }
-      if (instance && controller_connected && factory && factory->disconnect) {
-        try {
-          factory->disconnect(instance, controller);
-        } catch (...) {
-        }
+      if (gtk_widget_get_parent(view) == clip) {
+        gtk_widget_unparent(view);
       }
-      if (instance && factory && factory->dispose) {
+      g_object_unref(clip);
+    }
+    if (instance) {
+      TryDisconnect();
+      if (factory->dispose) {
         try {
           factory->dispose(instance);
         } catch (...) {
         }
       }
-      if (focus_controller != nullptr) {
-        g_signal_handlers_disconnect_by_data(focus_controller, focus_enter_data);
-        g_signal_handlers_disconnect_by_data(focus_controller, focus_leave_data);
-      }
-      delete focus_enter_data;
-      delete focus_leave_data;
-      if (container != nullptr) {
-        if (gtk_widget_get_parent(container) != nullptr) {
-          gtk_widget_unparent(container);
-        }
-        g_object_unref(container);
-      }
-    }
-
-    std::uint64_t properties_revision = 0;
-    std::uint64_t controller_revision = 0;
-    std::string type;
-    std::shared_ptr<EventRoute> event_route;
-    std::shared_ptr<const linux::detail::LinuxViewFactory> factory;
-    std::shared_ptr<void> instance;
-    PlatformValue controller;
-    GtkWidget* container = nullptr;
-    GtkWidget* view = nullptr;
-    GtkEventController* focus_controller = nullptr;
-    FocusRoute* focus_enter_data = nullptr;
-    FocusRoute* focus_leave_data = nullptr;
-    Rect world_bounds;
-    Rect visible_bounds;
-    bool visible = false;
-    bool controller_connected = false;
-  };
-
-  State(GtkWidget* host_value, LinuxRenderer& renderer_value, PlatformRegistry& registry_value, UiWindow& ui_window_value)
-      : host(host_value), renderer(&renderer_value), registry(&registry_value), ui_window(&ui_window_value) {
-    if (host == nullptr) {
-      throw std::invalid_argument("HuxerUI Linux PlatformView host must not be null");
     }
   }
 
-  static void DispatchFocusEnter(GtkEventControllerFocus*, gpointer data) {
-    auto* route = static_cast<FocusRoute*>(data);
-    if (route != nullptr && route->state != nullptr) {
-      route->state->FocusChanged(route->identity, true);
-    }
-  }
-
-  static void DispatchFocusLeave(GtkEventControllerFocus*, gpointer data) {
-    auto* route = static_cast<FocusRoute*>(data);
-    if (route != nullptr && route->state != nullptr) {
-      route->state->FocusChanged(route->identity, false);
-    }
-  }
-
-  void FocusChanged(std::uint64_t identity, bool focused) {
-    if (ui_window == nullptr) {
-      return;
-    }
-    if (focused) {
-      focused_identity = identity;
-      InternalAccess::SynchronizePlatformViewFocus(*ui_window, identity, true);
-      if (focus_changed) {
-        focus_changed(true);
-      }
-      return;
-    }
-    if (focused_identity == identity) {
-      focused_identity.reset();
-      InternalAccess::SynchronizePlatformViewFocus(*ui_window, std::nullopt, false);
-      if (focus_changed) {
-        focus_changed(false);
+  void TryDisconnect() noexcept {
+    if (connected) {
+      try {
+        factory->disconnect(instance, controller);
+      } catch (...) {
       }
     }
   }
 
-  std::unique_ptr<HostedView> Create(const PlatformViewPlacement& placement) {
-    const PlacePlatformViewCommand& command = *placement.command;
+  void UpdateController(const PlacePlatformViewCommand& command) {
+    if (connected) {
+      connected = false;
+      factory->disconnect(instance, controller);
+    }
+    controller = command.Controller();
+    if (controller.HasValue()) {
+      if (!factory->connect || !factory->disconnect) {
+        throw std::logic_error("HuxerUI GTK PlatformView factory must provide connect and disconnect");
+      }
+      factory->connect(instance, controller);
+      connected = true;
+    }
+    controller_revision = command.ControllerRevision();
+  }
+
+  void Update(const PlacePlatformViewCommand& command) {
+    if (properties_revision != command.PropertiesRevision()) {
+      if (!factory->update) {
+        throw std::logic_error("HuxerUI GTK PlatformView factory does not support property updates");
+      }
+      factory->update(instance, command.Properties());
+      properties_revision = command.PropertiesRevision();
+    }
+    if (controller_revision != command.ControllerRevision()) {
+      UpdateController(command);
+    }
+  }
+};
+
+bool IsWithin(GtkWidget* widget, GtkWidget* ancestor) {
+  return widget && (widget == ancestor || gtk_widget_is_ancestor(widget, ancestor));
+}
+
+} // namespace
+
+struct LinuxPlatformViews::Impl {
+  using Views = std::unordered_map<std::uint64_t, std::unique_ptr<HostedView>>;
+
+  Impl(UiWindow& ui_value, PlatformRegistry& registry_value, GtkWindow* window_value, GtkWidget* canvas_value,
+       GtkWidget* input_value)
+      : ui(ui_value), registry(registry_value), window(window_value), canvas(canvas_value), input(input_value) {}
+
+  std::unique_ptr<HostedView> Create(const PlacePlatformViewCommand& command) {
+    auto factory = registry.FindView<linux::detail::GtkViewFactory>(
+        ui, command.Type(), command.Properties().Type(), command.Controller().Type());
+    if (!factory->create || !factory->view || (command.Properties().HasValue() && !factory->update)) {
+      throw std::logic_error("HuxerUI GTK PlatformView factory has missing callbacks: " + std::string(command.Type()));
+    }
+    auto route = std::make_shared<EventRoute>(EventRoute{.ui = ui, .identity = command.Identity()});
+    const auto dispatch = [weak = std::weak_ptr(route)](auto key, auto value) -> std::optional<decltype(value)> {
+      const auto route = weak.lock();
+      if (!route || route->thread != std::this_thread::get_id() || !route->active) {
+        return std::nullopt;
+      }
+      return InternalAccess::DispatchPlatformViewEvent(route->ui, route->identity, key, value);
+    };
+
     auto hosted = std::make_unique<HostedView>();
-    hosted->properties_revision = command.PropertiesRevision();
-    hosted->controller_revision = command.ControllerRevision();
+    hosted->route = std::move(route);
+    hosted->factory = std::move(factory);
     hosted->type = command.Type();
-    hosted->controller = command.Controller();
-    hosted->event_route = std::make_shared<EventRoute>(EventRoute{
-        ui_window,
-        std::this_thread::get_id(),
-        command.Identity(),
-        false,
-    });
-    hosted->factory = registry->FindView<linux::detail::LinuxViewFactory>(
-        *ui_window, command.Type(), command.Properties().Type(), command.Controller().Type());
-    if (!hosted->factory->create || !hosted->factory->view) {
-      throw std::logic_error("HuxerUI Linux PlatformView factory must provide create and view");
-    }
-
-    GtkWidget* container = gtk_fixed_new();
-    gtk_widget_set_overflow(container, GTK_OVERFLOW_HIDDEN);
-    gtk_widget_set_visible(container, TRUE);
-    gtk_widget_set_parent(container, host);
-    g_object_ref(container);
-    hosted->container = container;
-
-    const std::weak_ptr<EventRoute> weak_route = hosted->event_route;
-    PlatformEventEmitter events = MakePlatformEventEmitter(
-        [weak_route](std::type_index key, PlatformValue value) -> std::optional<PlatformValue> {
-          const std::shared_ptr<EventRoute> route = weak_route.lock();
-          if (!route || route->ui_thread != std::this_thread::get_id() || !route->active || route->ui_window == nullptr) {
-            return std::nullopt;
-          }
-          return InternalAccess::DispatchPlatformViewEvent(*route->ui_window, route->identity, key, value);
-        },
-        [weak_route](std::string name, PlatformPayload payload) -> std::optional<PlatformPayload> {
-          const std::shared_ptr<EventRoute> route = weak_route.lock();
-          if (!route || route->ui_thread != std::this_thread::get_id() || !route->active || route->ui_window == nullptr) {
-            return std::nullopt;
-          }
-          return InternalAccess::DispatchPlatformViewEvent(*route->ui_window, route->identity, name, payload);
-        });
-
-    hosted->instance = hosted->factory->create(container, command.Properties(), std::move(events));
+    hosted->properties_revision = command.PropertiesRevision();
+    hosted->instance = hosted->factory->create(
+        window, command.Properties(), MakePlatformEventEmitter(dispatch, dispatch));
     if (!hosted->instance) {
-      throw std::logic_error("HuxerUI Linux PlatformView factory returned an empty instance");
+      throw std::logic_error("HuxerUI GTK PlatformView factory returned no instance: " + std::string(command.Type()));
     }
     hosted->view = hosted->factory->view(hosted->instance);
-    if (hosted->view == nullptr || !GTK_IS_WIDGET(hosted->view) || gtk_widget_get_parent(hosted->view) != container) {
-      hosted->view = nullptr;
-      throw std::logic_error(
-          "HuxerUI Linux PlatformView factory must return a GTK child of its supplied clipping container");
+    if (!hosted->view || !GTK_IS_WIDGET(hosted->view) || gtk_widget_get_parent(hosted->view) ||
+        GTK_IS_NATIVE(hosted->view) || g_object_is_floating(hosted->view)) {
+      throw std::logic_error("HuxerUI GTK PlatformView factory must return an owned, unparented widget without a "
+                             "GdkSurface: " + std::string(command.Type()));
     }
 
-    hosted->focus_controller = gtk_event_controller_focus_new();
-    hosted->focus_enter_data = new FocusRoute{this, command.Identity()};
-    hosted->focus_leave_data = new FocusRoute{this, command.Identity()};
-    g_signal_connect(hosted->focus_controller, "enter", G_CALLBACK(DispatchFocusEnter), hosted->focus_enter_data);
-    g_signal_connect(hosted->focus_controller, "leave", G_CALLBACK(DispatchFocusLeave), hosted->focus_leave_data);
-    gtk_widget_add_controller(hosted->container, hosted->focus_controller);
-
-    if (hosted->controller.HasValue()) {
-      if (!hosted->factory->connect || !hosted->factory->disconnect) {
-        throw std::logic_error("HuxerUI controlled Linux PlatformView factory must provide connect and disconnect");
-      }
-      hosted->factory->connect(hosted->instance, hosted->controller);
-      hosted->controller_connected = true;
-    }
+    hosted->clip = GTK_WIDGET(g_object_ref_sink(g_object_new(huxerui_platform_clip_get_type(), nullptr)));
+    gtk_widget_set_child_visible(hosted->clip, FALSE);
+    gtk_widget_set_parent(hosted->view, hosted->clip);
+    hosted->UpdateController(command);
     return hosted;
   }
 
-  void Update(HostedView& hosted, const PlacePlatformViewCommand& command) {
-    if (hosted.properties_revision != command.PropertiesRevision()) {
-      if (!hosted.factory->update) {
-        throw std::logic_error("HuxerUI Linux PlatformView factory does not support property updates");
-      }
-      hosted.factory->update(hosted.instance, command.Properties());
-      hosted.properties_revision = command.PropertiesRevision();
-    }
-    if (hosted.controller_revision != command.ControllerRevision()) {
-      if (hosted.controller_connected) {
-        hosted.factory->disconnect(hosted.instance, hosted.controller);
-        hosted.controller_connected = false;
-      }
-      hosted.controller = command.Controller();
-      if (hosted.controller.HasValue()) {
-        if (!hosted.factory->connect) {
-          throw std::logic_error("HuxerUI controlled Linux PlatformView factory must provide connect");
-        }
-        hosted.factory->connect(hosted.instance, hosted.controller);
-        hosted.controller_connected = true;
-      }
-      hosted.controller_revision = command.ControllerRevision();
+  void Place(HostedView& view, const PlatformViewPlacement& placement) {
+    const Rect bounds = placement.world_bounds;
+    const Rect visible = !placement.visible ? Rect{} :
+        (placement.clip ? bounds.Intersection(*placement.clip) : bounds);
+    if (view.bounds != bounds || view.visible_bounds != visible) {
+      view.bounds = bounds;
+      view.visible_bounds = visible;
+      gtk_widget_set_child_visible(view.clip, !visible.IsEmpty());
+      gtk_widget_queue_allocate(view.clip);
+      // Only the canvas allocator knows the child's new position in the window.
+      gtk_widget_queue_allocate(canvas);
     }
   }
 
-  void Place(HostedView& hosted, const PlatformViewPlacement& placement) {
-    hosted.world_bounds = placement.world_bounds;
-    hosted.visible_bounds = VisibleBounds(placement);
-    hosted.visible = placement.visible && !hosted.visible_bounds.IsEmpty();
-    gtk_widget_set_child_visible(hosted.container, hosted.visible);
-    if (!hosted.visible) {
+  std::optional<std::uint64_t> FocusIdentity() const {
+    GtkWidget* focused = gtk_window_get_focus(window);
+    for (const auto& [identity, hosted] : views) {
+      if (IsWithin(focused, hosted->clip)) {
+        return identity;
+      }
+    }
+    return std::nullopt;
+  }
+
+  struct FocusGuard {
+    bool& changing;
+    bool previous = std::exchange(changing, true);
+    ~FocusGuard() { changing = previous; }
+  };
+
+  void ApplyFocusToGtk(bool reverse) {
+    FocusGuard guard{changing};
+    const auto desired = InternalAccess::FocusedPlatformView(ui);
+    const auto current = FocusIdentity();
+    if (desired == current && gtk_window_get_focus(window)) {
       return;
     }
-
-    const double container_x = std::floor(hosted.visible_bounds.x);
-    const double container_y = std::floor(hosted.visible_bounds.y);
-    const int view_width = std::max(1, static_cast<int>(std::ceil(hosted.world_bounds.width)));
-    const int view_height = std::max(1, static_cast<int>(std::ceil(hosted.world_bounds.height)));
-    gtk_widget_set_size_request(hosted.view, view_width, view_height);
-    gtk_fixed_move(GTK_FIXED(hosted.container), hosted.view,
-                   static_cast<double>(hosted.world_bounds.x) - container_x,
-                   static_cast<double>(hosted.world_bounds.y) - container_y);
-  }
-
-  void Retire(std::unique_ptr<HostedView> hosted) {
-    hosted->event_route->active = false;
-    if (focused_identity == hosted->event_route->identity) {
-      gtk_widget_grab_focus(host);
-      focused_identity.reset();
-      if (ui_window != nullptr) {
-        InternalAccess::SynchronizePlatformViewFocus(*ui_window, std::nullopt, false);
-      }
-      if (focus_changed) {
-        focus_changed(false);
+    gtk_widget_grab_focus(input);
+    if (desired) {
+      const auto found = views.find(*desired);
+      if (found != views.end() && !found->second->visible_bounds.IsEmpty()) {
+        gtk_widget_child_focus(found->second->view, reverse ? GTK_DIR_TAB_BACKWARD : GTK_DIR_TAB_FORWARD);
+      } else if (found != views.end()) {
+        InternalAccess::SynchronizePlatformViewFocus(ui, std::nullopt, false);
       }
     }
   }
 
-  GtkWidget* host = nullptr;
-  LinuxRenderer* renderer = nullptr;
-  PlatformRegistry* registry = nullptr;
-  UiWindow* ui_window = nullptr;
-  RenderComposition composition;
-  std::unordered_map<std::uint64_t, std::unique_ptr<HostedView>> hosted_views;
-  std::optional<std::uint64_t> focused_identity;
-  bool native_pointer_sequence = false;
-  std::function<void(bool)> focus_changed;
+  UiWindow& ui;
+  PlatformRegistry& registry;
+  GtkWindow* window;
+  GtkWidget* canvas;
+  GtkWidget* input;
+  bool changing = false;
+  Views views;
 };
 
-LinuxPlatformViews::LinuxPlatformViews(GtkWidget* host, LinuxRenderer& renderer, PlatformRegistry& registry,
-                                       UiWindow& ui_window)
-    : state_(std::make_unique<State>(host, renderer, registry, ui_window)) {}
+LinuxPlatformViews::LinuxPlatformViews(UiWindow& ui, PlatformRegistry& registry, GtkWindow* window, GtkWidget* canvas,
+                                       GtkWidget* input)
+    : impl_(std::make_unique<Impl>(ui, registry, window, canvas, input)) {}
 
 LinuxPlatformViews::~LinuxPlatformViews() {
-  Shutdown();
+  impl_->changing = true;
+  impl_->views.clear();
 }
 
 void LinuxPlatformViews::Commit(const RenderFrame& frame) {
-  RenderComposition composition = BuildRenderComposition(frame.scene);
-  std::unordered_set<std::uint64_t> retained;
-  std::vector<std::pair<std::uint64_t, std::unique_ptr<State::HostedView>>> pending;
-  std::vector<const PlatformViewPlacement*> placements;
-
-  for (const RenderCompositionLayer& layer : composition.layers) {
+  Impl::FocusGuard guard{impl_->changing};
+  const RenderComposition composition = BuildRenderComposition(frame.scene);
+  Impl::Views next;
+  for (const auto& layer : composition.layers) {
     const auto* placement = std::get_if<PlatformViewPlacement>(&layer);
-    if (placement == nullptr) {
+    if (!placement) {
       continue;
     }
-    const PlacePlatformViewCommand& command = *placement->command;
-    retained.insert(command.Identity());
-    placements.push_back(placement);
-    const auto found = state_->hosted_views.find(command.Identity());
-    if (found == state_->hosted_views.end() || found->second->type != command.Type()) {
-      pending.emplace_back(command.Identity(), state_->Create(*placement));
+    const auto& command = *placement->command;
+    const auto found = impl_->views.find(command.Identity());
+    if (found == impl_->views.end() || found->second->type != command.Type()) {
+      next.emplace(command.Identity(), impl_->Create(command));
     } else {
-      state_->Update(*found->second, command);
+      found->second->Update(command);
     }
   }
 
-  const bool focused_view_removed = state_->focused_identity.has_value() &&
-      (!retained.contains(*state_->focused_identity) ||
-       std::ranges::any_of(pending, [this](const auto& entry) { return entry.first == *state_->focused_identity; }));
-  if (focused_view_removed) {
-    gtk_widget_grab_focus(state_->host);
-    state_->focused_identity.reset();
-    InternalAccess::SynchronizePlatformViewFocus(*state_->ui_window, std::nullopt, false);
-    if (state_->focus_changed) {
-      state_->focus_changed(false);
-    }
-  }
-  for (auto& [identity, hosted] : pending) {
-    const auto found = state_->hosted_views.find(identity);
-    if (found != state_->hosted_views.end()) {
-      state_->Retire(std::move(found->second));
-      state_->hosted_views.erase(found);
-    }
-    state_->hosted_views.emplace(identity, std::move(hosted));
-  }
-  for (auto iterator = state_->hosted_views.begin(); iterator != state_->hosted_views.end();) {
-    if (retained.contains(iterator->first)) {
-      ++iterator;
+  // Retain instances by identity while ordering the GTK children for native event picking.
+  GtkWidget* sibling = nullptr;
+  for (const auto& layer : composition.layers) {
+    const auto* placement = std::get_if<PlatformViewPlacement>(&layer);
+    if (!placement) {
       continue;
     }
-    state_->Retire(std::move(iterator->second));
-    iterator = state_->hosted_views.erase(iterator);
-  }
-
-  for (const PlatformViewPlacement* placement : placements) {
-    const auto found = state_->hosted_views.find(placement->command->Identity());
-    if (found == state_->hosted_views.end()) {
-      throw std::logic_error("HuxerUI Linux PlatformView disappeared during composition commit");
+    const auto identity = placement->command->Identity();
+    auto found = next.find(identity);
+    if (found == next.end()) {
+      found = next.insert(impl_->views.extract(identity)).position;
     }
-    state_->Place(*found->second, *placement);
-    found->second->event_route->active = true;
+    auto& view = *found->second;
+    if (gtk_widget_get_parent(view.clip) != impl_->canvas || gtk_widget_get_prev_sibling(view.clip) != sibling) {
+      gtk_widget_insert_after(view.clip, impl_->canvas, sibling);
+    }
+    sibling = view.clip;
+    impl_->Place(view, *placement);
   }
-  state_->composition = std::move(composition);
-  Allocate(gtk_widget_get_width(state_->host), gtk_widget_get_height(state_->host));
+  impl_->views.swap(next);
+  next.clear();
+  for (const auto& [identity, hosted] : impl_->views) {
+    hosted->route->active = true;
+  }
+  impl_->ApplyFocusToGtk(false);
 }
 
 void LinuxPlatformViews::Allocate(int width, int height) {
-  if (width <= 0 || height <= 0 || state_->host == nullptr) {
+  const Rect viewport{0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height)};
+  for (const auto& [identity, view] : impl_->views) {
+    const Rect visible = view->visible_bounds.Intersection(viewport);
+    if (visible.IsEmpty()) {
+      continue;
+    }
+    auto* clip = reinterpret_cast<HuxerUIPlatformClip*>(view->clip);
+    clip->child_bounds = {view->bounds.x - visible.x, view->bounds.y - visible.y,
+                          view->bounds.width, view->bounds.height};
+    gtk_widget_allocate(view->clip, GtkExtent(visible.width), GtkExtent(visible.height),
+                        -1, Translation(visible.x, visible.y));
+  }
+}
+
+void LinuxPlatformViews::SnapshotView(GtkSnapshot* snapshot, const PlacePlatformViewCommand& command) const {
+  const auto it = impl_->views.find(command.Identity());
+  if (it == impl_->views.end() || it->second->visible_bounds.IsEmpty()) {
     return;
   }
-  for (auto& [identity, hosted] : state_->hosted_views) {
-    static_cast<void>(identity);
-    if (!hosted->visible) {
-      gtk_widget_set_child_visible(hosted->container, FALSE);
-      continue;
-    }
-    const double x = std::floor(hosted->visible_bounds.x);
-    const double y = std::floor(hosted->visible_bounds.y);
-    const int right = static_cast<int>(std::ceil(hosted->visible_bounds.x + hosted->visible_bounds.width));
-    const int bottom = static_cast<int>(std::ceil(hosted->visible_bounds.y + hosted->visible_bounds.height));
-    const int child_width = std::max(1, right - static_cast<int>(x));
-    const int child_height = std::max(1, bottom - static_cast<int>(y));
-    graphene_point_t offset;
-    graphene_point_init(&offset, static_cast<float>(x), static_cast<float>(y));
-    gtk_widget_allocate(hosted->container, child_width, child_height, -1, gsk_transform_translate(nullptr, &offset));
+  const auto& view = *it->second;
+  GtkSnapshot* child_snapshot = gtk_snapshot_new();
+  gtk_widget_snapshot_child(impl_->canvas, view.clip, child_snapshot);
+  if (GskRenderNode* node = gtk_snapshot_free_to_node(child_snapshot)) {
+    // GTK supplies the node in canvas coordinates. The painter is at the placement's local origin.
+    const float dx = command.Bounds().x - view.bounds.x;
+    const float dy = command.Bounds().y - view.bounds.y;
+    const Rect visible = view.visible_bounds;
+    const graphene_rect_t clip{{visible.x + dx, visible.y + dy}, {visible.width, visible.height}};
+    const graphene_point_t offset{dx, dy};
+    gtk_snapshot_push_clip(snapshot, &clip);
+    gtk_snapshot_save(snapshot);
+    gtk_snapshot_translate(snapshot, &offset);
+    gtk_snapshot_append_node(snapshot, node);
+    gtk_snapshot_restore(snapshot);
+    gtk_snapshot_pop(snapshot);
+    gsk_render_node_unref(node);
   }
 }
 
-void LinuxPlatformViews::Snapshot(GtkSnapshot* snapshot, const RenderFrame& frame) {
-  for (const RenderCompositionLayer& layer : state_->composition.layers) {
-    if (const auto* slice = std::get_if<RenderSlice>(&layer)) {
-      state_->renderer->SnapshotSlice(snapshot, frame, slice->first_command, slice->command_count);
-      continue;
-    }
-    const auto& placement = std::get<PlatformViewPlacement>(layer);
-    const auto found = state_->hosted_views.find(placement.command->Identity());
-    if (found != state_->hosted_views.end() && found->second->visible) {
-      gtk_widget_snapshot_child(state_->host, found->second->container, snapshot);
-    }
+bool LinuxPlatformViews::TargetsHuxerUI(Point point) const {
+  if (impl_->views.empty() || impl_->changing) {
+    return true;
+  }
+  const auto identity = InternalAccess::HitTestPlatformView(impl_->ui, point);
+  if (!identity) {
+    return true;
+  }
+  const auto found = impl_->views.find(*identity);
+  return found == impl_->views.end() || found->second->visible_bounds.IsEmpty() ||
+         !found->second->visible_bounds.Contains(point);
+}
+
+void LinuxPlatformViews::SynchronizeFocusFromGtk() {
+  if (!impl_->changing) {
+    InternalAccess::SynchronizePlatformViewFocus(
+        impl_->ui, impl_->FocusIdentity(), gtk_window_get_focus_visible(impl_->window));
   }
 }
 
-bool LinuxPlatformViews::RouteToHuxerUI(Point position, PointerEventType type, bool huxerui_pointer_capture) {
-  if (state_->native_pointer_sequence) {
-    if (type == PointerEventType::Up || type == PointerEventType::Cancel) {
-      state_->native_pointer_sequence = false;
-    }
+void LinuxPlatformViews::ApplyFocusToGtk(bool reverse) {
+  if (!impl_->changing) {
+    impl_->ApplyFocusToGtk(reverse);
+  }
+}
+
+bool LinuxPlatformViews::HandleTab(bool reverse) {
+  if (impl_->changing) {
     return false;
   }
-  if (huxerui_pointer_capture) {
+  const auto identity = impl_->FocusIdentity();
+  if (!identity) {
+    return false;
+  }
+  GtkWidget* child = impl_->views.at(*identity)->view;
+  if (gtk_widget_child_focus(child, reverse ? GTK_DIR_TAB_BACKWARD : GTK_DIR_TAB_FORWARD)) {
     return true;
   }
-  const std::optional<std::uint64_t> identity = InternalAccess::HitTestPlatformView(*state_->ui_window, position);
-  const auto found = identity.has_value() ? state_->hosted_views.find(*identity) : state_->hosted_views.end();
-  if (found == state_->hosted_views.end() || !found->second->visible) {
-    return true;
-  }
-  if (type == PointerEventType::Down) {
-    state_->native_pointer_sequence = true;
-  }
-  return false;
-}
-
-bool LinuxPlatformViews::HasPlatformFocus() const noexcept {
-  return state_->focused_identity.has_value();
-}
-
-void LinuxPlatformViews::SetFocusChangedHandler(std::function<void(bool)> handler) {
-  state_->focus_changed = std::move(handler);
-}
-
-void LinuxPlatformViews::Shutdown() noexcept {
-  if (!state_) {
-    return;
-  }
-  for (auto& [identity, hosted] : state_->hosted_views) {
-    static_cast<void>(identity);
-    if (hosted->event_route) {
-      hosted->event_route->active = false;
-    }
-  }
-  state_->hosted_views.clear();
-  state_->composition.layers.clear();
-  state_->focused_identity.reset();
-  state_->native_pointer_sequence = false;
-  state_->host = nullptr;
-  state_->ui_window = nullptr;
+  return InternalAccess::MoveFocusFromPlatformView(impl_->ui, *identity, reverse);
 }
 
 } // namespace huxerui::detail
