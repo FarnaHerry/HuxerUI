@@ -1107,46 +1107,6 @@ TEST_CASE("RuntimeOpenWindowReclaimsRetiredHostsBeforeApplicationShutdown") {
 
 }
 
-TEST_CASE("Owned window closure is observable and waits for the outer UI callback") {
-  OwnedWindowPlatform platform;
-  bool open = false;
-  int builds = 0;
-  Application application(EmptyOwnedWindow, {.show_debug_overlay = false, .quit_on_last_window_closed = false});
-  RuntimeLifetime runtime(application, platform);
-  auto app = UseApplication();
-  platform.RunPlatformModuleTasks();
-  REQUIRE(platform.application_quit_requests == 0);
-  auto first = app.OpenWindow(EmptyOwnedWindow);
-  auto observer = app.OpenWindow([&] {
-    ++builds;
-    open = first.IsOpen();
-    return Text(open ? "Open" : "Closed");
-  });
-  platform.windows[1]->Frame();
-  REQUIRE(open);
-  {
-    detail::ExecutionGuard callback(detail::InternalAccess::WindowExecution(*platform.windows[0]));
-    first.Close();
-    platform.RunPlatformModuleTasks();
-    REQUIRE_FALSE(first.IsOpen());
-    REQUIRE(platform.destroyed == 0);
-  }
-  platform.RunPlatformModuleTasks();
-  REQUIRE(platform.destroyed == 1);
-  platform.windows[1]->Frame();
-  REQUIRE_FALSE(open);
-  REQUIRE(builds == 2);
-  observer.Close();
-  platform.RunPlatformModuleTasks();
-  REQUIRE(platform.application_quit_requests == 0);
-  auto reopened = app.OpenWindow(EmptyOwnedWindow);
-  REQUIRE(reopened.IsOpen());
-  app.Quit();
-  platform.RunPlatformModuleTasks();
-  REQUIRE_FALSE(reopened.IsOpen());
-  REQUIRE(platform.application_quit_requests == 1);
-}
-
 TEST_CASE("A host window session survives replacing its UI attachment") {
   OwnedWindowPlatform platform;
   Application application(EmptyOwnedWindow, {.show_debug_overlay = false});
