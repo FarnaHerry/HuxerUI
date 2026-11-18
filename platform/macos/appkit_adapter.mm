@@ -1800,14 +1800,6 @@ NSWindow* GetAppKitWindow(UiWindow& ui_window) {
 
 @implementation HuxerUIWindow
 
-- (BOOL)canBecomeKeyWindow {
-  return (self.styleMask & NSWindowStyleMaskTitled) == 0 || [super canBecomeKeyWindow];
-}
-
-- (BOOL)canBecomeMainWindow {
-  return (self.styleMask & NSWindowStyleMaskTitled) == 0 || [super canBecomeMainWindow];
-}
-
 - (void)sendEvent:(NSEvent*)event {
   huxerui::detail::ExecutionGuard guard(huxeruiWindow == nullptr ? nullptr :
       huxerui::detail::InternalAccess::WindowExecution(*huxeruiWindow));
