@@ -14,8 +14,8 @@ The fork's `bd8fb056` layer-anchor transfer fix was removed during merge `c2f099
 
 ## Closed upstream pull requests
 
-The maintainer closed eight fork PRs; almost every one landed as an independent implementation, usually without a review comment.
-The fork tracks those upstream commits, so the corresponding preparation branches are retired.
+The maintainer closed nine fork PRs; almost every one landed as an independent implementation, usually without a review comment.
+The fork tracks those upstream commits, so the corresponding preparation branches are retired; the exceptions are noted per row.
 
 | PR | Disposition | Upstream evidence |
 |---|---|---|
@@ -27,6 +27,7 @@ The fork tracks those upstream commits, so the corresponding preparation branche
 | #151 | Fixed with the `CreateUiWindow` name instead of the proposed `CreateApplicationWindow` | `e613b515` |
 | #150 | Pager, drag-preview, and virtual-subtree fixes landed before closing; the remaining items were already covered | `784f99a6`, `711a9eae`, `9f90e005` |
 | #135 | Replaced by per-window system appearance | `5523172a` |
+| #193 | Closed by the maintainer without a review comment; the fork keeps its numeric DWM corner attribute values | none |
 
 PRs #149 and #148 were closed by the fork after #150 absorbed them; #141 was later implemented upstream as `e0f49ceb`.
 PRs #139, #140, #138, and #118 were closed by the fork without an upstream equivalent.
@@ -112,6 +113,17 @@ Video playback, landscape fullscreen, database/session preservation and camera p
 focus switches kept the application background at #F1F1F3 and display brightness at 2454; the independent host assertion
 confirms the framework fix even though the application's previous focus workaround remains for its old dependency pin.
 Native Windows, macOS, iOS and Web execution has not been verified on this Linux host.
+
+## Upstream contribution validation
+
+A platform change is ready for an upstream pull request only after the fork has built and exercised it on the affected platform.
+Windows changes need a Windows build and the relevant native test, Linux changes need the Linux build, and Apple-platform changes need macOS with Xcode.
+Host-independent generators and fixture tests are supporting evidence, not a substitute for the platform run.
+When the required platform is unavailable, keep the patch in a fork-only branch, record it in the [Upstream Coverage Registry](upstream-coverage.md), and do not open the pull request until the platform run exists.
+
+The maintainer closed PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) on 2026-11-18 without a review comment, and the fork closed PR [#194](https://github.com/HuxerUI/HuxerUI/pull/194) the same day after confirming that its response-file fixture tests could not validate the Xcode shell link.
+The fork has no Apple hardware or Xcode, so Apple-platform proposals wait for that access.
+Both patches remain in `farna/main`; neither should be resubmitted without the missing evidence.
 
 ## Application adoption
 

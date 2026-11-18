@@ -129,9 +129,9 @@ These are the bug fixes still worth a focused upstream PR; capability work stays
 |---|---|---|---|
 | High | macOS quit enters a modal loop | `ca6d413d` | Covered by upstream `d9c430fc` (PR [#190](https://github.com/HuxerUI/HuxerUI/pull/190)): a direct `terminate:` returns `NSTerminateCancel` after `RequestShutdown()`, and a system Quit Apple Event is answered after shared teardown. Drop the standalone proposal; the fork keeps its `stop:`/event wake only for the direct path. |
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
-| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only |
-| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia`. PR [#194](https://github.com/HuxerUI/HuxerUI/pull/194) is open from `fix/ios-app-link-response` with the per-configuration target-graph manifest; `HuxerUIIosLinkTests` covers response generation on any host, while the Xcode shell link stays unverified without Apple hardware |
-| Low | Windows DWM corner attribute SDK portability | `e8be9126` | `win32_adapter.cpp` uses `DWMWCP_ROUND` and `DWMWA_WINDOW_CORNER_PREFERENCE`; pre-22000 Windows SDKs do not declare them, so older toolchains need numeric attribute values. PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) is open from `fix/windows-dwm-corner-sdk-portability` with the documented attribute `33` and value `2`; it compiles against SDK 10.0.19041 and the default 10.0.26100 |
+| Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only. Do not open an upstream PR before a macOS/Xcode run validates the change |
+| Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia`. PR [#194](https://github.com/HuxerUI/HuxerUI/pull/194) was closed on 2026-11-18 because the Xcode shell link cannot be validated without Apple hardware; keep the fork implementation and do not resubmit before a macOS run |
+| Low | Windows DWM corner attribute SDK portability | `e8be9126` | `win32_adapter.cpp` uses `DWMWCP_ROUND` and `DWMWA_WINDOW_CORNER_PREFERENCE`; pre-22000 Windows SDKs do not declare them, so older toolchains need numeric attribute values. PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) was closed by the maintainer on 2026-11-18 without a review comment; the fork keeps the numeric attribute `33` and value `2`, which compile against SDK 10.0.19041 and 10.0.26100. Re-propose only with new evidence |
 
 GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after re-auditing `c67c42c2`.
 Upstream has no `DiscardHost`/`CanDiscardHost`; `Runtime::MaintainWindows` retires a Runtime-owned window in a posted task before destroying it, and `LinuxUiWindow::Cleanup` resets text input and clears the canvas data pointer before `gtk_window_destroy`.
@@ -179,6 +179,10 @@ The mid-gesture disable fix was reachable upstream and merged as `acfb154b` (PR 
 4. Mark newly covered rows as **Covered**, add the upstream evidence, and remove the item from the upstream PR list.
 5. If upstream covered only part of an item, move the exact residual into **Partially covered**.
 6. Leave **Fork-only** rows in place until upstream lands the behavior, the fork drops it, or the fork decides not to upstream it.
+
+Before proposing a candidate, run it on the affected platform.
+A host-side fixture test or a compile check alone is not enough for an upstream pull request; see [Upstream contribution validation](farna-integration.md#upstream-contribution-validation).
+Apple-platform proposals wait until macOS with Xcode is available.
 
 When adding an entry, record the fork commit and a code-level upstream symbol or test path.
 Do not use a same-named upstream commit as proof by itself; compare behavior and tests.
