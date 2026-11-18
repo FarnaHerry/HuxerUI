@@ -7,11 +7,11 @@ Its purpose is to stop repeated audits and accidental re-submission of behavior 
 
 - Upstream remote: `upstream` (`https://github.com/HuxerUI/HuxerUI.git`).
 - Fork integration branch: `farna/main`.
-- Last merged upstream commit: `bf186b86` (`fix(packaging): avoid false runtime dependency conflicts`).
-- Fork merge commits: `d5c66a42` (through `bca06f08`), `1aba61cb` (through `c67c42c2`), and `6f730fd6` (through `bf186b86`).
+- Last merged upstream commit: `b235b074` (`fix(windows): support DWM corner requests with older SDKs`).
+- Fork merge commits: `d5c66a42` (through `bca06f08`), `1aba61cb` (through `c67c42c2`), `6f730fd6` (through `bf186b86`), and `3fa29a3c` (through `b235b074`).
 - Audited upstream HEAD: `c67c42c2`.
 - Last audit date: 2026-11-15.
-- Audited later: `fcb7b302` (iOS SDK link validation) and `bf186b86` (runtime dependency scan) were merged after the audit; only the staged-versus-host runtime dependency row below changed classification.
+- Audited later: `fcb7b302` (iOS SDK link validation), `bf186b86` (runtime dependency scan), and `b235b074` (DWM corner request) were merged after the audit; they changed the staged-versus-host runtime dependency row and moved the DWM corner row to Covered.
 
 Line numbers and commit SHAs in this document are evidence at the baseline.
 Prefer symbol names and focused diff checks when the baseline moves.
@@ -63,6 +63,7 @@ When a fork-only capability creates the state, the fix belongs with that capabil
 | Application-scoped cross-window drag | `3ef0a74b` | Upstream `372d8afe` implements `BeginApplicationDrag`, the retained `WindowDrag` transport, GTK/AppKit/Win32 delivery, receiver hit testing, and `released_outside_application` | Adopted upstream and removed `window_drag_internal.h` and the fork's parallel transport during the `c67c42c2` merge. Do not resubmit. |
 | Windows 7 DirectComposition declarations | `14c5b996` | Upstream `c67c42c2` declares the DirectComposition types needed by the Windows 7 compatibility renderer | Drop the fork patch; the shared declaration now matches upstream. |
 | Staged-versus-host runtime dependency conflicts | `cdffec57`, `9e67114e`, `03b438c6` | Upstream `bf186b86` (PR [#192](https://github.com/HuxerUI/HuxerUI/pull/192)) takes the staging root as a positional scan argument, compares only bundled copies for the hash check, and appends every candidate to the resolved list so final verification still rejects external copies | Drop the fork duplicate. Merge `6f730fd6` adopted the upstream implementation, so `_huxerui_runtime_scan` no longer parses `STAGING_ROOT` and no longer carries a separate staged/external split. |
+| Windows DWM corner request with older SDKs | `e8be9126` | Upstream `b235b074` requests `DWMWA_WINDOW_CORNER_PREFERENCE` (33) with `DWMWCP_ROUND` (2) through local `DWORD` constants when the SDK lacks the typed identifiers | Drop the fork duplicate. Merge `3fa29a3c` adopted the upstream code, so `win32_adapter.cpp` no longer defines `kDwmWindowCornerPreference` or `kDwmWindowCornerRound`. |
 
 Windows owns taskbar visibility for fullscreen windows.
 The shell hides the taskbar when a window enters fullscreen while it is already the foreground window, and keeps it hidden across later focus changes; a window that enters fullscreen while backgrounded leaves the taskbar visible and later activation does not re-evaluate.
@@ -131,7 +132,6 @@ These are the bug fixes still worth a focused upstream PR; capability work stays
 | High | macOS native-input reentrancy | `785eb892`, `7f0ffc9f` | No `MacNativeInputGuard` or `IsNativeInputActive`; native tasks and frame commits run during AppKit input delivery. The fork commit also relies on its `PostNativeTask`, `QueueClose`, and `SendKey` scaffolding, so an upstream port needs a minimal repro and cannot be applied wholesale |
 | Medium | macOS per-key-window text input | `373ebdad` | `ApplicationActiveChanged(active)` ignores `window_.keyWindow`. Port only the key-window gating; `input_blocked_` and the blocked drag/drop checks are fork-only. Do not open an upstream PR before a macOS/Xcode run validates the change |
 | Medium | iOS app-target link closure | `8fd9d0e1` | `HuxerUIApp.cmake` reads only `INTERFACE_LINK_LIBRARIES` and uses `file(WRITE)` before generation; no `LINK_LIBRARIES` closure, `LINK_ONLY` handling, alias resolution, or `file(GENERATE)`. Drop the app-specific `-framework CoreMedia`. PR [#194](https://github.com/HuxerUI/HuxerUI/pull/194) was closed on 2026-11-18 because the Xcode shell link cannot be validated without Apple hardware; keep the fork implementation and do not resubmit before a macOS run |
-| Low | Windows DWM corner attribute SDK portability | `e8be9126` | `win32_adapter.cpp` uses `DWMWCP_ROUND` and `DWMWA_WINDOW_CORNER_PREFERENCE`; pre-22000 Windows SDKs do not declare them, so older toolchains need numeric attribute values. PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) was closed by the maintainer on 2026-11-18 without a review comment; the fork keeps the numeric attribute `33` and value `2`, which compile against SDK 10.0.19041 and 10.0.26100. Re-propose only with new evidence |
 
 GTK retired windows and callbacks (`99fd7ba2`) was removed from this list after re-auditing `c67c42c2`.
 Upstream has no `DiscardHost`/`CanDiscardHost`; `Runtime::MaintainWindows` retires a Runtime-owned window in a posted task before destroying it, and `LinuxUiWindow::Cleanup` resets text input and clears the canvas data pointer before `gtk_window_destroy`.

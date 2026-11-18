@@ -27,7 +27,7 @@ The fork tracks those upstream commits, so the corresponding preparation branche
 | #151 | Fixed with the `CreateUiWindow` name instead of the proposed `CreateApplicationWindow` | `e613b515` |
 | #150 | Pager, drag-preview, and virtual-subtree fixes landed before closing; the remaining items were already covered | `784f99a6`, `711a9eae`, `9f90e005` |
 | #135 | Replaced by per-window system appearance | `5523172a` |
-| #193 | Closed by the maintainer without a review comment; the fork keeps its numeric DWM corner attribute values | none |
+| #193 | Closed by the maintainer without a review comment; implemented independently | `b235b074` |
 
 PRs #149 and #148 were closed by the fork after #150 absorbed them; #141 was later implemented upstream as `e0f49ceb`.
 PRs #139, #140, #138, and #118 were closed by the fork without an upstream equivalent.
@@ -121,9 +121,9 @@ Windows changes need a Windows build and the relevant native test, Linux changes
 Host-independent generators and fixture tests are supporting evidence, not a substitute for the platform run.
 When the required platform is unavailable, keep the patch in a fork-only branch, record it in the [Upstream Coverage Registry](upstream-coverage.md), and do not open the pull request until the platform run exists.
 
-The maintainer closed PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) on 2026-11-18 without a review comment, and the fork closed PR [#194](https://github.com/HuxerUI/HuxerUI/pull/194) the same day after confirming that its response-file fixture tests could not validate the Xcode shell link.
+The maintainer closed PR [#193](https://github.com/HuxerUI/HuxerUI/pull/193) on 2026-11-18 without a review comment and then implemented the same numeric DWM attribute independently as `b235b074`, which merge `3fa29a3c` adopted; the fork closed PR [#194](https://github.com/HuxerUI/HuxerUI/pull/194) the same day after confirming that its response-file fixture tests could not validate the Xcode shell link.
 The fork has no Apple hardware or Xcode, so Apple-platform proposals wait for that access.
-Both patches remain in `farna/main`; neither should be resubmitted without the missing evidence.
+The iOS patch remains in `farna/main` and should not be resubmitted without the missing evidence.
 
 ## Application adoption
 
