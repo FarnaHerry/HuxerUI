@@ -7,9 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -81,6 +85,7 @@ constexpr const char* menu_xml = R"xml(
     <property name="Status" type="s" access="read"/>
     <property name="IconThemePath" type="as" access="read"/>
     <signal name="LayoutUpdated"><arg type="u"/><arg type="i"/></signal>
+    <signal name="ItemsPropertiesUpdated"><arg type="a(ia{sv})"/><arg type="a(ias)"/></signal>
   </interface>
 </node>
 )xml";
@@ -155,6 +160,27 @@ struct LinuxSystemTrayTransport::Impl {
     int id = 0;
     ResolvedSystemTrayMenuEntry entry;
     std::vector<MenuNode> children;
+  };
+
+  enum class MenuRole { Separator, Action, Submenu };
+  using MenuIdentity = std::tuple<MenuRole, std::string_view, bool, std::size_t>;
+
+  struct MenuMatch {
+    const MenuNode* previous = nullptr;
+    std::size_t new_count = 0;
+  };
+
+  struct MenuPropertyChange {
+    int id;
+    const ResolvedSystemTrayMenuEntry& entry;
+    bool enabled_changed;
+    bool checked_changed;
+    bool icon_changed;
+  };
+
+  struct MenuChanges {
+    std::vector<int> layouts;
+    std::vector<MenuPropertyChange> properties;
   };
 
   Impl() {
@@ -377,16 +403,62 @@ struct LinuxSystemTrayTransport::Impl {
     }
   }
 
-  std::vector<MenuNode> BuildMenu(const std::vector<ResolvedSystemTrayMenuEntry>& entries, int& next_id) {
+  static MenuIdentity Identity(const ResolvedSystemTrayMenuEntry& entry, std::size_t position) {
+    if (entry.section) {
+      return {MenuRole::Separator, {}, false, position};
+    }
+    const auto role = entry.children.empty() ? MenuRole::Action : MenuRole::Submenu;
+    return {role, entry.label, entry.checked.has_value(), 0};
+  }
+
+  static std::vector<MenuNode> BuildMenu(std::span<const ResolvedSystemTrayMenuEntry> entries,
+                                         std::span<const MenuNode> previous, std::optional<int> parent,
+                                         int& next_id, MenuChanges& changes) {
+    std::map<MenuIdentity, MenuMatch> matches;
+    for (std::size_t i = 0; i < previous.size(); ++i) {
+      const auto [match, inserted] = matches.try_emplace(Identity(previous[i].entry, i), MenuMatch{&previous[i]});
+      if (!inserted) {
+        match->second.previous = nullptr;
+      }
+    }
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+      if (auto match = matches.find(Identity(entries[i], i)); match != matches.end()) {
+        ++match->second.new_count;
+      }
+    }
+
     std::vector<MenuNode> result;
     result.reserve(entries.size());
-    for (const ResolvedSystemTrayMenuEntry& entry : entries) {
-      if (next_id == std::numeric_limits<int>::max()) {
-        throw std::overflow_error("HuxerUI Linux system tray menu contains too many items");
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+      const auto& entry = entries[i];
+      const auto match = matches.find(Identity(entry, i));
+      // Clients retain native actions by ID, including the action's original role.
+      const MenuNode* old = match != matches.end() && match->second.new_count == 1 ? match->second.previous : nullptr;
+      MenuNode node{.entry = entry, .children = {}};
+      if (old != nullptr) {
+        node.id = old->id;
+        const MenuPropertyChange change{
+            node.id, entry, old->entry.enabled != entry.enabled, old->entry.checked != entry.checked,
+            old->entry.icon != entry.icon,
+        };
+        if (change.enabled_changed || change.checked_changed || change.icon_changed) {
+          changes.properties.push_back(change);
+        }
+      } else {
+        if (next_id == std::numeric_limits<int>::max()) {
+          throw std::overflow_error("HuxerUI Linux system tray exhausted its menu item IDs");
+        }
+        node.id = next_id++;
       }
-      MenuNode node{.id = next_id++, .entry = entry, .children = {}};
-      node.children = BuildMenu(entry.children, next_id);
+      if (!entry.children.empty()) {
+        node.children = BuildMenu(entry.children, old != nullptr ? std::span<const MenuNode>{old->children}
+                                                                 : std::span<const MenuNode>{},
+                                  old != nullptr ? std::optional<int>{node.id} : std::nullopt, next_id, changes);
+      }
       result.emplace_back(std::move(node));
+    }
+    if (parent.has_value() && !std::ranges::equal(previous, result, {}, &MenuNode::id, &MenuNode::id)) {
+      changes.layouts.push_back(*parent);
     }
     return result;
   }
@@ -401,6 +473,20 @@ struct LinuxSystemTrayTransport::Impl {
       }
     }
     return nullptr;
+  }
+
+  bool HasMenuItems(int parent) const noexcept {
+    if (parent == 0) {
+      return !menu.empty();
+    }
+    const MenuNode* node = FindMenuNode(parent, menu);
+    return node != nullptr && !node->children.empty();
+  }
+
+  static void AddMenuIcon(GVariantBuilder& properties, const ImageAsset& icon) {
+    const std::span<const std::byte> encoded = icon.EncodedBytes();
+    GVariant* bytes = g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, encoded.data(), encoded.size(), sizeof(std::byte));
+    g_variant_builder_add(&properties, "{sv}", "icon-data", bytes);
   }
 
   GVariant* MenuProperties(const MenuNode* node) const {
@@ -422,13 +508,7 @@ struct LinuxSystemTrayTransport::Impl {
       g_variant_builder_add(&properties, "{sv}", "toggle-state", g_variant_new_int32(*entry.checked ? 1 : 0));
     }
     if (entry.icon.has_value()) {
-      const std::span<const std::byte> encoded = entry.icon->EncodedBytes();
-      g_variant_builder_add(
-          &properties,
-          "{sv}",
-          "icon-data",
-          g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, encoded.data(), encoded.size(), sizeof(std::byte))
-      );
+      AddMenuIcon(properties, *entry.icon);
     }
     if (!node->children.empty()) {
       g_variant_builder_add(&properties, "{sv}", "children-display", g_variant_new_string("submenu"));
@@ -469,17 +549,24 @@ struct LinuxSystemTrayTransport::Impl {
   void Show(const ResolvedSystemTrayPresentation& value) {
     ResolvedSystemTrayPresentation replacement_presentation = value;
     IconPixmap replacement_icon = DecodeIconPixmap(value.icon);
-    int next_id = 1;
-    std::vector<MenuNode> replacement_menu = BuildMenu(value.menu, next_id);
+    int next_id = next_menu_id;
+    MenuChanges changes;
+    std::vector<MenuNode> replacement_menu = BuildMenu(value.menu, menu, 0, next_id, changes);
     icon = std::move(replacement_icon);
     menu = std::move(replacement_menu);
     presentation = std::move(replacement_presentation);
-    ++menu_revision;
+    next_menu_id = next_id;
     EmitItemSignal("NewIcon", nullptr);
     EmitItemSignal("NewTitle", nullptr);
     EmitItemSignal("NewToolTip", nullptr);
     EmitItemSignal("NewStatus", g_variant_new("(s)", "Active"));
-    EmitMenuLayout();
+    if (!changes.layouts.empty()) {
+      ++menu_revision;
+      for (int parent : changes.layouts) {
+        EmitMenuLayout(parent);
+      }
+    }
+    EmitMenuProperties(changes.properties);
   }
 
   void Hide() noexcept {
@@ -488,7 +575,7 @@ struct LinuxSystemTrayTransport::Impl {
     menu.clear();
     ++menu_revision;
     EmitItemSignal("NewStatus", g_variant_new("(s)", "Passive"));
-    EmitMenuLayout();
+    EmitMenuLayout(0);
   }
 
   void EmitItemSignal(const char* signal, GVariant* parameters) noexcept {
@@ -497,7 +584,7 @@ struct LinuxSystemTrayTransport::Impl {
     }
   }
 
-  void EmitMenuLayout() noexcept {
+  void EmitMenuLayout(int parent) noexcept {
     if (connection != nullptr && menu_registration != 0) {
       g_dbus_connection_emit_signal(
           connection,
@@ -505,10 +592,42 @@ struct LinuxSystemTrayTransport::Impl {
           menu_path,
           menu_interface,
           "LayoutUpdated",
-          g_variant_new("(ui)", menu_revision, 0),
+          g_variant_new("(ui)", menu_revision, parent),
           nullptr
       );
     }
+  }
+
+  void EmitMenuProperties(std::span<const MenuPropertyChange> changes) noexcept {
+    if (connection == nullptr || menu_registration == 0 || changes.empty()) {
+      return;
+    }
+    GVariantBuilder updated;
+    GVariantBuilder removed;
+    g_variant_builder_init(&updated, G_VARIANT_TYPE("a(ia{sv})"));
+    g_variant_builder_init(&removed, G_VARIANT_TYPE("a(ias)"));
+    for (const auto& change : changes) {
+      GVariantBuilder properties;
+      g_variant_builder_init(&properties, G_VARIANT_TYPE_VARDICT);
+      if (change.enabled_changed) {
+        g_variant_builder_add(&properties, "{sv}", "enabled", g_variant_new_boolean(change.entry.enabled));
+      }
+      if (change.checked_changed) {
+        g_variant_builder_add(&properties, "{sv}", "toggle-state", g_variant_new_int32(*change.entry.checked ? 1 : 0));
+      }
+      if (change.icon_changed && change.entry.icon.has_value()) {
+        AddMenuIcon(properties, *change.entry.icon);
+      }
+      if (change.icon_changed && !change.entry.icon.has_value()) {
+        const char* keys[] = {"icon-data", nullptr};
+        g_variant_builder_add(&removed, "(i^as)", change.id, keys);
+      }
+      g_variant_builder_add(&updated, "(i@a{sv})", change.id, g_variant_builder_end(&properties));
+    }
+    g_dbus_connection_emit_signal(
+        connection, nullptr, menu_path, menu_interface, "ItemsPropertiesUpdated",
+        g_variant_new("(@a(ia{sv})@a(ias))", g_variant_builder_end(&updated), g_variant_builder_end(&removed)), nullptr
+    );
   }
 
   static void HandleItemMethod(
@@ -693,14 +812,26 @@ struct LinuxSystemTrayTransport::Impl {
         return;
       }
       if (name == "AboutToShow") {
-        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", FALSE));
+        gint parent = 0;
+        g_variant_get(parameters, "(i)", &parent);
+        // A host can defer layout notifications while a submenu is closed.
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", impl.HasMenuItems(parent)));
         return;
       }
       if (name == "AboutToShowGroup") {
+        GVariantIter* parents = nullptr;
+        g_variant_get(parameters, "(ai)", &parents);
         GVariantBuilder updates;
         GVariantBuilder errors;
         g_variant_builder_init(&updates, G_VARIANT_TYPE("ai"));
         g_variant_builder_init(&errors, G_VARIANT_TYPE("ai"));
+        gint parent = 0;
+        while (g_variant_iter_next(parents, "i", &parent)) {
+          if (impl.HasMenuItems(parent)) {
+            g_variant_builder_add(&updates, "i", parent);
+          }
+        }
+        g_variant_iter_free(parents);
         g_dbus_method_invocation_return_value(
             invocation,
             g_variant_new("(@ai@ai)", g_variant_builder_end(&updates), g_variant_builder_end(&errors))
@@ -764,6 +895,7 @@ struct LinuxSystemTrayTransport::Impl {
   guint item_registration = 0;
   guint menu_registration = 0;
   guint menu_revision = 0;
+  int next_menu_id = 1;
   bool available = false;
 };
 
