@@ -18,6 +18,7 @@ target_sources(huxerui_linux_tests PRIVATE
         platform_view.cpp
         renderer.cpp
         resident_effects.cpp
+        system_tray.cpp
         text_input.cpp
         window_chrome.cpp
         window_drag_native.cpp

@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -180,10 +181,11 @@ struct LinuxSystemTrayTransport::Impl {
 
   struct MenuChanges {
     std::vector<int> layouts;
+    std::vector<int> new_submenus;
     std::vector<MenuPropertyChange> properties;
   };
 
-  Impl() {
+  explicit Impl(std::optional<std::string> address) : bus_address(std::move(address)) {
     GError* error = nullptr;
     item_node = g_dbus_node_info_new_for_xml(item_xml, &error);
     if (item_node == nullptr) {
@@ -201,6 +203,7 @@ struct LinuxSystemTrayTransport::Impl {
   }
 
   ~Impl() {
+    event_handler = {};
     StopWatching();
     g_dbus_node_info_unref(menu_node);
     g_dbus_node_info_unref(item_node);
@@ -208,6 +211,33 @@ struct LinuxSystemTrayTransport::Impl {
 
   void StartWatching() noexcept {
     if (watch != 0) {
+      return;
+    }
+    if (bus_address.has_value()) {
+      GError* error = nullptr;
+      watch_connection = g_dbus_connection_new_for_address_sync(
+          bus_address->c_str(),
+          static_cast<GDBusConnectionFlags>(
+              G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION
+          ),
+          nullptr,
+          nullptr,
+          &error
+      );
+      g_clear_error(&error);
+      if (watch_connection == nullptr) {
+        SetAvailable(false);
+        return;
+      }
+      watch = g_bus_watch_name_on_connection(
+          watch_connection,
+          watcher_name,
+          G_BUS_NAME_WATCHER_FLAGS_NONE,
+          WatcherAppeared,
+          WatcherVanished,
+          this,
+          nullptr
+      );
       return;
     }
     watch = g_bus_watch_name(
@@ -234,6 +264,11 @@ struct LinuxSystemTrayTransport::Impl {
       }
       g_object_unref(connection);
       connection = nullptr;
+    }
+    if (watch_connection != nullptr) {
+      g_dbus_connection_close_sync(watch_connection, nullptr, nullptr);
+      g_object_unref(watch_connection);
+      watch_connection = nullptr;
     }
     SetAvailable(false);
   }
@@ -347,6 +382,7 @@ struct LinuxSystemTrayTransport::Impl {
     if (connection == nullptr) {
       return false;
     }
+    const bool registered_menu = menu_registration == 0;
     GError* error = nullptr;
     if (item_registration == 0) {
       item_registration = g_dbus_connection_register_object(
@@ -375,6 +411,10 @@ struct LinuxSystemTrayTransport::Impl {
     if (item_registration == 0 || menu_registration == 0) {
       Unexport();
       return false;
+    }
+    if (registered_menu && !menu.empty()) {
+      dirty_layouts.insert(0);
+      MarkSubmenusDirty(menu);
     }
     return true;
   }
@@ -449,6 +489,9 @@ struct LinuxSystemTrayTransport::Impl {
           throw std::overflow_error("HuxerUI Linux system tray exhausted its menu item IDs");
         }
         node.id = next_id++;
+        if (!entry.children.empty()) {
+          changes.new_submenus.push_back(node.id);
+        }
       }
       if (!entry.children.empty()) {
         node.children = BuildMenu(entry.children, old != nullptr ? std::span<const MenuNode>{old->children}
@@ -475,12 +518,30 @@ struct LinuxSystemTrayTransport::Impl {
     return nullptr;
   }
 
-  bool HasMenuItems(int parent) const noexcept {
-    if (parent == 0) {
-      return !menu.empty();
+  void MarkSubmenusDirty(const std::vector<MenuNode>& nodes) {
+    for (const MenuNode& node : nodes) {
+      if (!node.children.empty()) {
+        dirty_layouts.insert(node.id);
+        MarkSubmenusDirty(node.children);
+      }
     }
-    const MenuNode* node = FindMenuNode(parent, menu);
-    return node != nullptr && !node->children.empty();
+  }
+
+  void ClearDirtyLayouts(const MenuNode* node, int depth) noexcept {
+    if (depth == 0) {
+      return;
+    }
+    dirty_layouts.erase(node == nullptr ? 0 : node->id);
+    const int child_depth = depth < 0 ? depth : depth - 1;
+    if (child_depth == 0) {
+      return;
+    }
+    const std::vector<MenuNode>& children = node == nullptr ? menu : node->children;
+    for (const MenuNode& child : children) {
+      if (!child.children.empty()) {
+        ClearDirtyLayouts(&child, child_depth);
+      }
+    }
   }
 
   static void AddMenuIcon(GVariantBuilder& properties, const ImageAsset& icon) {
@@ -547,22 +608,43 @@ struct LinuxSystemTrayTransport::Impl {
   }
 
   void Show(const ResolvedSystemTrayPresentation& value) {
+    const bool was_active = presentation.has_value();
+    const bool icon_changed = !was_active || presentation->icon != value.icon;
+    const bool tooltip_changed = !was_active || presentation->tooltip != value.tooltip;
     ResolvedSystemTrayPresentation replacement_presentation = value;
-    IconPixmap replacement_icon = DecodeIconPixmap(value.icon);
+    std::optional<IconPixmap> replacement_icon;
+    if (icon_changed || !icon.has_value()) {
+      replacement_icon = DecodeIconPixmap(value.icon);
+    }
     int next_id = next_menu_id;
     MenuChanges changes;
     std::vector<MenuNode> replacement_menu = BuildMenu(value.menu, menu, 0, next_id, changes);
-    icon = std::move(replacement_icon);
+    if (replacement_icon.has_value()) {
+      icon = std::move(replacement_icon);
+    }
     menu = std::move(replacement_menu);
     presentation = std::move(replacement_presentation);
     next_menu_id = next_id;
-    EmitItemSignal("NewIcon", nullptr);
-    EmitItemSignal("NewTitle", nullptr);
-    EmitItemSignal("NewToolTip", nullptr);
-    EmitItemSignal("NewStatus", g_variant_new("(s)", "Active"));
+    std::erase_if(dirty_layouts, [this](int id) { return id != 0 && FindMenuNode(id, menu) == nullptr; });
+    for (int id : changes.new_submenus) {
+      dirty_layouts.insert(id);
+    }
+    if (icon_changed) {
+      EmitItemSignal("NewIcon", nullptr);
+    }
+    if (tooltip_changed) {
+      EmitItemSignal("NewTitle", nullptr);
+    }
+    if (icon_changed || tooltip_changed) {
+      EmitItemSignal("NewToolTip", nullptr);
+    }
+    if (!was_active) {
+      EmitItemSignal("NewStatus", g_variant_new("(s)", "Active"));
+    }
     if (!changes.layouts.empty()) {
       ++menu_revision;
       for (int parent : changes.layouts) {
+        dirty_layouts.insert(parent);
         EmitMenuLayout(parent);
       }
     }
@@ -570,17 +652,27 @@ struct LinuxSystemTrayTransport::Impl {
   }
 
   void Hide() noexcept {
+    const bool was_active = presentation.has_value();
+    const bool had_menu = !menu.empty();
     presentation.reset();
     icon.reset();
     menu.clear();
-    ++menu_revision;
-    EmitItemSignal("NewStatus", g_variant_new("(s)", "Passive"));
-    EmitMenuLayout(0);
+    dirty_layouts.clear();
+    if (was_active) {
+      EmitItemSignal("NewStatus", g_variant_new("(s)", "Passive"));
+    }
+    if (had_menu) {
+      dirty_layouts.insert(0);
+      ++menu_revision;
+      EmitMenuLayout(0);
+    }
   }
 
   void EmitItemSignal(const char* signal, GVariant* parameters) noexcept {
     if (connection != nullptr && item_registration != 0) {
       g_dbus_connection_emit_signal(connection, nullptr, item_path, item_interface, signal, parameters, nullptr);
+    } else if (parameters != nullptr) {
+      g_variant_unref(g_variant_ref_sink(parameters));
     }
   }
 
@@ -607,22 +699,26 @@ struct LinuxSystemTrayTransport::Impl {
     g_variant_builder_init(&updated, G_VARIANT_TYPE("a(ia{sv})"));
     g_variant_builder_init(&removed, G_VARIANT_TYPE("a(ias)"));
     for (const auto& change : changes) {
-      GVariantBuilder properties;
-      g_variant_builder_init(&properties, G_VARIANT_TYPE_VARDICT);
-      if (change.enabled_changed) {
-        g_variant_builder_add(&properties, "{sv}", "enabled", g_variant_new_boolean(change.entry.enabled));
-      }
-      if (change.checked_changed) {
-        g_variant_builder_add(&properties, "{sv}", "toggle-state", g_variant_new_int32(*change.entry.checked ? 1 : 0));
-      }
-      if (change.icon_changed && change.entry.icon.has_value()) {
-        AddMenuIcon(properties, *change.entry.icon);
+      const bool has_updated =
+          change.enabled_changed || change.checked_changed || (change.icon_changed && change.entry.icon.has_value());
+      if (has_updated) {
+        GVariantBuilder properties;
+        g_variant_builder_init(&properties, G_VARIANT_TYPE_VARDICT);
+        if (change.enabled_changed) {
+          g_variant_builder_add(&properties, "{sv}", "enabled", g_variant_new_boolean(change.entry.enabled));
+        }
+        if (change.checked_changed) {
+          g_variant_builder_add(&properties, "{sv}", "toggle-state", g_variant_new_int32(*change.entry.checked ? 1 : 0));
+        }
+        if (change.icon_changed && change.entry.icon.has_value()) {
+          AddMenuIcon(properties, *change.entry.icon);
+        }
+        g_variant_builder_add(&updated, "(i@a{sv})", change.id, g_variant_builder_end(&properties));
       }
       if (change.icon_changed && !change.entry.icon.has_value()) {
         const char* keys[] = {"icon-data", nullptr};
         g_variant_builder_add(&removed, "(i^as)", change.id, keys);
       }
-      g_variant_builder_add(&updated, "(i@a{sv})", change.id, g_variant_builder_end(&properties));
     }
     g_dbus_connection_emit_signal(
         connection, nullptr, menu_path, menu_interface, "ItemsPropertiesUpdated",
@@ -725,6 +821,7 @@ struct LinuxSystemTrayTransport::Impl {
           );
           return;
         }
+        impl.ClearDirtyLayouts(node, depth);
         g_dbus_method_invocation_return_value(
             invocation,
             g_variant_new("(u@(ia{sv}av))", impl.menu_revision, impl.MenuLayout(node, depth))
@@ -814,8 +911,9 @@ struct LinuxSystemTrayTransport::Impl {
       if (name == "AboutToShow") {
         gint parent = 0;
         g_variant_get(parameters, "(i)", &parent);
-        // A host can defer layout notifications while a submenu is closed.
-        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", impl.HasMenuItems(parent)));
+        const bool valid = parent == 0 || impl.FindMenuNode(parent, impl.menu) != nullptr;
+        const bool needs_update = valid && impl.dirty_layouts.contains(parent);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", needs_update ? TRUE : FALSE));
         return;
       }
       if (name == "AboutToShowGroup") {
@@ -827,7 +925,9 @@ struct LinuxSystemTrayTransport::Impl {
         g_variant_builder_init(&errors, G_VARIANT_TYPE("ai"));
         gint parent = 0;
         while (g_variant_iter_next(parents, "i", &parent)) {
-          if (impl.HasMenuItems(parent)) {
+          if (parent != 0 && impl.FindMenuNode(parent, impl.menu) == nullptr) {
+            g_variant_builder_add(&errors, "i", parent);
+          } else if (impl.dirty_layouts.contains(parent)) {
             g_variant_builder_add(&updates, "i", parent);
           }
         }
@@ -883,10 +983,13 @@ struct LinuxSystemTrayTransport::Impl {
   };
   inline static const std::string empty_string;
 
+  std::optional<std::string> bus_address;
   std::function<void(SystemTrayEvent)> event_handler;
   std::optional<ResolvedSystemTrayPresentation> presentation;
   std::optional<IconPixmap> icon;
   std::vector<MenuNode> menu;
+  std::unordered_set<int> dirty_layouts;
+  GDBusConnection* watch_connection = nullptr;
   GDBusConnection* connection = nullptr;
   GDBusNodeInfo* item_node = nullptr;
   GDBusNodeInfo* menu_node = nullptr;
@@ -899,7 +1002,8 @@ struct LinuxSystemTrayTransport::Impl {
   bool available = false;
 };
 
-LinuxSystemTrayTransport::LinuxSystemTrayTransport() : impl_(std::make_unique<Impl>()) {}
+LinuxSystemTrayTransport::LinuxSystemTrayTransport(std::optional<std::string> bus_address)
+    : impl_(std::make_unique<Impl>(std::move(bus_address))) {}
 
 LinuxSystemTrayTransport::~LinuxSystemTrayTransport() = default;
 
