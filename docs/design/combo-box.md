@@ -53,7 +53,7 @@ Alt modifies only Up and Down for popup opening and closing; other Alt-modified 
 It never commits, finishes, or cancels composition itself.
 
 Explicit dismissal records the current query revision so a delayed result update cannot immediately reopen the popup.
-A later direct edit or a new focus cycle clears that suppression.
+A later direct edit, a new focus cycle, or a confirmed tap on the focused editor clears that suppression.
 Empty suggestions leave the popup closed unless the application supplies `EmptyContent`, which is rendered in the same popup surface rather than a second loading presentation path.
 
 Each suggestion root is one interaction target.

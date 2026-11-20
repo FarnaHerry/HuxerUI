@@ -508,6 +508,32 @@ TEST_CASE("ComboBoxExpansionEventsFollowKeyboardSelectionAndSubmission") {
   REQUIRE(combo_box_event_order[combo_box_event_order.size() - 2] == "collapsed");
 }
 
+TEST_CASE("ComboBoxReopensOnClickAfterEscapeWithoutLosingFocus") {
+  TestPlatform platform{BuiltinTestResources()};
+  UiWindow runtime{ComboBoxApp, platform};
+  runtime.SetWindowMetrics({.viewport = {320.0F, 240.0F}});
+  FocusComboBox(runtime);
+
+  REQUIRE(runtime.HandleKeyEvent({.type = KeyEventType::Down, .key = Key::Escape}));
+  combo_box_suggestions = std::vector<Suggestion>{{"Updated"}};
+  const auto collapsed = runtime.BuildCommit().semantic_frame;
+  const auto& field = FindRole(*collapsed, SemanticRole::ComboBox);
+  REQUIRE(field.focused);
+  REQUIRE(field.expanded == false);
+  REQUIRE_FALSE(HasRole(*collapsed, SemanticRole::List));
+
+  const Point position{field.bounds.x + field.bounds.width * 0.5F, field.bounds.y + field.bounds.height * 0.5F};
+  runtime.HandlePointerEvent({PointerEventType::Down, 37, position});
+  runtime.HandlePointerEvent({PointerEventType::Cancel, 37, position});
+  REQUIRE_FALSE(HasRole(*runtime.BuildCommit().semantic_frame, SemanticRole::List));
+
+  ClickAt(runtime, position, 38);
+  const auto reopened = runtime.BuildCommit().semantic_frame;
+  REQUIRE(FindRole(*reopened, SemanticRole::ComboBox).focused);
+  REQUIRE(FindRole(*reopened, SemanticRole::ComboBox).expanded == true);
+  REQUIRE(ListItemAt(*reopened, FindRole(*reopened, SemanticRole::List), 0).label == "Updated");
+}
+
 TEST_CASE("ComboBoxExpansionEventsFollowSemanticsOutsideDismissalAndDisable") {
   combo_box_expansion_changes.clear();
   combo_box_event_order.clear();

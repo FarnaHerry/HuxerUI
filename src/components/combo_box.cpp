@@ -23,6 +23,7 @@
 #include "huxerui_builtin_resources.h"
 #include "indication_internal.h"
 #include "graphics/effects_internal.h"
+#include "runtime/gesture_internal.h"
 #include "runtime/mounted_node_internal.h"
 #include "resources/resource_internal.h"
 #include "runtime/semantics_internal.h"
@@ -635,6 +636,27 @@ bool HandleComboBoxKey(const std::shared_ptr<ComboBoxSession>& session, const Ke
   return true;
 }
 
+class ComboBoxReopenTap final : public detail::GestureRecognizer {
+public:
+  explicit ComboBoxReopenTap(const std::shared_ptr<ComboBoxSession>& session) : session_(session) {}
+
+  bool SharesTap() const noexcept override { return true; }
+  detail::GestureDecision Update(const detail::GestureRecognizerInput&) override {
+    return detail::GestureDecision::Continue;
+  }
+
+  void TapAccepted(detail::MountedNode& node, NodeExtension&, const detail::GestureRecognizerInput&) override {
+    const auto session = session_.lock();
+    if (session && session->focused && !session->layer && !HasActiveTextComposition(node)) {
+      session->dismissed_revision.reset();
+      OpenComboBox(session);
+    }
+  }
+
+private:
+  std::weak_ptr<ComboBoxSession> session_;
+};
+
 struct ComboBoxFieldBehavior {
   static const detail::ModifierDescriptor& Descriptor();
 
@@ -716,6 +738,16 @@ public:
       DismissComboBox(session_, false);
     }
     InvalidateSemantics();
+  }
+
+  bool HitTest(ViewNode& node, Point position) const override {
+    return session_ && session_->focused && session_->dismissed_revision && HasPopupContent(session_) &&
+           node.IsEnabled() && node.Bounds().Contains(position);
+  }
+
+  std::shared_ptr<detail::GestureRecognizer>
+  CreateGestureRecognizer(ViewNode&, const PointerEvent&, double, const GestureSettings&, Transform2D) override {
+    return std::make_shared<ComboBoxReopenTap>(session_);
   }
 
   void BuildSemantics(SemanticBuilder& builder) const override {

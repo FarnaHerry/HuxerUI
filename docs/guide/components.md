@@ -491,7 +491,7 @@ Use `Enabled{false}` on a suggestion root to skip it during navigation and preve
 
 An empty range does not open a popup by default.
 Use `EmptyContent(...)` for a non-interactive loading or no-results presentation in the same anchored surface.
-Explicit dismissal suppresses reopening for the current query, while a later edit or focus cycle can open current results again.
+Explicit dismissal suppresses reopening for the current query. Click or tap the focused field again, type an edit, or return focus to the field to open the current results.
 
 `TextFieldStyle` continues to own the editor visuals, label, validation, icons, and input states.
 `ComboBoxStyle` owns only the popup surface, item geometry, active background, indication, and height limit.
