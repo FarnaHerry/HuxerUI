@@ -189,7 +189,7 @@ Start through existing extension mechanisms when the SDK does not already own th
 - [ ] Reuse Windows/Linux PixelTexture and macOS PixelBufferTexture behind the consuming library; evaluate a shared publication convenience only after repeated consumers establish a need.
 - [ ] Keep ImageAsset's current PNG/JPEG contract unchanged unless a separate public resource-format proposal also updates tooling, metadata validation, renderer decoding, packaging, and tests.
 
-Evidence: [resource.h](../../include/huxerui/resource.h), [resource implementation](../../src/resources/resource.cpp), and [resource design non-goals](../design/resources.md#non-goals).
+Evidence: [resource.h](../../include/huxerui/resource.h), [resource implementation](../../src/resources/resource.cpp), and [resource ImageAsset contract](../design/resources.md#imageasset-and-bitmap).
 Accept with malformed inputs, oversized animations, variable frame durations, stale producer cancellation, repeated replacement, and no UI-thread decoder joins.
 
 ### FD-09: Evaluate global shortcut registration
