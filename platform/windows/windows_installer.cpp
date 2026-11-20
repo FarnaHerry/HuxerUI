@@ -31,6 +31,7 @@
 #include <huxerui/windows/installer.h>
 
 #include "win32_application_runner.h"
+#include "windows_installer_files_in_use.h"
 
 namespace huxerui::detail {
 
@@ -761,6 +762,9 @@ public:
     const HRESULT created = CBootstrapperApplicationBase::OnCreate(pEngine, pCommand);
     if (SUCCEEDED(created)) {
       session_->SetBundleVersion(EngineVariableString(L"WixBundleVersion"));
+      LONGLONG auto_close = 0;
+      auto_close_applications_ =
+          SUCCEEDED(m_pEngine->GetVariableNumeric(L"HuxerUIAutoCloseApplications", &auto_close)) && auto_close == 1;
     }
     return created;
   }
@@ -823,6 +827,7 @@ public:
   }
 
   STDMETHODIMP OnApplyBegin(DWORD phases, BOOL* cancel) override {
+    auto_close_attempted_ = false;
     session_->ApplyStarted();
     return CBootstrapperApplicationBase::OnApplyBegin(phases, cancel);
   }
@@ -875,21 +880,38 @@ public:
     if (FAILED(engine_status)) {
       return engine_status;
     }
+    if (CheckCanceled()) {
+      *result = IDCANCEL;
+      return S_OK;
+    }
+    const bool restart_manager = source == BOOTSTRAPPER_FILES_IN_USE_TYPE_MSI_RM;
+    if (restart_manager && auto_close_applications_ && !auto_close_attempted_) {
+      auto_close_attempted_ = true;
+      *result = IDOK;
+      return S_OK;
+    }
     if (session_->CommandPreemptsInteraction()) {
       // Deterministic noninteractive policy: keep the engine/base resolution (the recommendation,
       // or IDCANCEL once canceled) instead of blocking on a prompt nobody can click.
       return S_OK;
     }
-    const std::vector<windows::InstallerPromptChoice> choices{
-        windows::InstallerPromptChoice::Retry,
-        windows::InstallerPromptChoice::Ignore,
-        windows::InstallerPromptChoice::Cancel,
+    using windows::InstallerPromptChoice;
+    std::vector<InstallerPromptChoice> choices{
+        InstallerPromptChoice::Retry,
+        InstallerPromptChoice::Ignore,
+        InstallerPromptChoice::Cancel,
     };
+    if (restart_manager) {
+      choices.insert(choices.begin(), InstallerPromptChoice::Ok);
+    }
     std::optional<windows::InstallerPromptChoice> recommended = PromptChoice(recommendation);
     if (recommended && std::find(choices.begin(), choices.end(), *recommended) == choices.end()) {
       recommended.reset();
     }
-    *result = session_->Ask(windows::InstallerPromptKind::FilesInUse, {}, choices, recommended);
+    const bool paired_fields = source == BOOTSTRAPPER_FILES_IN_USE_TYPE_MSI || restart_manager;
+    const std::wstring names = InstallerFilesInUseNames(files, file_count, paired_fields);
+    *result = session_->Ask(windows::InstallerPromptKind::FilesInUse, WideToUtf8(names.c_str()), std::move(choices),
+                            recommended);
     return S_OK;
   }
 
@@ -1035,6 +1057,8 @@ private:
 
   std::shared_ptr<WindowsInstallerSession> session_;
   HANDLE ui_thread_ = nullptr;
+  bool auto_close_applications_ = false;
+  bool auto_close_attempted_ = false;
 };
 
 } // namespace

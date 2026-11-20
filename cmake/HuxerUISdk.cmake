@@ -112,6 +112,7 @@ if (WIN32)
     install(FILES
             "${HUXERUI_PROJECT_DIR}/platform/windows/win32_application_runner.h"
             "${HUXERUI_PROJECT_DIR}/platform/windows/windows_installer.cpp"
+            "${HUXERUI_PROJECT_DIR}/platform/windows/windows_installer_files_in_use.h"
             DESTINATION "${HUXERUI_INSTALL_CMAKE_DIR}"
     )
 endif ()

@@ -117,7 +117,7 @@ std::vector<View> PromptActions(const InstallerHandle& installer, const Installe
     StringVariant label = installer_strings::continue_action;
     switch (choice) {
     case InstallerPromptChoice::Ok:
-      label = installer_strings::ok;
+      label = prompt.kind == InstallerPromptKind::FilesInUse ? installer_strings::close_apps : installer_strings::ok;
       break;
     case InstallerPromptChoice::Cancel:
       label = installer_strings::cancel;
@@ -190,11 +190,16 @@ View InstallerContent() {
   if (status.prompt && !restart_prompt) {
     eyebrow = installer_strings::action_required;
     heading = installer_strings::setup_needs_attention;
-    StringVariant prompt_message = status.prompt->message;
-    if (status.prompt->kind == InstallerPromptKind::FilesInUse && status.prompt->message.empty()) {
-      prompt_message = installer_strings::files_in_use;
+    if (status.prompt->kind == InstallerPromptKind::FilesInUse) {
+      details.push_back(Text(installer_strings::files_in_use).With(Foreground(theme.colors.on_surface_variant)));
+      if (!status.prompt->message.empty()) {
+        details.push_back(ScrollView {
+          Text(status.prompt->message).With(Foreground(theme.colors.on_surface_variant)),
+        }.With(Frame{.max_height = 144.0F}));
+      }
+    } else {
+      details.push_back(Text(status.prompt->message).With(Foreground(theme.colors.on_surface_variant)));
     }
-    details.push_back(Text(std::move(prompt_message)).With(Foreground(theme.colors.on_surface_variant)));
     actions = PromptActions(installer, *status.prompt, theme);
   } else if (status.phase == InstallerPhase::Detecting) {
     eyebrow = installer_strings::welcome;

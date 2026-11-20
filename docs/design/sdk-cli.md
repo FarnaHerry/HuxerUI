@@ -203,6 +203,8 @@ User commands enter Burn from the bootstrapper UI thread. Burn callbacks publish
 
 Synchronous engine questions expose one identified prompt and ignore stale answers. Apply returns to Burn before the restart prompt is answered. An accepted restart is requested at shutdown. Closing during apply requests cancellation and lets rollback finish before exit. The installer session owns the transaction across component unmounts.
 
+Files-in-use prompts carry Burn's application display names. An MSI Restart Manager prompt also accepts `InstallerPromptChoice::Ok` to have Windows request application shutdown. A bundle can author the numeric Burn variable `HuxerUIAutoCloseApplications` with value `1` to send that response once per Apply before prompting. Cancellation takes precedence, and standard MSI files-in-use notifications retain the manual retry path.
+
 ## Libraries and platform integration
 
 A library is a compile-time CMake target. It can include common resources and platform packages, and its preview is an ordinary application that consumes the library through a local path. The [user guide](../guide/getting-started.md#libraries) describes dependency declarations and how to run the preview.
