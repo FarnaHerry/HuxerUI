@@ -8,7 +8,7 @@
 //
 // Regenerate with:
 //
-//     cd mcpp/huxerui-tools && mcpp run --bin huxerui-module-gen
+//     cd buildtools/mcpp/huxerui-tools && mcpp run --bin huxerui-module-gen
 //
 // huxerui-build-check fails when this file is out of date.
 
@@ -223,6 +223,7 @@ export namespace huxerui {
     using huxerui::IndicationGeometry;
     using huxerui::IndicationLayer;
     using huxerui::IndicationPlacement;
+    using huxerui::InheritForeground;
     using huxerui::InputStream;
     using huxerui::InteractionEvent;
     using huxerui::InteractionScheme;

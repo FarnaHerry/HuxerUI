@@ -45,6 +45,25 @@ private:
   std::filesystem::path path_;
 };
 
+// Replaces PATH for one scope, so that which tools a test finds does not depend on the machine running it.
+class ScopedPath final {
+public:
+  explicit ScopedPath(const std::filesystem::path& directory)
+      : previous_(huxerui::cli::ReadEnvironmentVariable("PATH").value_or("")) {
+    huxerui::cli::SetProcessEnvironmentVariable("PATH", directory.string());
+  }
+
+  ~ScopedPath() {
+    huxerui::cli::SetProcessEnvironmentVariable("PATH", previous_);
+  }
+
+  ScopedPath(const ScopedPath&) = delete;
+  ScopedPath& operator=(const ScopedPath&) = delete;
+
+private:
+  std::string previous_;
+};
+
 struct Invocation {
   int result = 0;
   std::string output;
@@ -64,10 +83,7 @@ inline Invocation Invoke(const std::filesystem::path& directory, std::initialize
   return {result, output.str(), error.str()};
 }
 
-inline std::string Read(const std::filesystem::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  REQUIRE(stream);
-  std::string content{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+inline std::string NormalizeLineEndings(std::string content) {
   std::erase(content, '\r');
   return content;
 }
@@ -76,6 +92,10 @@ inline std::string ReadBinary(const std::filesystem::path& path) {
   std::ifstream stream(path, std::ios::binary);
   REQUIRE(stream);
   return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
+inline std::string Read(const std::filesystem::path& path) {
+  return NormalizeLineEndings(ReadBinary(path));
 }
 
 inline std::vector<std::string> ExpectedLibraryGraphArguments(const huxerui::cli::PlatformCommandContext& context) {
