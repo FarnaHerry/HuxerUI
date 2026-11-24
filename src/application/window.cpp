@@ -38,6 +38,10 @@ void ValidateWindowOptions(const WindowOptions& options) {
       options.chrome_mode != WindowChromeMode::None) {
     throw std::invalid_argument("HuxerUI window chrome mode is invalid");
   }
+  if (options.keyboard_avoidance != KeyboardAvoidance::Resize &&
+      options.keyboard_avoidance != KeyboardAvoidance::Overlay) {
+    throw std::invalid_argument("HuxerUI keyboard avoidance mode is invalid");
+  }
   if (!std::isfinite(options.title_bar_height) || options.title_bar_height <= 0.0F) {
     throw std::invalid_argument("HuxerUI window title-bar height must be finite and positive");
   }
@@ -261,6 +265,7 @@ void WindowService::Attach(UiWindow& ui_window) {
 
 void WindowService::Disconnect() noexcept {
   if (!ui_window_) return;
+  UpdateKeyboardBounds(std::nullopt);
   if (session_command_) {
     lifecycle_state_ = WindowLifecycleState::Background;
   } else {
@@ -416,6 +421,14 @@ void WindowService::RequestKeyboard(bool show) {
   ui_window_->RequestKeyboard(show);
 }
 
+std::optional<Rect> WindowService::KeyboardBounds() const {
+  return IsOpen() ? keyboard_bounds_.Get() : std::nullopt;
+}
+
+void WindowService::UpdateKeyboardBounds(std::optional<Rect> bounds) {
+  keyboard_bounds_ = bounds;
+}
+
 void WindowService::RequestFullscreen(bool fullscreen) {
   if (!ui_window_ || !IsOpen()) return;
   ExecutionGuard guard(InternalAccess::WindowExecution(*ui_window_));
@@ -548,6 +561,13 @@ void ApplySafeAreaPadding(detail::ViewSpec& spec, const SafeAreaPadding& padding
   spec.properties.safe_area_padding = padding;
 }
 
+void ApplyAvoidKeyboard(detail::ViewSpec& spec, const AvoidKeyboard& avoidance) {
+  if (!std::isfinite(avoidance.gap) || avoidance.gap < 0.0F) {
+    throw std::invalid_argument("HuxerUI keyboard avoidance gap must be finite and non-negative");
+  }
+  spec.properties.avoid_keyboard_gap = avoidance.gap;
+}
+
 void ApplyWindowDragRegion(detail::ViewSpec& spec, const WindowDragRegion&) {
   spec.properties.window_drag_region = true;
 }
@@ -582,6 +602,10 @@ const detail::ModifierDescriptor& SystemBarsAppearance::Descriptor() {
 
 const detail::ModifierDescriptor& SafeAreaPadding::Descriptor() {
   return ApplyOnlyModifierDescriptor<SafeAreaPadding, ApplySafeAreaPadding>();
+}
+
+const detail::ModifierDescriptor& AvoidKeyboard::Descriptor() {
+  return ApplyOnlyModifierDescriptor<AvoidKeyboard, ApplyAvoidKeyboard>();
 }
 
 const detail::ModifierDescriptor& WindowDragRegion::Descriptor() {
@@ -681,6 +705,10 @@ void WindowHandle::ShowKeyboard() const {
 
 void WindowHandle::HideKeyboard() const {
   service_->RequestKeyboard(false);
+}
+
+std::optional<Rect> WindowHandle::KeyboardBounds() const {
+  return service_->KeyboardBounds();
 }
 
 void WindowHandle::Activate() const {
